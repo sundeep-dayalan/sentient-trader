@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CartesianGrid, Line, LineChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -14,9 +14,9 @@ const fmtD = (ts: string) => new Date(ts).toLocaleDateString("en-US", { month: "
 function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number }>; label?: string }) {
   if (!active || !payload?.[0]) return null;
   return (
-    <div className="bg-surface border border-line rounded-xl px-3 py-2.5 shadow-card-md text-xs">
-      <p className="text-muted mb-1">{label ? new Date(label).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</p>
-      <p className="font-bold font-mono text-primary text-sm">{fmt(payload[0].value)}</p>
+    <div className="rounded-lg border border-line bg-surface px-3 py-2.5 text-xs shadow-card-md">
+      <p className="mb-1 text-muted">{label ? new Date(label).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</p>
+      <p className="font-mono text-sm font-bold text-primary">{fmt(payload[0].value)}</p>
     </div>
   );
 }
@@ -25,8 +25,6 @@ export default function PnLChart() {
   const [data,    setData]    = useState<PortfolioPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
-  const [lineColor, setLineColor] = useState("#10b981");
-  const themeRef = useRef(false);
 
   const fetchPortfolio = async () => {
     try {
@@ -47,63 +45,50 @@ export default function PnLChart() {
     return () => clearInterval(id);
   }, []);
 
-  // Read accent colors from CSS vars so they match the active theme
-  useEffect(() => {
-    const update = () => {
-      const style = getComputedStyle(document.documentElement);
-      const pos = style.getPropertyValue("--positive").trim() || "#10b981";
-      const neg = style.getPropertyValue("--negative").trim() || "#ef4444";
-      const latest = data.at(-1)?.equity ?? 0;
-      const start  = data[0]?.equity     ?? 0;
-      setLineColor((latest - start) >= 0 ? pos : neg);
-    };
-    update();
-    themeRef.current = true;
-  }, [data]);
-
   const latest = data.at(-1)?.equity ?? 0;
   const start  = data[0]?.equity     ?? 0;
   const pnl    = latest - start;
   const isUp   = pnl >= 0;
+  const lineColor = isUp ? "var(--positive)" : "var(--negative)";
 
   return (
-    <div className="bg-surface border border-line rounded-2xl overflow-hidden shadow-card">
+    <div className="glass-panel flex h-full min-h-[220px] flex-col overflow-hidden rounded-lg">
 
       {/* Header */}
-      <div className="flex items-center gap-3 px-5 py-4 border-b border-line">
+      <div className="flex shrink-0 items-center gap-3 border-b border-line px-4 py-3">
         <div>
-          <p className="text-[10px] font-semibold text-muted uppercase tracking-wider">Paper Portfolio</p>
-          <p className="text-xs text-muted mt-0.5">7-day equity curve</p>
+          <p className="text-[10px] font-semibold uppercase text-muted">Paper Portfolio</p>
+          <p className="mt-0.5 text-xs text-muted">7-day equity curve</p>
         </div>
         {data.length > 0 && (
           <div className="ml-auto text-right">
-            <p className="text-lg font-bold font-mono text-primary leading-tight">{fmt(latest)}</p>
-            <p className={`text-xs font-bold font-mono ${isUp ? "text-positive" : "text-negative"}`}>
-              {isUp ? "↑ +" : "↓ "}{fmt(Math.abs(pnl))} all time
+            <p className="font-mono text-lg font-bold leading-tight text-primary">{fmt(latest)}</p>
+            <p className={`font-mono text-xs font-bold ${isUp ? "text-positive" : "text-negative"}`}>
+              {isUp ? "+" : "-"}{fmt(Math.abs(pnl))} all time
             </p>
           </div>
         )}
       </div>
 
       {/* Chart area */}
-      <div className="px-2 py-4" style={{ height: 200 }}>
+      <div className="min-h-[160px] flex-1 px-2 py-3">
         {loading && (
-          <div className="h-full flex items-center justify-center gap-1">
+          <div className="flex h-full items-center justify-center gap-1">
             {[0, 1, 2].map(i => (
               <div
                 key={i}
-                className="w-1.5 h-1.5 rounded-full bg-muted animate-bounce"
+                className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted"
                 style={{ animationDelay: `${i * 120}ms` }}
               />
             ))}
           </div>
         )}
         {error && (
-          <div className="h-full flex items-center justify-center text-negative text-sm">{error}</div>
+          <div className="flex h-full items-center justify-center text-sm text-negative">{error}</div>
         )}
         {!loading && !error && data.length === 0 && (
-          <div className="h-full flex items-center justify-center text-muted text-sm">
-            No portfolio history yet — make a trade first.
+          <div className="flex h-full items-center justify-center text-sm text-muted">
+            No portfolio history yet. Make a trade first.
           </div>
         )}
         {!loading && !error && data.length > 0 && (
@@ -133,9 +118,9 @@ export default function PnLChart() {
                 type="monotone"
                 dataKey="equity"
                 stroke={lineColor}
-                strokeWidth={2}
+                strokeWidth={3}
                 dot={false}
-                activeDot={{ r: 4, fill: "var(--accent)", strokeWidth: 0 }}
+                activeDot={{ r: 5, fill: "var(--accent)", stroke: "var(--surface)", strokeWidth: 2 }}
               />
             </LineChart>
           </ResponsiveContainer>

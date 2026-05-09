@@ -7,17 +7,15 @@ interface AgentMonologueProps { trade: Trade | null; }
 export default function AgentMonologue({ trade }: AgentMonologueProps) {
   if (!trade) {
     return (
-      <div className="bg-surface border border-line rounded-2xl p-8 flex items-center justify-center shadow-card" style={{ minHeight: 220 }}>
-        <div className="text-center space-y-3">
-          <div className="w-12 h-12 rounded-2xl bg-surface-2 border border-line mx-auto flex items-center justify-center">
-            <svg className="w-5 h-5 text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <div className="glass-panel flex h-full min-h-[280px] items-center justify-center rounded-lg p-8 xl:min-h-0">
+        <div className="max-w-sm text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg border border-line bg-surface-2">
+            <svg className="h-5 w-5 text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
             </svg>
           </div>
-          <div>
-            <p className="text-sm font-medium text-secondary">Agent Reasoning</p>
-            <p className="text-xs text-muted mt-1">Select a trade to see the AI&apos;s analysis</p>
-          </div>
+          <p className="mt-4 text-sm font-semibold text-secondary">Decision core on standby</p>
+          <p className="mt-1 text-xs text-muted">Select a signal to inspect the agent reasoning trace.</p>
         </div>
       </div>
     );
@@ -30,98 +28,100 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
     ? "bg-positive-soft border-positive-border"
     : isSell
     ? "bg-negative-soft border-negative-border"
-    : "bg-surface-2 border-line";
+    : "bg-surface-3 border-line";
 
-  const sentimentPct = ((trade.sentiment_score + 1) / 2) * 100;
+  const sentimentPct = Math.min(100, Math.max(0, ((trade.sentiment_score + 1) / 2) * 100));
+  const confidencePct = Math.round(trade.confidence_score * 100);
 
   return (
-    <div className="bg-surface border border-line rounded-2xl overflow-hidden shadow-card">
+    <div className="glass-panel flex h-full min-h-[360px] flex-col overflow-hidden rounded-lg xl:min-h-0">
 
       {/* Card header */}
-      <div className="flex items-center gap-3 px-5 py-4 border-b border-line">
-        <div className="flex-1 min-w-0">
-          <p className="text-[10px] font-semibold text-muted uppercase tracking-wider">Agent Reasoning</p>
-          <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-base font-bold font-mono text-accent">{trade.ticker}</span>
-            <span className="text-xs text-muted">·</span>
-            <span className="text-xs text-secondary">
-              {new Date(trade.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-            </span>
+      <div className="shrink-0 border-b border-line px-5 py-3.5">
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-semibold uppercase text-muted">Decision Core</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="font-mono text-2xl font-semibold text-accent">{trade.ticker}</span>
+              <span className="rounded-md border border-line bg-surface-2 px-2 py-1 text-[11px] text-secondary">
+                {new Date(trade.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+              </span>
+            </div>
           </div>
+          <span className={`rounded-md border px-3 py-1.5 text-xs font-bold ${actionColor} ${actionBg}`}>
+            {trade.trade_action}
+          </span>
         </div>
-        <span className={`text-xs font-bold px-3 py-1.5 rounded-xl border ${actionColor} ${actionBg}`}>
-          {trade.trade_action}
-        </span>
       </div>
 
-      <div className="p-5 space-y-5">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
 
         {/* Headline */}
-        <div>
-          <p className="text-[10px] font-semibold text-muted uppercase tracking-wider mb-2">Headline</p>
-          <p className="text-sm text-primary leading-relaxed pl-3 border-l-2 border-accent italic">
-            &ldquo;{trade.headline}&rdquo;
+        <div className="rounded-lg border border-line bg-surface-2 p-3.5">
+          <p className="mb-2 text-[10px] font-semibold uppercase text-muted">Market Headline</p>
+          <p className="border-l-2 border-accent pl-3 text-sm leading-relaxed text-primary">
+            &quot;{trade.headline}&quot;
           </p>
         </div>
 
         {/* Sentiment + Confidence side by side */}
-        <div className="grid grid-cols-2 gap-5">
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-[10px] font-semibold text-muted uppercase tracking-wider">Sentiment</p>
-              <span className={`text-xs font-bold font-mono ${trade.sentiment_score >= 0 ? "text-positive" : "text-negative"}`}>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="rounded-lg border border-line bg-surface p-3.5">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-[10px] font-semibold uppercase text-muted">Sentiment Vector</p>
+              <span className={`font-mono text-xs font-bold ${trade.sentiment_score >= 0 ? "text-positive" : "text-negative"}`}>
                 {trade.sentiment_score >= 0 ? "+" : ""}{trade.sentiment_score.toFixed(3)}
               </span>
             </div>
-            <div className="relative h-1.5 bg-surface-2 rounded-full overflow-hidden border border-line">
-              <div className="absolute left-1/2 top-0 bottom-0 w-px bg-muted/30" />
+            <div className="relative h-2 overflow-hidden rounded-full border border-line bg-surface-3">
+              <div className="absolute bottom-0 left-1/2 top-0 w-px bg-muted opacity-50" />
               <div
                 className={`absolute top-0 h-full w-2 rounded-full ${trade.sentiment_score >= 0 ? "bg-positive" : "bg-negative"}`}
                 style={{ left: `calc(${sentimentPct}% - 4px)` }}
               />
             </div>
-            <div className="flex justify-between text-[9px] text-muted mt-1">
+            <div className="mt-2 flex justify-between text-[9px] text-muted">
               <span>Bearish</span><span>Bullish</span>
             </div>
           </div>
 
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-[10px] font-semibold text-muted uppercase tracking-wider">Confidence</p>
-              <span className="text-xs font-bold font-mono text-accent">
-                {(trade.confidence_score * 100).toFixed(0)}%
+          <div className="rounded-lg border border-line bg-surface p-3.5">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-[10px] font-semibold uppercase text-muted">Confidence</p>
+              <span className="font-mono text-xs font-bold text-accent">
+                {confidencePct}%
               </span>
             </div>
-            <div className="h-1.5 bg-surface-2 rounded-full overflow-hidden border border-line">
+            <div className="h-2 overflow-hidden rounded-full border border-line bg-surface-3">
               <div
-                className="h-full bg-accent rounded-full transition-all duration-700"
-                style={{ width: `${trade.confidence_score * 100}%` }}
+                className="h-full rounded-full bg-gradient-to-r from-accent to-cyan transition-all duration-700"
+                style={{ width: `${confidencePct}%` }}
               />
             </div>
-            <div className="flex justify-between text-[9px] text-muted mt-1">
+            <div className="mt-2 flex justify-between text-[9px] text-muted">
               <span>Low</span><span>High</span>
             </div>
           </div>
         </div>
 
         {/* AI Reasoning */}
-        <div>
-          <p className="text-[10px] font-semibold text-muted uppercase tracking-wider mb-2">AI Reasoning</p>
-          <p className="text-sm text-secondary leading-relaxed">{trade.reasoning}</p>
+        <div className="rounded-lg border border-line bg-surface p-3.5">
+          <p className="mb-2 text-[10px] font-semibold uppercase text-muted">AI Reasoning</p>
+          <p className="text-sm leading-relaxed text-secondary">{trade.reasoning}</p>
         </div>
 
         {/* Alpaca order confirmation */}
         {trade.order_id && (
-          <div className="bg-positive-soft border border-positive-border rounded-xl px-4 py-3 space-y-1">
+          <div className="space-y-1 rounded-lg border border-positive-border bg-positive-soft px-4 py-3">
             <div className="flex items-center gap-2">
-              <svg className="w-3.5 h-3.5 text-positive shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <svg className="h-3.5 w-3.5 shrink-0 text-positive" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
               </svg>
-              <p className="text-[10px] font-semibold text-positive uppercase tracking-wider">Order Executed via Alpaca</p>
+              <p className="text-[10px] font-semibold uppercase text-positive">Order Executed via Alpaca</p>
             </div>
-            <p className="text-[11px] font-mono text-positive/80 break-all">{trade.order_id}</p>
-            <p className="text-[10px] text-positive/60">
-              {trade.quantity} share(s) · Paper Trading · Market Order
+            <p className="break-all font-mono text-[11px] text-positive opacity-80">{trade.order_id}</p>
+            <p className="text-[10px] text-positive opacity-75">
+              {trade.quantity} share(s) | Paper Trading | Market Order
             </p>
           </div>
         )}

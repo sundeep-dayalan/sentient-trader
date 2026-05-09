@@ -22,10 +22,10 @@ const SERVICES: { key: keyof Omit<StatusData, "lastTradeAt">; label: string }[] 
 function dot(s: S) {
   return {
     ok:      "bg-positive",
-    stale:   "bg-yellow-400",
+    stale:   "bg-warning",
     error:   "bg-negative",
     loading: "bg-muted animate-pulse",
-    unknown: "bg-muted/50",
+    unknown: "bg-muted opacity-50",
   }[s];
 }
 
@@ -64,15 +64,15 @@ export default function SystemStatus() {
   const allOk = SERVICES.every(s => status[s.key] === "ok");
 
   return (
-    <div className="hidden md:flex items-center gap-1">
+    <div className="hidden items-center gap-1 lg:flex">
 
       {/* Compact summary dot when all ok */}
       {allOk ? (
-        <div className="flex items-center gap-2 px-3 py-1 bg-positive-soft border border-positive-border rounded-full">
-          <span className="w-1.5 h-1.5 rounded-full bg-positive" />
-          <span className="text-[11px] font-medium text-positive">All systems operational</span>
+        <div className="flex items-center gap-2 rounded-lg border border-positive-border bg-positive-soft px-3 py-2">
+          <span className="h-1.5 w-1.5 rounded-full bg-positive" />
+          <span className="text-[11px] font-semibold text-positive">Systems operational</span>
           {status.lastTradeAt && (
-            <span className="text-[10px] text-positive/60">· {relTime(status.lastTradeAt)}</span>
+            <span className="text-[10px] text-positive opacity-75">last trade {relTime(status.lastTradeAt)}</span>
           )}
         </div>
       ) : (
@@ -80,12 +80,12 @@ export default function SystemStatus() {
         <div className="flex items-center gap-3">
           {SERVICES.map(({ key, label }) => (
             <div key={key} className="flex items-center gap-1.5 group relative">
-              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot(status[key])}`} />
+              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot(status[key])}`} />
               <span className="text-[11px] text-muted">{label}</span>
             </div>
           ))}
           {status.lastTradeAt && (
-            <span className="text-[11px] text-muted/50 pl-2 border-l border-line">
+            <span className="border-l border-line pl-2 text-[11px] text-muted opacity-60">
               {relTime(status.lastTradeAt)}
             </span>
           )}
