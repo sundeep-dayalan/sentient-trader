@@ -1,0 +1,11 @@
+{
+  // Point VS Code's Python extension to the root venv so it can resolve
+  // all package imports across both backend services without red underlines.
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/backend/ingestion",
+    "${workspaceFolder}/backend/agent"
+  ],
+  // Use the root venv for the integrated terminal too
+  "python.terminal.activateEnvironment": true
+}

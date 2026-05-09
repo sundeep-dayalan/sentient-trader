@@ -1,0 +1,25 @@
+# Environment files — never commit real credentials
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# macOS
+.DS_Store
+
+# Claude Code session data (contains permission tokens)
+.claude/
+
+# Fly.io generated files (contain no secrets but clutter the repo)
+# fly.toml is intentionally NOT ignored — it has no secrets
