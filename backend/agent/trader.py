@@ -78,3 +78,4 @@ class AlpacaTrader:
             # Log and continue — we record the analysis in Supabase either way
             log.warning("Order failed for %s %s: %s", action, ticker, e)
             return None
+
