@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // No special config needed — keeping it lean
+  // Serve the app under /sentient-trader so it lives at
+  // apps.sundeepdayalan.in/sentient-trader alongside future apps
+  basePath: "/sentient-trader",
 };
 
 export default nextConfig;
