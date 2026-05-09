@@ -18,6 +18,7 @@ import LiveTicker     from "@/components/LiveTicker";
 import PnLChart       from "@/components/PnLChart";
 import SimulateButton from "@/components/SimulateButton";
 import StatsBar       from "@/components/StatsBar";
+import SystemStatus  from "@/components/SystemStatus";
 import { Trade }      from "@/lib/types";
 
 interface DashboardClientProps {
@@ -47,6 +48,11 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
           <span className="text-[11px] text-muted font-bold tracking-widest">LIVE</span>
         </div>
       </header>
+
+      {/* ── System Status ───────────────────────────────────────────────── */}
+      <div className="mb-4 px-4 py-2.5 bg-surface border border-line rounded-md">
+        <SystemStatus />
+      </div>
 
       {/* ── Stats Bar ───────────────────────────────────────────────────── */}
       <StatsBar trades={initialTrades} />
