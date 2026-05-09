@@ -31,7 +31,7 @@ from upstash_redis import Redis
 log = logging.getLogger("agent.cache")
 
 # Headlines older than this TTL (in seconds) are treated as fresh again
-CACHE_TTL_SECONDS = 5 * 60  # 5 minutes
+CACHE_TTL_SECONDS = 2 * 60 * 60  # 2 hours
 
 
 class HeadlineCache:
