@@ -1,35 +1,63 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  CartesianGrid, Line, LineChart,
+  Area, AreaChart, Bar, BarChart, CartesianGrid, Line, LineChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { PortfolioPoint } from "@/lib/types";
-import { BASE_PATH }      from "@/lib/config";
+import { BASE_PATH } from "@/lib/config";
 
-const fmt  = (v: number) => `$${v.toLocaleString("en-US", { minimumFractionDigits: 0 })}`;
-const fmtD = (ts: string) => new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+type PeriodKey = "D" | "W" | "M" | "Y";
+type ChartType = "line" | "area" | "bar";
+
+const PERIODS: PeriodKey[] = ["D", "W", "M", "Y"];
+const PERIOD_POLL_MS: Record<PeriodKey, number> = {
+  D: 15_000,
+  W: 30_000,
+  M: 60_000,
+  Y: 120_000,
+};
+
+const CHART_TYPES: { value: ChartType; label: string }[] = [
+  { value: "line", label: "Line chart" },
+  { value: "area", label: "Area chart" },
+  { value: "bar", label: "Bar chart" },
+];
+
+const fmt = (v: number) => `$${v.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+
+function tickLabel(ts: string, period: PeriodKey) {
+  const date = new Date(ts);
+  if (period === "D") return date.toLocaleTimeString("en-US", { hour: "numeric" });
+  if (period === "Y") return date.toLocaleDateString("en-US", { month: "short" });
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
 
 function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number }>; label?: string }) {
   if (!active || !payload?.[0]) return null;
   return (
-    <div className="rounded-xl border border-line bg-surface px-3.5 py-2.5 shadow-card text-xs">
-      <p className="mb-1 text-muted">{label ? new Date(label).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</p>
-      <p className="font-mono text-sm font-bold text-primary">{fmt(payload[0].value)}</p>
+    <div className="rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-card)] px-4 py-3 text-xs shadow-2xl backdrop-blur">
+      <p className="mb-1 text-[var(--dashboard-subtle)]">{label ? new Date(label).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</p>
+      <p className="font-mono text-base font-bold text-[var(--dashboard-text)]">{fmt(payload[0].value)}</p>
     </div>
   );
 }
 
 export default function PnLChart() {
-  const [data,    setData]    = useState<PortfolioPoint[]>([]);
+  const [data, setData] = useState<PortfolioPoint[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [period, setPeriod] = useState<PeriodKey>("W");
+  const [chartType, setChartType] = useState<ChartType>("line");
 
-  const fetchPortfolio = async () => {
+  const fetchPortfolio = useCallback(async () => {
     try {
-      const res  = await fetch(`${BASE_PATH}/api/portfolio`);
-      const json = await res.json();
+      const res = await fetch(`${BASE_PATH}/api/portfolio?range=${period}`, { cache: "no-store" });
+      const json = await res.json() as { history?: PortfolioPoint[]; error?: string };
+      if (json.error) {
+        throw new Error(json.error);
+      }
       setData(json.history ?? []);
       setError(null);
     } catch {
@@ -37,89 +65,201 @@ export default function PnLChart() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [period]);
 
   useEffect(() => {
+    setLoading(true);
+    setData([]);
     fetchPortfolio();
-    const id = setInterval(fetchPortfolio, 60_000);
+    const id = setInterval(fetchPortfolio, PERIOD_POLL_MS[period]);
     return () => clearInterval(id);
-  }, []);
+  }, [fetchPortfolio, period]);
 
-  const latest    = data.at(-1)?.equity ?? 0;
-  const start     = data[0]?.equity     ?? 0;
-  const pnl       = latest - start;
-  const isUp      = pnl >= 0;
-  const lineColor = isUp ? "var(--positive)" : "var(--negative)";
+  const latest = data.at(-1)?.equity ?? 0;
+  const start = data[0]?.equity ?? 0;
+  const pnl = latest - start;
+  const isUp = pnl >= 0;
+  const pct = start > 0 ? pnl / start * 100 : 0;
+  const chartMargin = { top: 12, right: 10, left: 0, bottom: 0 };
+  const xAxis = (
+    <XAxis
+      dataKey="timestamp"
+      tickFormatter={value => tickLabel(String(value), period)}
+      tick={{ fill: "var(--dashboard-subtle)", fontSize: 12 }}
+      axisLine={false}
+      tickLine={false}
+      minTickGap={26}
+    />
+  );
+  const yAxis = (
+    <YAxis
+      tickFormatter={v => `$${Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
+      tick={{ fill: "var(--dashboard-subtle)", fontSize: 12 }}
+      axisLine={false}
+      tickLine={false}
+      width={76}
+      domain={["auto", "auto"]}
+    />
+  );
+  const grid = <CartesianGrid strokeDasharray="7 7" stroke="var(--dashboard-chart-grid)" vertical={false} />;
+  const tooltip = <Tooltip content={<ChartTooltip />} />;
 
   return (
-    <div className="glass-panel flex h-full min-h-[220px] flex-col overflow-hidden rounded-2xl">
+    <section className="relative min-h-[360px] overflow-hidden rounded-[32px] border border-[var(--dashboard-border)] bg-[var(--dashboard-chart)] p-5 shadow-[var(--dashboard-shadow)] md:min-h-[400px]">
+      <div className="pointer-events-none absolute inset-0" style={{ background: "var(--dashboard-chart-overlay)" }} />
+      <div className="relative z-10 flex flex-col gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-5">
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-[34px] font-medium leading-none tracking-normal text-[var(--dashboard-text)] md:text-[42px]">
+                Portfolio
+              </h1>
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--dashboard-control)] text-[var(--dashboard-subtle)]">
+                <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                  <path fillRule="evenodd" d="M5.23 7.23a.75.75 0 0 1 1.06 0L10 10.94l3.71-3.71a.75.75 0 1 1 1.06 1.06l-4.24 4.24a.75.75 0 0 1-1.06 0L5.23 8.29a.75.75 0 0 1 0-1.06z" clipRule="evenodd" />
+                </svg>
+              </span>
+            </div>
 
-      <div className="flex shrink-0 items-center gap-3 border-b border-line px-5 py-4">
-        <div>
-          <p className="text-sm font-bold text-primary">Paper Portfolio</p>
-          <p className="mt-0.5 text-xs text-muted">7-day equity curve</p>
+            <div className="mt-7 flex flex-wrap items-center gap-5">
+              <p className="font-sans text-[28px] font-bold leading-none text-[var(--dashboard-text)] md:text-[32px]">
+                {loading && latest === 0 ? "—" : fmt(latest)}
+              </p>
+              <p className={`inline-flex items-center gap-2 font-mono text-base font-semibold ${isUp ? "text-positive" : "text-negative"}`}>
+                <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                  <path d={isUp ? "M10 3.5 16.5 15h-13L10 3.5z" : "M10 16.5 3.5 5h13L10 16.5z"} />
+                </svg>
+                {fmt(Math.abs(pnl))} ({pct >= 0 ? "+" : ""}{pct.toFixed(2)}%)
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col items-end gap-6">
+            <label className="inline-flex h-12 items-center gap-2.5 rounded-2xl bg-[var(--dashboard-control)] px-5 text-sm font-semibold text-[var(--dashboard-text)] shadow-sm">
+              <svg className="h-5 w-5 text-cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="m3 17 6-6 4 4 8-8" />
+                <path d="M14 7h7v7" />
+              </svg>
+              <select
+                aria-label="Chart type"
+                value={chartType}
+                onChange={event => setChartType(event.target.value as ChartType)}
+                className="cursor-pointer appearance-none bg-transparent pr-1 text-sm font-semibold text-[var(--dashboard-text)] outline-none"
+              >
+                {CHART_TYPES.map(option => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--dashboard-row)] text-[var(--dashboard-subtle)]">
+                <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                  <path fillRule="evenodd" d="M5.23 7.23a.75.75 0 0 1 1.06 0L10 10.94l3.71-3.71a.75.75 0 1 1 1.06 1.06l-4.24 4.24a.75.75 0 0 1-1.06 0L5.23 8.29a.75.75 0 0 1 0-1.06z" clipRule="evenodd" />
+                </svg>
+              </span>
+            </label>
+
+            <div className="flex rounded-2xl bg-[var(--dashboard-control)] p-1">
+              {PERIODS.map(option => (
+                <button
+                  key={option}
+                  onClick={() => setPeriod(option)}
+                  className={[
+                    "flex h-10 w-10 items-center justify-center rounded-full text-xs font-semibold transition",
+                    option === period
+                      ? "border border-cyan bg-[var(--dashboard-row)] text-[var(--dashboard-text)] shadow-glow-cyan"
+                      : "text-[var(--dashboard-subtle)] hover:text-[var(--dashboard-text)]",
+                  ].join(" ")}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
-        {data.length > 0 && (
-          <div className="ml-auto text-right">
-            <p className="font-mono text-lg font-bold leading-tight text-primary">{fmt(latest)}</p>
-            <p className={`font-mono text-xs font-semibold ${isUp ? "text-positive" : "text-negative"}`}>
-              {isUp ? "▲" : "▼"} {fmt(Math.abs(pnl))} all time
-            </p>
-          </div>
-        )}
-      </div>
 
-      <div className="min-h-[160px] flex-1 px-3 py-4">
-        {loading && (
-          <div className="flex h-full items-center justify-center gap-1.5">
-            {[0, 1, 2].map(i => (
-              <div
-                key={i}
-                className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted"
-                style={{ animationDelay: `${i * 120}ms` }}
-              />
-            ))}
-          </div>
-        )}
-        {error && (
-          <div className="flex h-full items-center justify-center text-sm text-negative">{error}</div>
-        )}
-        {!loading && !error && data.length === 0 && (
-          <div className="flex h-full items-center justify-center text-sm text-muted">
-            No portfolio history yet.
-          </div>
-        )}
-        {!loading && !error && data.length > 0 && (
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data} margin={{ top: 4, right: 6, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
-              <XAxis
-                dataKey="timestamp"
-                tickFormatter={fmtD}
-                tick={{ fill: "var(--chart-tick)", fontSize: 10 }}
-                axisLine={false}
-                tickLine={false}
-              />
-              <YAxis
-                tickFormatter={v => `$${(v / 1000).toFixed(0)}k`}
-                tick={{ fill: "var(--chart-tick)", fontSize: 10 }}
-                axisLine={false}
-                tickLine={false}
-                width={42}
-              />
-              <Tooltip content={<ChartTooltip />} />
-              <Line
-                type="monotone"
-                dataKey="equity"
-                stroke={lineColor}
-                strokeWidth={2.5}
-                dot={false}
-                activeDot={{ r: 4, fill: "var(--accent)", stroke: "var(--surface)", strokeWidth: 2 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        )}
+        <div className="relative z-10 h-[170px] md:h-[220px]">
+          {loading && (
+            <div className="flex h-full items-center justify-center gap-1.5">
+              {[0, 1, 2].map(i => (
+                <div
+                  key={i}
+                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted"
+                  style={{ animationDelay: `${i * 120}ms` }}
+                />
+              ))}
+            </div>
+          )}
+          {error && (
+            <div className="flex h-full items-center justify-center text-sm text-negative">{error}</div>
+          )}
+          {!loading && !error && data.length === 0 && (
+            <div className="flex h-full items-center justify-center text-sm text-[var(--dashboard-muted)]">
+              No portfolio history yet.
+            </div>
+          )}
+          {!loading && !error && data.length > 0 && (
+            <ResponsiveContainer width="100%" height="100%">
+              {chartType === "line" ? (
+                <LineChart data={data} margin={chartMargin}>
+                  {grid}
+                  {xAxis}
+                  {yAxis}
+                  {tooltip}
+                  <Line
+                    type="monotone"
+                    dataKey="equity"
+                    stroke="var(--dashboard-chart-line)"
+                    strokeWidth={4}
+                    dot={false}
+                    activeDot={{ r: 7, fill: "var(--dashboard-chart)", stroke: "var(--dashboard-chart-line)", strokeWidth: 4 }}
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              ) : chartType === "bar" ? (
+                <BarChart data={data} margin={chartMargin}>
+                  {grid}
+                  {xAxis}
+                  {yAxis}
+                  {tooltip}
+                  <Bar
+                    dataKey="equity"
+                    fill="var(--dashboard-chart-line)"
+                    radius={[6, 6, 0, 0]}
+                    maxBarSize={28}
+                    isAnimationActive={false}
+                  />
+                </BarChart>
+              ) : (
+                <AreaChart data={data} margin={chartMargin}>
+                  <defs>
+                    <linearGradient id="paper-portfolio-fill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="var(--dashboard-chart-fill-1)" stopOpacity="0.55" />
+                      <stop offset="55%" stopColor="var(--dashboard-chart-fill-2)" stopOpacity="0.22" />
+                      <stop offset="100%" stopColor="var(--dashboard-chart-fill-3)" stopOpacity="0" />
+                    </linearGradient>
+                  </defs>
+                  {grid}
+                  {xAxis}
+                  {yAxis}
+                  {tooltip}
+                  <Area
+                    type="monotone"
+                    dataKey="equity"
+                    stroke="var(--dashboard-chart-line)"
+                    strokeWidth={4}
+                    fill="url(#paper-portfolio-fill)"
+                    fillOpacity={1}
+                    dot={false}
+                    activeDot={{ r: 7, fill: "var(--dashboard-chart)", stroke: "var(--dashboard-chart-line)", strokeWidth: 4 }}
+                    isAnimationActive={false}
+                  />
+                </AreaChart>
+              )}
+            </ResponsiveContainer>
+          )}
+        </div>
       </div>
-    </div>
+    </section>
   );
 }

@@ -312,12 +312,12 @@ export default function OrdersPage() {
       </div>
 
       <div className="grid min-h-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <section className="glass-panel flex min-h-[520px] flex-col overflow-hidden rounded-lg xl:min-h-0">
-          <div className="shrink-0 border-b border-line px-4 py-3">
+        <section className="glass-panel flex min-h-[520px] flex-col overflow-hidden rounded-[28px] xl:min-h-0">
+          <div className="shrink-0 border-b border-[var(--dashboard-divider)] px-5 py-4">
             <div className="flex flex-wrap items-center gap-3">
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold">Alpaca Orders</p>
-                <p className="mt-0.5 text-[11px] text-muted">
+                <p className="text-sm font-semibold text-[var(--dashboard-text)]">Alpaca Orders</p>
+                <p className="mt-0.5 text-[11px] text-[var(--dashboard-subtle)]">
                   {loading ? "Loading orders..." : `Fetched ${dateTime(data.fetchedAt)}`}
                 </p>
               </div>
@@ -371,7 +371,7 @@ export default function OrdersPage() {
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          <div className="min-h-0 flex-1 overflow-y-auto p-3">
             {filteredOrders.length === 0 && (
               <div className="flex h-full min-h-[240px] items-center justify-center text-sm text-muted">
                 {loading ? "Loading Alpaca orders..." : "No orders match this view."}
@@ -385,10 +385,10 @@ export default function OrdersPage() {
                   key={order.id}
                   onClick={() => setSelectedId(order.id)}
                   className={[
-                    "mb-2 grid w-full min-w-0 cursor-pointer gap-3 overflow-hidden rounded-lg border px-3.5 py-3 text-left transition-all duration-200 lg:grid-cols-[28px_96px_72px_108px_minmax(0,1fr)_108px]",
+                    "mb-2 grid w-full min-w-0 cursor-pointer gap-3 overflow-hidden rounded-2xl border px-3.5 py-3 text-left transition-all duration-200 lg:grid-cols-[28px_96px_72px_108px_minmax(0,1fr)_108px]",
                     selected
                       ? "border-accent-border bg-selected shadow-glow"
-                      : "border-line bg-surface hover:border-cyan-border hover:bg-hover",
+                      : "border-[var(--dashboard-border)] bg-[var(--dashboard-row)] hover:border-cyan-border hover:bg-hover",
                   ].join(" ")}
                 >
                   <div className="flex items-start pt-0.5">
@@ -433,10 +433,10 @@ export default function OrdersPage() {
           </div>
         </section>
 
-        <aside className="glass-panel flex min-h-[520px] flex-col overflow-hidden rounded-lg xl:min-h-0">
-          <div className="shrink-0 border-b border-line px-4 py-3">
-            <p className="text-sm font-semibold">Order Detail</p>
-            <p className="mt-0.5 text-[11px] text-muted">Full Alpaca order payload for the selected row.</p>
+        <aside className="glass-panel flex min-h-[520px] flex-col overflow-hidden rounded-[28px] xl:min-h-0">
+          <div className="shrink-0 border-b border-[var(--dashboard-divider)] px-5 py-4">
+            <p className="text-sm font-semibold text-[var(--dashboard-text)]">Order Detail</p>
+            <p className="mt-0.5 text-[11px] text-[var(--dashboard-subtle)]">Full Alpaca order payload for the selected row.</p>
           </div>
 
           {selectedOrder ? (

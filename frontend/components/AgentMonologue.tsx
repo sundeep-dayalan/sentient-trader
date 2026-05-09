@@ -7,7 +7,7 @@ interface AgentMonologueProps { trade: Trade | null; }
 export default function AgentMonologue({ trade }: AgentMonologueProps) {
   if (!trade) {
     return (
-      <div className="glass-panel flex h-full min-h-[280px] items-center justify-center rounded-2xl p-10 xl:min-h-0">
+      <div className="glass-panel flex h-full min-h-[280px] items-center justify-center rounded-[28px] p-10 xl:min-h-0">
         <div className="max-w-xs text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-2 text-muted">
             <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -34,13 +34,13 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
   const confidencePct = Math.round(trade.confidence_score * 100);
 
   return (
-    <div className="glass-panel flex h-full min-h-[360px] flex-col overflow-hidden rounded-2xl xl:min-h-0">
+    <div className="glass-panel flex h-full min-h-[360px] flex-col overflow-hidden rounded-[28px] xl:min-h-0">
 
       {/* Header */}
-      <div className="shrink-0 border-b border-line px-5 py-4">
+      <div className="shrink-0 border-b border-[var(--dashboard-divider)] px-5 py-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-xs font-semibold text-muted">Decision Core</p>
+            <p className="text-xs font-semibold text-[var(--dashboard-subtle)]">Decision Core</p>
             <div className="mt-1.5 flex flex-wrap items-center gap-2.5">
               <span className="font-mono text-2xl font-bold text-accent">{trade.ticker}</span>
               <span className="rounded-xl border border-line bg-surface-2 px-2.5 py-1 text-xs font-medium text-secondary">

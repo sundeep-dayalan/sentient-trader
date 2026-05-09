@@ -48,19 +48,19 @@ export default function LiveTicker({
   }, []);
 
   return (
-    <div className="glass-panel flex h-full min-h-[360px] flex-col overflow-hidden rounded-2xl xl:min-h-0">
+    <div className="glass-panel flex h-full min-h-[360px] flex-col overflow-hidden rounded-[28px] xl:min-h-0">
 
       {/* Header */}
-      <div className="shrink-0 border-b border-line px-5 py-4">
+      <div className="shrink-0 border-b border-[var(--dashboard-divider)] px-5 py-4">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <span className="pulse-dot h-2.5 w-2.5 rounded-full bg-positive" />
             <div>
-              <p className="text-sm font-bold text-primary">Signal Feed</p>
-              <p className="mt-0.5 text-xs text-muted">Headlines analyzed by the agent</p>
+              <p className="text-sm font-bold text-[var(--dashboard-text)]">Signal Feed</p>
+              <p className="mt-0.5 text-xs text-[var(--dashboard-subtle)]">Headlines analyzed by the agent</p>
             </div>
           </div>
-          <span className="rounded-full bg-surface-2 px-3 py-1 text-[11px] font-semibold text-muted">
+          <span className="rounded-full bg-[var(--dashboard-control)] px-3 py-1 text-[11px] font-semibold text-[var(--dashboard-subtle)]">
             {isPreview ? `${visibleTrades.length} latest` : `${trades.length} events`}
           </span>
         </div>
@@ -90,7 +90,7 @@ export default function LiveTicker({
               "mb-2 w-full rounded-xl border p-3.5 text-left transition-all duration-150",
               selectedId === trade.id
                 ? "border-accent-border bg-selected shadow-sm"
-                : "border-line bg-surface-2 hover:border-accent-border hover:bg-hover",
+                : "border-[var(--dashboard-border)] bg-[var(--dashboard-row)] hover:border-accent-border hover:bg-hover",
               newIds.has(trade.id) ? "slide-in" : "",
             ].join(" ")}
           >

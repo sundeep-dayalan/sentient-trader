@@ -49,23 +49,43 @@
   --chart-tick:        #94A3B8;
   --chart-tooltip-bg:  #FFFFFF;
   --chart-tooltip-border: rgba(15,23,42,0.08);
+
+  --dashboard-bg:            #F4F6FA;
+  --dashboard-card:          #FFFFFF;
+  --dashboard-card-muted:    #F8FAFC;
+  --dashboard-chart:         #FFFFFF;
+  --dashboard-control:       #EEF2F7;
+  --dashboard-row:           rgba(15,23,42,0.045);
+  --dashboard-border:        rgba(15,23,42,0.08);
+  --dashboard-divider:       rgba(15,23,42,0.08);
+  --dashboard-text:          #0F172A;
+  --dashboard-subtle:        #475569;
+  --dashboard-muted:         #94A3B8;
+  --dashboard-link:          #0284C7;
+  --dashboard-chart-grid:    rgba(15,23,42,0.12);
+  --dashboard-chart-line:    #0284C7;
+  --dashboard-chart-fill-1:  #38BDF8;
+  --dashboard-chart-fill-2:  #0EA5E9;
+  --dashboard-chart-fill-3:  #0284C7;
+  --dashboard-chart-overlay: linear-gradient(120deg, rgba(14,165,233,0.08), rgba(255,255,255,0) 42%, rgba(79,70,229,0.06) 100%);
+  --dashboard-shadow:        0 22px 70px rgba(15,23,42,0.08);
 }
 
 /* ─── Dark theme ────────────────────────────────────────────────── */
 html.dark {
   color-scheme: dark;
 
-  --bg:               #0F172A;
-  --surface:          #1E293B;
-  --surface-2:        #253347;
-  --surface-3:        #334155;
-  --border:           rgba(248,250,252,0.08);
+  --bg:               #070A10;
+  --surface:          #11141D;
+  --surface-2:        #191C26;
+  --surface-3:        #242837;
+  --border:           rgba(255,255,255,0.08);
   --hover:            rgba(248,250,252,0.05);
-  --selected:         rgba(129,140,248,0.1);
+  --selected:         rgba(96,199,255,0.1);
 
-  --accent:           #818CF8;
-  --accent-soft:      rgba(129,140,248,0.12);
-  --accent-border:    rgba(129,140,248,0.28);
+  --accent:           #38BDF8;
+  --accent-soft:      rgba(56,189,248,0.12);
+  --accent-border:    rgba(56,189,248,0.3);
 
   --cyan:             #38BDF8;
   --cyan-soft:        rgba(56,189,248,0.1);
@@ -85,7 +105,7 @@ html.dark {
 
   --text:             #F8FAFC;
   --text-2:           #CBD5E1;
-  --muted:            #64748B;
+  --muted:            #768195;
 
   --panel-shadow:      rgba(0,0,0,0.32);
   --panel-shadow-soft: rgba(0,0,0,0.2);
@@ -96,6 +116,26 @@ html.dark {
   --chart-tick:        #64748B;
   --chart-tooltip-bg:  #1E293B;
   --chart-tooltip-border: rgba(248,250,252,0.1);
+
+  --dashboard-bg:            #070A10;
+  --dashboard-card:          #191C26;
+  --dashboard-card-muted:    rgba(7,11,18,0.8);
+  --dashboard-chart:         #070A10;
+  --dashboard-control:       #1B1F2B;
+  --dashboard-row:           rgba(255,255,255,0.045);
+  --dashboard-border:        rgba(255,255,255,0.08);
+  --dashboard-divider:       rgba(255,255,255,0.08);
+  --dashboard-text:          #FFFFFF;
+  --dashboard-subtle:        #9CA3AF;
+  --dashboard-muted:         #64748B;
+  --dashboard-link:          #BAE6FD;
+  --dashboard-chart-grid:    rgba(255,255,255,0.16);
+  --dashboard-chart-line:    #63C7FF;
+  --dashboard-chart-fill-1:  #2EA8FF;
+  --dashboard-chart-fill-2:  #1D75FF;
+  --dashboard-chart-fill-3:  #1D75FF;
+  --dashboard-chart-overlay: linear-gradient(120deg, rgba(92,121,255,0.10), rgba(7,10,16,0) 38%, rgba(20,188,255,0.08) 100%);
+  --dashboard-shadow:        0 24px 90px rgba(0,0,0,0.42);
 }
 
 /* ─── Base ──────────────────────────────────────────────────────── */
@@ -133,17 +173,15 @@ body {
 
 /* ─── Card primitives ───────────────────────────────────────────── */
 .glass-panel {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  box-shadow:
-    0 1px 2px var(--panel-shadow-soft),
-    0 4px 20px var(--panel-shadow);
+  background: var(--dashboard-card);
+  border: 1px solid var(--dashboard-border);
+  box-shadow: var(--dashboard-shadow);
 }
 
 .glass-panel-subtle {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  box-shadow: 0 1px 4px var(--panel-shadow-soft);
+  background: var(--dashboard-card);
+  border: 1px solid var(--dashboard-border);
+  box-shadow: var(--dashboard-shadow);
 }
 
 /* Stat card — left accent bar instead of neon top gradient */
