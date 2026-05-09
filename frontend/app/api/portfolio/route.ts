@@ -42,10 +42,13 @@ export async function GET() {
 
     // Alpaca returns parallel arrays: timestamps[] (Unix seconds) and equity[] (dollars).
     // Recharts needs [{timestamp, equity}] objects, so we zip them here.
-    const history = (data.timestamp as number[]).map((ts: number, i: number) => ({
-      timestamp: new Date(ts * 1000).toISOString(),
-      equity:    data.equity[i] as number,
-    }));
+    const history = (data.timestamp as number[])
+      .map((ts: number, i: number) => ({
+        timestamp: new Date(ts * 1000).toISOString(),
+        equity:    data.equity[i] as number,
+      }))
+      // Alpaca returns null/0 for days before the account had any activity — drop them
+      .filter((p) => p.equity > 0);
 
     return NextResponse.json({ history });
   } catch (err) {

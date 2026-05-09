@@ -91,11 +91,11 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
         <span>·</span>
         <span>LangGraph</span>
         <span>·</span>
-        <span>Upstash Kafka + Redis</span>
+        <span>Upstash Redis Streams</span>
         <span>·</span>
         <span>Supabase Realtime</span>
         <span>·</span>
-        <span>Fly.io + Vercel</span>
+        <span>Fly.io + Netlify</span>
       </footer>
     </main>
   );
