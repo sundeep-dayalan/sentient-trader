@@ -13,6 +13,9 @@ import { createClient }    from "@/lib/supabase";
 import { Trade }           from "@/lib/types";
 import DashboardClient     from "./DashboardClient";
 
+// Always fetch fresh data — never serve a stale cached snapshot
+export const dynamic = "force-dynamic";
+
 async function getInitialTrades(): Promise<Trade[]> {
   const supabase = createClient();
 
