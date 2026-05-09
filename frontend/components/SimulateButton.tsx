@@ -44,7 +44,7 @@ export default function SimulateButton({ onStart, onComplete }: SimulateButtonPr
 
     for (let i = 0; i < SIMULATION_SCENARIOS.length; i++) {
       try {
-        await fetch("/api/simulate", {
+        await fetch("/sentient-trader/api/simulate", {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify(SIMULATION_SCENARIOS[i]),

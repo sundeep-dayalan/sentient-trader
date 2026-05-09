@@ -32,7 +32,7 @@ export default function PnLChart() {
 
   const fetchPortfolio = async () => {
     try {
-      const res  = await fetch("/api/portfolio");
+      const res  = await fetch("/sentient-trader/api/portfolio");
       const json = await res.json();
       setData(json.history ?? []);
       setError(null);
