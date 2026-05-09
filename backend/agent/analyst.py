@@ -121,7 +121,12 @@ def _make_analyze_node(groq_client: Any):
             return {"analysis": analysis, "error": None}
 
         except Exception as e:
-            log.error("LLM call failed for [%s]: %s", news.ticker, e)
+            # Log the full cause chain so we can see the raw Groq error message
+            cause = getattr(e, "__cause__", None) or getattr(e, "last_attempt", None)
+            log.error(
+                "LLM call failed for [%s] model=%s: %s | cause: %s",
+                news.ticker, GROQ_MODEL, e, cause,
+            )
             return {"analysis": None, "error": str(e)}
 
     return analyze
