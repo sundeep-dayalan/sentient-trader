@@ -17,9 +17,35 @@ export interface Trade {
   is_simulated: boolean;     // true when injected via the Simulate button
 }
 
+export interface DashboardStats {
+  analyzed: number;
+  executed: number;
+  buyOrders: number;
+  sellOrders: number;
+  riskGated: number;
+  avgSentiment: number;
+}
+
 export interface PortfolioPoint {
   timestamp: string;  // ISO string
   equity: number;     // dollar value
+}
+
+export interface PortfolioSummary {
+  equity: number;
+  profitLoss: number;
+  profitLossPct: number;
+  baseValue: number | null;
+  baseValueAsOf: string | null;
+}
+
+export interface PortfolioAccountSummary {
+  id: string | null;
+  accountNumber: string | null;
+  status: string | null;
+  currency: string | null;
+  createdAt: string | null;
+  paper: boolean;
 }
 
 /** One scenario injected by the "Simulate Market Shock" button */

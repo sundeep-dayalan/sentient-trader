@@ -11,7 +11,7 @@ import SystemStatus    from "@/components/SystemStatus";
 import ThemeToggle     from "@/components/ThemeToggle";
 import { BASE_PATH }   from "@/lib/config";
 import { createClient } from "@/lib/supabase";
-import { Trade }       from "@/lib/types";
+import { DashboardStats, Trade } from "@/lib/types";
 
 const PAGE_SIZE = 20;
 const NAV_ITEMS = ["Dashboard", "Signals", "Risk Gate", "Orders", "Portfolio", "Pipeline"] as const;
@@ -19,6 +19,7 @@ type ViewName = typeof NAV_ITEMS[number];
 
 interface DashboardClientProps {
   initialTrades: Trade[];
+  initialStats: DashboardStats | null;
 }
 
 interface AlpacaAccount {
@@ -169,7 +170,7 @@ function RecentSignalsCard({
   const visibleTrades = trades.slice(0, 3);
 
   return (
-    <section className="rounded-[28px] border border-[var(--dashboard-border)] bg-[var(--dashboard-card)] p-4 shadow-[var(--dashboard-shadow)] 2xl:p-6">
+    <section className="rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-card)] p-4 shadow-[var(--dashboard-shadow)] 2xl:p-6">
       <div className="mb-4 flex items-center justify-between gap-3 2xl:mb-5">
         <h2 className="text-2xl font-bold leading-none text-[var(--dashboard-text)] 2xl:text-[28px]">Recent Signals</h2>
         <button
@@ -238,7 +239,7 @@ function RecentOrdersCard({
   const visibleOrders = orders.slice(0, 3);
 
   return (
-    <section className="rounded-[28px] border border-[var(--dashboard-border)] bg-[var(--dashboard-card-muted)] p-4 shadow-[var(--dashboard-shadow)] 2xl:p-6">
+    <section className="rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-card-muted)] p-4 shadow-[var(--dashboard-shadow)] 2xl:p-6">
       <div className="mb-4 flex items-center justify-between gap-3 2xl:mb-5">
         <h2 className="text-2xl font-bold leading-none text-[var(--dashboard-text)] 2xl:text-[28px]">Transactions</h2>
         <button
@@ -253,7 +254,7 @@ function RecentOrdersCard({
       <div className="space-y-1">
         {loading && visibleOrders.length === 0 && <EmptyDots />}
         {!loading && error && (
-          <div className="flex min-h-[210px] items-center justify-center rounded-2xl border border-negative-border bg-negative-soft px-4 text-center text-sm text-negative">
+          <div className="flex min-h-[210px] items-center justify-center rounded-xl border border-negative-border bg-negative-soft px-4 text-center text-sm text-negative">
             {error}
           </div>
         )}
@@ -328,7 +329,7 @@ function AlpacaBalanceCard({
   const filledOrders = orders.filter(order => orderBucket(order.status) === "filled").length;
 
   return (
-    <section className="rounded-[30px] border border-[var(--dashboard-border)] bg-[var(--dashboard-card)] p-6 shadow-[var(--dashboard-shadow)]">
+    <section className="rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-card)] p-6 shadow-[var(--dashboard-shadow)]">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-medium text-[var(--dashboard-subtle)]">Alpaca Balance</p>
@@ -359,7 +360,7 @@ function AlpacaBalanceCard({
         </div>
 
         {error && (
-          <p className="mb-4 rounded-2xl border border-negative-border bg-negative-soft px-3 py-2 text-xs text-negative">
+          <p className="mb-4 rounded-xl border border-negative-border bg-negative-soft px-3 py-2 text-xs text-negative">
             {error}
           </p>
         )}
@@ -374,7 +375,7 @@ function AlpacaBalanceCard({
           ].map(item => (
             <div
               key={item.label}
-              className="rounded-2xl bg-[var(--dashboard-row)] px-4 py-3"
+              className="rounded-xl bg-[var(--dashboard-row)] px-4 py-3"
             >
               <span className="block text-xs font-medium text-[var(--dashboard-subtle)]">{item.label}</span>
               <span className="mt-1 block truncate font-mono text-[15px] font-semibold text-[var(--dashboard-text)]">
@@ -392,9 +393,23 @@ function EmptyAiTipsCard() {
   return (
     <section>
       <h2 className="mb-5 text-[30px] font-bold leading-none text-[var(--dashboard-text)]">AI Tips</h2>
-      <div className="min-h-[190px] rounded-[28px] border border-[var(--dashboard-border)] bg-[var(--dashboard-card)] shadow-[var(--dashboard-shadow)]" />
+      <div className="min-h-[190px] rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-card)] shadow-[var(--dashboard-shadow)]" />
     </section>
   );
+}
+
+function addTradeToStats(stats: DashboardStats, trade: Trade): DashboardStats {
+  const analyzed = stats.analyzed + 1;
+  const sentimentTotal = stats.avgSentiment * stats.analyzed + trade.sentiment_score;
+
+  return {
+    analyzed,
+    executed: stats.executed + (trade.order_id?.trim() ? 1 : 0),
+    buyOrders: stats.buyOrders + (trade.trade_action === "BUY" ? 1 : 0),
+    sellOrders: stats.sellOrders + (trade.trade_action === "SELL" ? 1 : 0),
+    riskGated: stats.riskGated + (trade.trade_action === "HOLD" ? 1 : 0),
+    avgSentiment: sentimentTotal / analyzed,
+  };
 }
 
 const NAV_ICONS: Record<string, React.ReactNode> = {
@@ -432,8 +447,9 @@ const NAV_ICONS: Record<string, React.ReactNode> = {
   ),
 };
 
-export default function DashboardClient({ initialTrades }: DashboardClientProps) {
+export default function DashboardClient({ initialTrades, initialStats }: DashboardClientProps) {
   const [trades,        setTrades]        = useState<Trade[]>(initialTrades);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(initialStats);
   const [newIds,        setNewIds]        = useState<Set<string>>(new Set());
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(initialTrades[0] ?? null);
   const [hasMore,       setHasMore]       = useState(initialTrades.length === PAGE_SIZE);
@@ -473,11 +489,31 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
     }
   }, []);
 
+  const loadDashboardStats = useCallback(async () => {
+    try {
+      const response = await fetch(`${BASE_PATH}/api/stats`, { cache: "no-store" });
+      if (!response.ok) return;
+
+      const json = await response.json() as { stats: DashboardStats | null };
+      if (json.stats) {
+        setDashboardStats(json.stats);
+      }
+    } catch {
+      // Keep the server-rendered stats or fall back to loaded rows.
+    }
+  }, []);
+
   useEffect(() => {
     loadAlpacaSummary();
     const interval = setInterval(loadAlpacaSummary, 30_000);
     return () => clearInterval(interval);
   }, [loadAlpacaSummary]);
+
+  useEffect(() => {
+    loadDashboardStats();
+    const interval = setInterval(loadDashboardStats, 30_000);
+    return () => clearInterval(interval);
+  }, [loadDashboardStats]);
 
   const latestTrade = trades[0] ?? null;
   const lastSignalTime = latestTrade
@@ -498,6 +534,7 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "trades" }, payload => {
         const t = payload.new as Trade;
         setTrades(prev => [t, ...prev]);
+        setDashboardStats(current => current ? addTradeToStats(current, t) : current);
         setNewIds(prev => new Set(prev).add(t.id));
         setTimeout(() => setNewIds(prev => { const n = new Set(prev); n.delete(t.id); return n; }), 500);
       })
@@ -638,7 +675,7 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
 
             {/* Page header strip */}
             {activeView !== "Dashboard" && (
-            <section className="glass-panel flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-[28px] px-5 py-4">
+            <section className="glass-panel flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-2xl px-5 py-4">
               <div>
                 <h1 className="text-2xl font-bold leading-tight text-[var(--dashboard-text)]">{activeView}</h1>
                 <p className="mt-1 text-sm text-[var(--dashboard-subtle)]">
@@ -660,7 +697,7 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
             {/* Dashboard view */}
             {activeView === "Dashboard" && (
               <div className="w-full space-y-6">
-                <StatsBar trades={trades} />
+                <StatsBar trades={trades} stats={dashboardStats} />
                 <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_440px]">
                   <div className="min-w-0 space-y-6">
                     <PnLChart />
@@ -710,9 +747,9 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
             {activeView === "Orders" && <OrdersPage />}
 
             {activeView !== "Dashboard" && activeView !== "Signals" && activeView !== "Orders" && (
-              <div className="glass-panel flex min-h-[520px] flex-1 items-center justify-center rounded-[28px] p-10 text-center">
+              <div className="glass-panel flex min-h-[520px] flex-1 items-center justify-center rounded-2xl p-10 text-center">
                 <div>
-                  <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-2 text-muted">
+                  <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl bg-surface-2 text-muted">
                     {NAV_ICONS[activeView]}
                   </div>
                   <p className="text-base font-semibold text-primary">{activeView}</p>
@@ -732,7 +769,7 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
           onMouseDown={() => setIsSimulatorOpen(false)}
         >
           <div
-            className="glass-panel w-full max-w-md rounded-2xl p-5"
+            className="glass-panel w-full max-w-md rounded-xl p-5"
             role="dialog"
             aria-modal="true"
             aria-label="Simulate signal"

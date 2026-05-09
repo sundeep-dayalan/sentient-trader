@@ -1,0 +1,30 @@
+import { DashboardStats, Trade } from "@/lib/types";
+
+export type TradeStatsRow = Pick<Trade, "trade_action" | "order_id" | "sentiment_score">;
+
+export function computeDashboardStats(rows: TradeStatsRow[]): DashboardStats {
+  let buyOrders = 0;
+  let sellOrders = 0;
+  let riskGated = 0;
+  let executed = 0;
+  let sentimentTotal = 0;
+
+  rows.forEach(row => {
+    if (row.trade_action === "BUY") buyOrders += 1;
+    if (row.trade_action === "SELL") sellOrders += 1;
+    if (row.trade_action === "HOLD") riskGated += 1;
+    if (row.order_id?.trim()) executed += 1;
+
+    const sentiment = Number(row.sentiment_score);
+    sentimentTotal += Number.isFinite(sentiment) ? sentiment : 0;
+  });
+
+  return {
+    analyzed: rows.length,
+    executed,
+    buyOrders,
+    sellOrders,
+    riskGated,
+    avgSentiment: rows.length > 0 ? sentimentTotal / rows.length : 0,
+  };
+}

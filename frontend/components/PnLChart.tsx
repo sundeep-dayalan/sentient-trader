@@ -5,18 +5,29 @@ import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Line, LineChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
-import { PortfolioPoint } from "@/lib/types";
+import { PortfolioAccountSummary, PortfolioPoint, PortfolioSummary } from "@/lib/types";
 import { BASE_PATH } from "@/lib/config";
 
-type PeriodKey = "D" | "W" | "M" | "Y";
+type PeriodKey = "D" | "W" | "M" | "3M" | "6M" | "Y" | "5Y";
 type ChartType = "line" | "area" | "bar";
 
-const PERIODS: PeriodKey[] = ["D", "W", "M", "Y"];
+const PERIODS: { key: PeriodKey; label: string }[] = [
+  { key: "D", label: "D" },
+  { key: "W", label: "W" },
+  { key: "M", label: "M" },
+  { key: "3M", label: "3M" },
+  { key: "6M", label: "6M" },
+  { key: "Y", label: "1Y" },
+  { key: "5Y", label: "5Y" },
+];
 const PERIOD_POLL_MS: Record<PeriodKey, number> = {
   D: 15_000,
   W: 30_000,
   M: 60_000,
+  "3M": 120_000,
+  "6M": 120_000,
   Y: 120_000,
+  "5Y": 300_000,
 };
 
 const CHART_TYPES: { value: ChartType; label: string }[] = [
@@ -30,14 +41,15 @@ const fmt = (v: number) => `$${v.toLocaleString("en-US", { maximumFractionDigits
 function tickLabel(ts: string, period: PeriodKey) {
   const date = new Date(ts);
   if (period === "D") return date.toLocaleTimeString("en-US", { hour: "numeric" });
-  if (period === "Y") return date.toLocaleDateString("en-US", { month: "short" });
+  if (period === "5Y") return date.toLocaleDateString("en-US", { year: "numeric" });
+  if (period === "6M" || period === "Y") return date.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number }>; label?: string }) {
   if (!active || !payload?.[0]) return null;
   return (
-    <div className="rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-card)] px-4 py-3 text-xs shadow-2xl backdrop-blur">
+    <div className="rounded-xl border border-[var(--dashboard-border)] bg-[var(--dashboard-card)] px-4 py-3 text-xs shadow-2xl backdrop-blur">
       <p className="mb-1 text-[var(--dashboard-subtle)]">{label ? new Date(label).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</p>
       <p className="font-mono text-base font-bold text-[var(--dashboard-text)]">{fmt(payload[0].value)}</p>
     </div>
@@ -46,6 +58,8 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
 
 export default function PnLChart() {
   const [data, setData] = useState<PortfolioPoint[]>([]);
+  const [summary, setSummary] = useState<PortfolioSummary | null>(null);
+  const [account, setAccount] = useState<PortfolioAccountSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [period, setPeriod] = useState<PeriodKey>("W");
@@ -54,11 +68,18 @@ export default function PnLChart() {
   const fetchPortfolio = useCallback(async () => {
     try {
       const res = await fetch(`${BASE_PATH}/api/portfolio?range=${period}`, { cache: "no-store" });
-      const json = await res.json() as { history?: PortfolioPoint[]; error?: string };
+      const json = await res.json() as {
+        history?: PortfolioPoint[];
+        summary?: PortfolioSummary;
+        account?: PortfolioAccountSummary;
+        error?: string;
+      };
       if (json.error) {
         throw new Error(json.error);
       }
       setData(json.history ?? []);
+      setSummary(json.summary ?? null);
+      setAccount(json.account ?? null);
       setError(null);
     } catch {
       setError("Could not load portfolio data");
@@ -70,16 +91,19 @@ export default function PnLChart() {
   useEffect(() => {
     setLoading(true);
     setData([]);
+    setSummary(null);
+    setAccount(null);
     fetchPortfolio();
     const id = setInterval(fetchPortfolio, PERIOD_POLL_MS[period]);
     return () => clearInterval(id);
   }, [fetchPortfolio, period]);
 
-  const latest = data.at(-1)?.equity ?? 0;
+  const latest = summary?.equity ?? data.at(-1)?.equity ?? 0;
   const start = data[0]?.equity ?? 0;
-  const pnl = latest - start;
+  const pnl = summary?.profitLoss ?? latest - start;
   const isUp = pnl >= 0;
-  const pct = start > 0 ? pnl / start * 100 : 0;
+  const pct = summary?.profitLossPct ?? (start > 0 ? pnl / start : 0);
+  const accountLabel = account?.accountNumber ?? (account?.id ? `...${account.id.slice(-6)}` : null);
   const chartMargin = { top: 12, right: 10, left: 0, bottom: 0 };
   const xAxis = (
     <XAxis
@@ -105,23 +129,28 @@ export default function PnLChart() {
   const tooltip = <Tooltip content={<ChartTooltip />} />;
 
   return (
-    <section className="relative min-h-[360px] overflow-hidden rounded-[32px] border border-[var(--dashboard-border)] bg-[var(--dashboard-chart)] p-5 shadow-[var(--dashboard-shadow)] md:min-h-[400px]">
+    <section className="relative min-h-[360px] overflow-hidden rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-chart)] p-5 shadow-[var(--dashboard-shadow)] md:min-h-[400px]">
       <div className="pointer-events-none absolute inset-0" style={{ background: "var(--dashboard-chart-overlay)" }} />
       <div className="relative z-10 flex flex-col gap-4">
-        <div className="flex flex-wrap items-start justify-between gap-5">
-          <div>
-            <div className="flex items-center gap-3">
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto]">
+          <div className="min-w-0">
+            {accountLabel && (
+              <div className="mb-5 inline-flex max-w-full items-center gap-2 rounded-full bg-[var(--dashboard-control)] px-3 py-1.5 text-xs font-semibold text-[var(--dashboard-subtle)] shadow-sm">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-positive" />
+                <span className="shrink-0 text-[var(--dashboard-text)]">Paper</span>
+                <span className="truncate font-mono">{accountLabel}</span>
+                {account?.status && <span className="shrink-0 uppercase">{account.status}</span>}
+                {account?.currency && <span className="shrink-0">{account.currency}</span>}
+              </div>
+            )}
+
+            <div>
               <h1 className="text-[34px] font-medium leading-none tracking-normal text-[var(--dashboard-text)] md:text-[42px]">
                 Portfolio
               </h1>
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--dashboard-control)] text-[var(--dashboard-subtle)]">
-                <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path fillRule="evenodd" d="M5.23 7.23a.75.75 0 0 1 1.06 0L10 10.94l3.71-3.71a.75.75 0 1 1 1.06 1.06l-4.24 4.24a.75.75 0 0 1-1.06 0L5.23 8.29a.75.75 0 0 1 0-1.06z" clipRule="evenodd" />
-                </svg>
-              </span>
             </div>
 
-            <div className="mt-7 flex flex-wrap items-center gap-5">
+            <div className="mt-6 flex flex-wrap items-center gap-5">
               <p className="font-sans text-[28px] font-bold leading-none text-[var(--dashboard-text)] md:text-[32px]">
                 {loading && latest === 0 ? "—" : fmt(latest)}
               </p>
@@ -129,13 +158,30 @@ export default function PnLChart() {
                 <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                   <path d={isUp ? "M10 3.5 16.5 15h-13L10 3.5z" : "M10 16.5 3.5 5h13L10 16.5z"} />
                 </svg>
-                {fmt(Math.abs(pnl))} ({pct >= 0 ? "+" : ""}{pct.toFixed(2)}%)
+                {fmt(Math.abs(pnl))} ({pct >= 0 ? "+" : ""}{(pct * 100).toFixed(2)}%)
               </p>
             </div>
           </div>
 
-          <div className="flex flex-col items-end gap-6">
-            <label className="inline-flex h-12 items-center gap-2.5 rounded-2xl bg-[var(--dashboard-control)] px-5 text-sm font-semibold text-[var(--dashboard-text)] shadow-sm">
+          <div className="flex flex-col items-start gap-4 lg:items-end">
+            <div className="flex max-w-[340px] flex-wrap justify-end rounded-xl bg-[var(--dashboard-control)] p-1">
+              {PERIODS.map(option => (
+                <button
+                  key={option.key}
+                  onClick={() => setPeriod(option.key)}
+                  className={[
+                    "flex h-10 min-w-10 items-center justify-center rounded-full px-3 text-xs font-semibold transition",
+                    option.key === period
+                      ? "border border-cyan bg-[var(--dashboard-row)] text-[var(--dashboard-text)] shadow-glow-cyan"
+                      : "text-[var(--dashboard-subtle)] hover:text-[var(--dashboard-text)]",
+                  ].join(" ")}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+
+            <label className="inline-flex h-12 items-center gap-2.5 rounded-xl bg-[var(--dashboard-control)] px-5 text-sm font-semibold text-[var(--dashboard-text)] shadow-sm">
               <svg className="h-5 w-5 text-cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="m3 17 6-6 4 4 8-8" />
                 <path d="M14 7h7v7" />
@@ -158,23 +204,6 @@ export default function PnLChart() {
                 </svg>
               </span>
             </label>
-
-            <div className="flex rounded-2xl bg-[var(--dashboard-control)] p-1">
-              {PERIODS.map(option => (
-                <button
-                  key={option}
-                  onClick={() => setPeriod(option)}
-                  className={[
-                    "flex h-10 w-10 items-center justify-center rounded-full text-xs font-semibold transition",
-                    option === period
-                      ? "border border-cyan bg-[var(--dashboard-row)] text-[var(--dashboard-text)] shadow-glow-cyan"
-                      : "text-[var(--dashboard-subtle)] hover:text-[var(--dashboard-text)]",
-                  ].join(" ")}
-                >
-                  {option}
-                </button>
-              ))}
-            </div>
           </div>
         </div>
 

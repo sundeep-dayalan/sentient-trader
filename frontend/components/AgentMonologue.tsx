@@ -7,9 +7,9 @@ interface AgentMonologueProps { trade: Trade | null; }
 export default function AgentMonologue({ trade }: AgentMonologueProps) {
   if (!trade) {
     return (
-      <div className="glass-panel flex h-full min-h-[280px] items-center justify-center rounded-[28px] p-10 xl:min-h-0">
+      <div className="glass-panel flex h-full min-h-[280px] items-center justify-center rounded-2xl p-10 xl:min-h-0">
         <div className="max-w-xs text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-2 text-muted">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl bg-surface-2 text-muted">
             <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
             </svg>
@@ -34,7 +34,7 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
   const confidencePct = Math.round(trade.confidence_score * 100);
 
   return (
-    <div className="glass-panel flex h-full min-h-[360px] flex-col overflow-hidden rounded-[28px] xl:min-h-0">
+    <div className="glass-panel flex h-full min-h-[360px] flex-col overflow-hidden rounded-2xl xl:min-h-0">
 
       {/* Header */}
       <div className="shrink-0 border-b border-[var(--dashboard-divider)] px-5 py-4">
@@ -54,7 +54,7 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+      <div className="modern-scroll min-h-0 flex-1 space-y-3 overflow-y-auto p-5 pr-4">
 
         {/* Headline */}
         <div className="rounded-xl border border-line bg-surface-2 p-4">

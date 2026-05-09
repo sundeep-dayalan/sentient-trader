@@ -9,8 +9,9 @@
  * Supabase Realtime subscription for instant updates.
  */
 
+import { computeDashboardStats } from "@/lib/dashboardStats";
 import { createClient }    from "@/lib/supabase";
-import { Trade }           from "@/lib/types";
+import { DashboardStats, Trade } from "@/lib/types";
 import DashboardClient     from "./DashboardClient";
 
 // Always fetch fresh data — never serve a stale cached snapshot
@@ -33,7 +34,26 @@ async function getInitialTrades(): Promise<Trade[]> {
   return data ?? [];
 }
 
+async function getInitialStats(): Promise<DashboardStats | null> {
+  const supabase = createClient();
+
+  const { data, error } = await supabase
+    .from("trades")
+    .select("trade_action, order_id, sentiment_score");
+
+  if (error) {
+    console.error("Failed to fetch dashboard stats:", error.message);
+    return null;
+  }
+
+  return computeDashboardStats(data ?? []);
+}
+
 export default async function Page() {
-  const initialTrades = await getInitialTrades();
-  return <DashboardClient initialTrades={initialTrades} />;
+  const [initialTrades, initialStats] = await Promise.all([
+    getInitialTrades(),
+    getInitialStats(),
+  ]);
+
+  return <DashboardClient initialTrades={initialTrades} initialStats={initialStats} />;
 }

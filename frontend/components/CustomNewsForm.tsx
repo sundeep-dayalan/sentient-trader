@@ -50,7 +50,7 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
   }
 
   return (
-    <div className={variant === "modal" ? "space-y-4" : "glass-panel h-full rounded-2xl p-4"}>
+    <div className={variant === "modal" ? "space-y-4" : "glass-panel h-full rounded-xl p-4"}>
 
       {/* Header */}
       <div className="flex items-start gap-3">

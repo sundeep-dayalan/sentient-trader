@@ -48,7 +48,7 @@ export default function LiveTicker({
   }, []);
 
   return (
-    <div className="glass-panel flex h-full min-h-[360px] flex-col overflow-hidden rounded-[28px] xl:min-h-0">
+    <div className="glass-panel flex h-full min-h-[360px] flex-col overflow-hidden rounded-2xl xl:min-h-0">
 
       {/* Header */}
       <div className="shrink-0 border-b border-[var(--dashboard-divider)] px-5 py-4">
@@ -67,10 +67,10 @@ export default function LiveTicker({
       </div>
 
       {/* Trade rows */}
-      <div className="flex-1 overflow-y-auto p-3">
+      <div className="modern-scroll flex-1 overflow-y-auto p-3 pr-2">
         {trades.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-3 py-20 text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-surface-2 text-muted">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-surface-2 text-muted">
               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zm9.75-4.5a1.125 1.125 0 00-1.125 1.125v10.125a1.125 1.125 0 002.25 0V9.75A1.125 1.125 0 0012.75 8.625zm4.875 2.25a1.125 1.125 0 00-1.125 1.125v7.875a1.125 1.125 0 002.25 0v-7.875a1.125 1.125 0 00-1.125-1.125z" />
               </svg>
