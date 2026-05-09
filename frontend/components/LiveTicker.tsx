@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { Trade } from "@/lib/types";
 
 const ACTION: Record<string, string> = {
@@ -9,13 +10,51 @@ const ACTION: Record<string, string> = {
 };
 
 interface LiveTickerProps {
-  trades:       Trade[];
-  newIds:       Set<string>;
-  onTradeSelect:(trade: Trade) => void;
-  selectedId:   string | null;
+  trades:        Trade[];
+  newIds:        Set<string>;
+  onTradeSelect: (trade: Trade) => void;
+  selectedId:    string | null;
+  onLoadMore:    () => void;
+  isLoadingMore: boolean;
+  hasMore:       boolean;
 }
 
-export default function LiveTicker({ trades, newIds, onTradeSelect, selectedId }: LiveTickerProps) {
+export default function LiveTicker({
+  trades,
+  newIds,
+  onTradeSelect,
+  selectedId,
+  onLoadMore,
+  isLoadingMore,
+  hasMore,
+}: LiveTickerProps) {
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  // Keep a stable ref to onLoadMore so the observer is created exactly once
+  // and never needs to be torn down just because the callback identity changed.
+  const onLoadMoreRef = useRef(onLoadMore);
+  useEffect(() => { onLoadMoreRef.current = onLoadMore; }, [onLoadMore]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) onLoadMoreRef.current();
+      },
+      {
+        // Trigger 120px before the sentinel actually hits the viewport edge
+        // so there's no visible pause while data loads.
+        rootMargin: "0px 0px 120px 0px",
+        threshold: 0,
+      }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, []); // single setup — stable via ref above
+
   return (
     <div className="bg-surface border border-line rounded-2xl overflow-hidden shadow-card flex flex-col" style={{ minHeight: 500 }}>
 
@@ -96,6 +135,19 @@ export default function LiveTicker({ trades, newIds, onTradeSelect, selectedId }
             </button>
           );
         })}
+
+        {/* ── Infinite scroll sentinel ──────────────────────────────── */}
+        <div ref={sentinelRef} className="px-4 py-3 flex items-center justify-center">
+          {isLoadingMore && (
+            <div className="flex items-center gap-2 text-[11px] text-muted">
+              <span className="w-3 h-3 rounded-full border-2 border-muted/30 border-t-muted animate-spin" />
+              Loading more…
+            </div>
+          )}
+          {!isLoadingMore && !hasMore && trades.length > 0 && (
+            <span className="text-[10px] text-muted/50 font-mono">— end of history —</span>
+          )}
+        </div>
       </div>
     </div>
   );

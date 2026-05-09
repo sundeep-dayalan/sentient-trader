@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import AgentMonologue  from "@/components/AgentMonologue";
 import CustomNewsForm  from "@/components/CustomNewsForm";
 import LiveTicker      from "@/components/LiveTicker";
@@ -8,9 +8,11 @@ import PnLChart        from "@/components/PnLChart";
 import StatsBar        from "@/components/StatsBar";
 import SystemStatus    from "@/components/SystemStatus";
 import ThemeToggle     from "@/components/ThemeToggle";
+import { BASE_PATH }   from "@/lib/config";
 import { createClient } from "@/lib/supabase";
-import { Trade }      from "@/lib/types";
+import { Trade }       from "@/lib/types";
 
+const PAGE_SIZE = 20;
 const STACK = ["LangGraph", "Groq Qwen3-32B", "Alpaca", "Redis Streams", "Supabase", "Fly.io"];
 
 interface DashboardClientProps {
@@ -21,24 +23,66 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
   const [trades,        setTrades]        = useState<Trade[]>(initialTrades);
   const [newIds,        setNewIds]        = useState<Set<string>>(new Set());
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(initialTrades[0] ?? null);
+  const [hasMore,       setHasMore]       = useState(initialTrades.length === PAGE_SIZE);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
+  // Keep a stable ref to the latest trades tail so loadMore never goes stale
+  // in the IntersectionObserver callback without needing to re-register it.
+  const tailRef = useRef<string | null>(
+    initialTrades.length > 0 ? initialTrades[initialTrades.length - 1].created_at : null
+  );
+  const hasMoreRef     = useRef(hasMore);
+  const loadingMoreRef = useRef(false);
+
+  useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
+
+  // ── Supabase Realtime ─────────────────────────────────────────────────────
   useEffect(() => {
     const supabase = createClient();
     const channel  = supabase
       .channel("trades-realtime")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "trades" }, payload => {
         const t = payload.new as Trade;
-
-        setTrades(prev => [t, ...prev].slice(0, 20));
-
-        // Slide-in animation
+        setTrades(prev => [t, ...prev]);
         setNewIds(prev => new Set(prev).add(t.id));
         setTimeout(() => setNewIds(prev => { const n = new Set(prev); n.delete(t.id); return n; }), 500);
       })
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, []); // single subscription, never re-runs
+  }, []);
+
+  // ── Pagination ────────────────────────────────────────────────────────────
+  // Stable function: reads from refs so the IntersectionObserver never needs
+  // to be torn down and re-created when trades or hasMore change.
+  const loadMore = useCallback(async () => {
+    if (loadingMoreRef.current || !hasMoreRef.current || !tailRef.current) return;
+
+    loadingMoreRef.current = true;
+    setIsLoadingMore(true);
+
+    try {
+      const res = await fetch(
+        `${BASE_PATH}/api/trades?before=${encodeURIComponent(tailRef.current)}`
+      );
+      if (!res.ok) return;
+
+      const { trades: more, hasMore: next } = await res.json() as {
+        trades: Trade[];
+        hasMore: boolean;
+      };
+
+      if (more.length > 0) {
+        tailRef.current = more[more.length - 1].created_at;
+        setTrades(prev => [...prev, ...more]);
+      }
+      setHasMore(next);
+      hasMoreRef.current = next;
+    } finally {
+      loadingMoreRef.current = false;
+      setIsLoadingMore(false);
+    }
+  }, []); // intentionally empty — uses refs for all mutable state
 
   return (
     <div className="min-h-screen bg-background">
@@ -82,6 +126,9 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
             newIds={newIds}
             onTradeSelect={setSelectedTrade}
             selectedId={selectedTrade?.id ?? null}
+            onLoadMore={loadMore}
+            isLoadingMore={isLoadingMore}
+            hasMore={hasMore}
           />
 
           <div className="flex flex-col gap-4">
