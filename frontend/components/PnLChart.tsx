@@ -1,34 +1,31 @@
 "use client";
 
-/**
- * PnLChart — Portfolio equity curve over the last 7 days.
- *
- * Fetches data from /api/portfolio (server-side Alpaca call) so the
- * secret key never touches the browser. Refreshes every 60 seconds.
- *
- * Shows the starting equity, current equity, and total P&L delta.
- * The line turns red if the portfolio is down from day 1.
- */
-
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
+  CartesianGrid, Line, LineChart,
+  ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { PortfolioPoint } from "@/lib/types";
 
-const formatUSD  = (v: number) => `$${v.toLocaleString("en-US", { minimumFractionDigits: 0 })}`;
-const formatDate = (ts: string) => new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+const fmt  = (v: number) => `$${v.toLocaleString("en-US", { minimumFractionDigits: 0 })}`;
+const fmtD = (ts: string) => new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number }>; label?: string }) {
+  if (!active || !payload?.[0]) return null;
+  return (
+    <div className="bg-surface border border-line rounded-xl px-3 py-2.5 shadow-card-md text-xs">
+      <p className="text-muted mb-1">{label ? new Date(label).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</p>
+      <p className="font-bold font-mono text-primary text-sm">{fmt(payload[0].value)}</p>
+    </div>
+  );
+}
 
 export default function PnLChart() {
   const [data,    setData]    = useState<PortfolioPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
+  const [lineColor, setLineColor] = useState("#10b981");
+  const themeRef = useRef(false);
 
   const fetchPortfolio = async () => {
     try {
@@ -45,88 +42,99 @@ export default function PnLChart() {
 
   useEffect(() => {
     fetchPortfolio();
-    const interval = setInterval(fetchPortfolio, 60_000);
-    return () => clearInterval(interval);
+    const id = setInterval(fetchPortfolio, 60_000);
+    return () => clearInterval(id);
   }, []);
 
-  const latestEquity  = data.length > 0 ? data[data.length - 1].equity : 0;
-  const startEquity   = data.length > 0 ? data[0].equity               : 0;
-  const pnl           = latestEquity - startEquity;
-  const isPositive    = pnl >= 0;
-  const lineColor     = isPositive ? "#00ff88" : "#ff4466";
+  // Read accent colors from CSS vars so they match the active theme
+  useEffect(() => {
+    const update = () => {
+      const style = getComputedStyle(document.documentElement);
+      const pos = style.getPropertyValue("--positive").trim() || "#10b981";
+      const neg = style.getPropertyValue("--negative").trim() || "#ef4444";
+      const latest = data.at(-1)?.equity ?? 0;
+      const start  = data[0]?.equity     ?? 0;
+      setLineColor((latest - start) >= 0 ? pos : neg);
+    };
+    update();
+    themeRef.current = true;
+  }, [data]);
+
+  const latest = data.at(-1)?.equity ?? 0;
+  const start  = data[0]?.equity     ?? 0;
+  const pnl    = latest - start;
+  const isUp   = pnl >= 0;
 
   return (
-    <div className="bg-surface border border-line rounded-lg overflow-hidden">
+    <div className="bg-surface border border-line rounded-2xl overflow-hidden shadow-card">
 
       {/* Header */}
       <div className="flex items-center gap-3 px-5 py-4 border-b border-line">
-        <span className="text-[11px] font-bold tracking-widest text-muted uppercase">
-          Paper Portfolio (7D)
-        </span>
+        <div>
+          <p className="text-[10px] font-semibold text-muted uppercase tracking-wider">Paper Portfolio</p>
+          <p className="text-xs text-muted mt-0.5">7-day equity curve</p>
+        </div>
         {data.length > 0 && (
-          <>
-            <span className="ml-auto text-sm font-bold text-primary">
-              {formatUSD(latestEquity)}
-            </span>
-            <span className={`text-xs font-bold ${isPositive ? "text-positive" : "text-negative"}`}>
-              {isPositive ? "+" : ""}{formatUSD(pnl)}
-            </span>
-          </>
+          <div className="ml-auto text-right">
+            <p className="text-lg font-bold font-mono text-primary leading-tight">{fmt(latest)}</p>
+            <p className={`text-xs font-bold font-mono ${isUp ? "text-positive" : "text-negative"}`}>
+              {isUp ? "↑ +" : "↓ "}{fmt(Math.abs(pnl))} all time
+            </p>
+          </div>
         )}
       </div>
 
-      <div className="p-4 h-44">
+      {/* Chart area */}
+      <div className="px-2 py-4" style={{ height: 200 }}>
         {loading && (
-          <div className="h-full flex items-center justify-center text-muted text-sm">
-            Loading portfolio...
+          <div className="h-full flex items-center justify-center gap-1">
+            {[0, 1, 2].map(i => (
+              <div
+                key={i}
+                className="w-1.5 h-1.5 rounded-full bg-muted animate-bounce"
+                style={{ animationDelay: `${i * 120}ms` }}
+              />
+            ))}
           </div>
         )}
         {error && (
-          <div className="h-full flex items-center justify-center text-negative text-sm">
-            {error}
-          </div>
+          <div className="h-full flex items-center justify-center text-negative text-sm">{error}</div>
         )}
         {!loading && !error && data.length === 0 && (
           <div className="h-full flex items-center justify-center text-muted text-sm">
-            No portfolio data yet. Make a trade first.
+            No portfolio history yet — make a trade first.
           </div>
         )}
         {!loading && !error && data.length > 0 && (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" vertical={false} />
+            <LineChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+              <CartesianGrid
+                strokeDasharray="3 3"
+                stroke="var(--chart-grid)"
+                vertical={false}
+              />
               <XAxis
                 dataKey="timestamp"
-                tickFormatter={formatDate}
-                tick={{ fill: "#888899", fontSize: 10 }}
+                tickFormatter={fmtD}
+                tick={{ fill: "var(--chart-tick)", fontSize: 10 }}
                 axisLine={false}
                 tickLine={false}
               />
               <YAxis
-                tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
-                tick={{ fill: "#888899", fontSize: 10 }}
+                tickFormatter={v => `$${(v / 1000).toFixed(0)}k`}
+                tick={{ fill: "var(--chart-tick)", fontSize: 10 }}
                 axisLine={false}
                 tickLine={false}
-                width={38}
+                width={42}
               />
-              <Tooltip
-                contentStyle={{
-                  background:   "#12121a",
-                  border:       "1px solid #1e1e2e",
-                  borderRadius: "6px",
-                  fontSize:     "11px",
-                  color:        "#e0e0f0",
-                }}
-                formatter={(v: number) => [formatUSD(v), "Equity"]}
-                labelFormatter={(ts) => new Date(ts).toLocaleString()}
-              />
+              <Tooltip content={<ChartTooltip />} />
               <Line
                 type="monotone"
                 dataKey="equity"
                 stroke={lineColor}
                 strokeWidth={2}
                 dot={false}
-                activeDot={{ r: 4, fill: "#00d9ff" }}
+                activeDot={{ r: 4, fill: "var(--accent)", strokeWidth: 0 }}
               />
             </LineChart>
           </ResponsiveContainer>

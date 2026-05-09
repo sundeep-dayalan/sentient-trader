@@ -1,108 +1,100 @@
 "use client";
 
-/**
- * DashboardClient — the interactive shell of the dashboard.
- *
- * Separated from page.tsx because Next.js requires server components
- * and client components to live in different files when the server
- * component passes fetched data down to a client component.
- *
- * State owned here:
- *   - selectedTrade:      which trade row is expanded in the Monologue panel
- *   - simulationMessage:  success banner shown after simulation completes
- */
-
 import { useState } from "react";
 import AgentMonologue from "@/components/AgentMonologue";
 import LiveTicker     from "@/components/LiveTicker";
 import PnLChart       from "@/components/PnLChart";
 import SimulateButton from "@/components/SimulateButton";
 import StatsBar       from "@/components/StatsBar";
-import SystemStatus  from "@/components/SystemStatus";
+import SystemStatus   from "@/components/SystemStatus";
+import ThemeToggle    from "@/components/ThemeToggle";
 import { Trade }      from "@/lib/types";
+
+const STACK = ["LangGraph", "Groq LLaMA 3.1 8B", "Alpaca", "Redis Streams", "Supabase", "Fly.io"];
 
 interface DashboardClientProps {
   initialTrades: Trade[];
 }
 
 export default function DashboardClient({ initialTrades }: DashboardClientProps) {
-  const [selectedTrade,      setSelectedTrade]      = useState<Trade | null>(initialTrades[0] ?? null);
-  const [simulationMessage,  setSimulationMessage]  = useState<string | null>(null);
+  const [selectedTrade,     setSelectedTrade]     = useState<Trade | null>(initialTrades[0] ?? null);
+  const [simulationMessage, setSimulationMessage] = useState<string | null>(null);
 
   return (
-    <main className="min-h-screen bg-background p-4 md:p-6 max-w-7xl mx-auto">
+    <div className="min-h-screen bg-background">
 
-      {/* ── Header ──────────────────────────────────────────────────────── */}
-      <header className="flex items-center gap-3 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">
-            SENTIENT<span className="text-accent"> TRADER</span>
-          </h1>
-          <p className="text-[11px] text-muted">
-            AI-powered real-time market news analysis · LangGraph + Groq + Alpaca
-          </p>
-        </div>
+      {/* ── Top navigation bar ─────────────────────────────────────────── */}
+      <header className="sticky top-0 z-50 h-14 border-b border-line bg-surface/80 backdrop-blur-xl">
+        <div className="max-w-[1400px] mx-auto px-4 md:px-6 h-full flex items-center gap-4">
 
-        <div className="ml-auto flex items-center gap-2 px-3 py-1.5 bg-surface border border-line rounded-md">
-          <span className="pulse-dot w-2 h-2 rounded-full bg-positive" />
-          <span className="text-[11px] text-muted font-bold tracking-widest">LIVE</span>
+          {/* Logo */}
+          <div className="flex items-center gap-2.5 shrink-0">
+            <div className="w-7 h-7 rounded-lg bg-accent-soft border border-accent-border flex items-center justify-center">
+              <span className="text-accent text-[11px] font-bold font-mono">ST</span>
+            </div>
+            <span className="font-semibold text-sm">
+              Sentient<span className="text-accent">Trader</span>
+            </span>
+          </div>
+
+          <div className="w-px h-4 bg-line" />
+
+          <div className="flex items-center gap-1.5">
+            <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-positive" />
+            <span className="text-[11px] font-semibold text-positive tracking-wider">LIVE</span>
+          </div>
+
+          <div className="ml-auto flex items-center gap-3">
+            <SystemStatus />
+            <ThemeToggle />
+          </div>
         </div>
       </header>
 
-      {/* ── System Status ───────────────────────────────────────────────── */}
-      <div className="mb-4 px-4 py-2.5 bg-surface border border-line rounded-md">
-        <SystemStatus />
-      </div>
+      {/* ── Page content ───────────────────────────────────────────────── */}
+      <main className="max-w-[1400px] mx-auto px-4 md:px-6 py-6 space-y-5">
 
-      {/* ── Stats Bar ───────────────────────────────────────────────────── */}
-      <StatsBar trades={initialTrades} />
+        <StatsBar trades={initialTrades} />
 
-      {/* ── Simulation success message ───────────────────────────────────── */}
-      {simulationMessage && (
-        <div className="mb-4 px-4 py-2.5 bg-accent/10 border border-accent/30 rounded-md text-[11px] text-accent">
-          {simulationMessage}
-        </div>
-      )}
+        {simulationMessage && (
+          <div className="px-4 py-3 bg-positive-soft border border-positive-border rounded-xl text-sm text-positive font-medium">
+            {simulationMessage}
+          </div>
+        )}
 
-      {/* ── Main layout: live feed left, detail panels right ───────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-4">
+        {/* Two-column layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-[400px_1fr] gap-4">
 
-        {/* Left column — live trade feed */}
-        <div>
           <LiveTicker
             initialTrades={initialTrades}
             onTradeSelect={setSelectedTrade}
             selectedId={selectedTrade?.id ?? null}
           />
-        </div>
 
-        {/* Right column — reasoning panel + chart + simulate */}
-        <div className="flex flex-col gap-4">
-          <AgentMonologue trade={selectedTrade} />
-          <PnLChart />
-          <SimulateButton
-            onStart={()    => setSimulationMessage(null)}
-            onComplete={() => setSimulationMessage(
-              "✓ All 5 scenarios injected into the pipeline. Results will appear in the live feed within seconds."
-            )}
-          />
+          <div className="flex flex-col gap-4">
+            <AgentMonologue trade={selectedTrade} />
+            <PnLChart />
+            <SimulateButton
+              onStart={()    => setSimulationMessage(null)}
+              onComplete={() => setSimulationMessage(
+                "✓ 5 scenarios injected into the live pipeline. Results appear in the feed within seconds."
+              )}
+            />
+          </div>
         </div>
-      </div>
+      </main>
 
-      {/* ── Footer ──────────────────────────────────────────────────────── */}
-      <footer className="mt-10 pt-4 border-t border-line text-center text-[10px] text-muted space-x-3">
-        <span>Alpaca Paper Trading</span>
-        <span>·</span>
-        <span>Groq LLaMA 3.1 8B</span>
-        <span>·</span>
-        <span>LangGraph</span>
-        <span>·</span>
-        <span>Upstash Redis Streams</span>
-        <span>·</span>
-        <span>Supabase Realtime</span>
-        <span>·</span>
-        <span>Fly.io + Netlify</span>
+      {/* ── Footer ─────────────────────────────────────────────────────── */}
+      <footer className="max-w-[1400px] mx-auto px-4 md:px-6 py-5 border-t border-line">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] text-muted font-medium mr-1">Stack</span>
+          {STACK.map(s => (
+            <span key={s} className="text-[11px] text-muted px-2 py-0.5 bg-surface-2 border border-line rounded-md">
+              {s}
+            </span>
+          ))}
+        </div>
       </footer>
-    </main>
+    </div>
   );
 }

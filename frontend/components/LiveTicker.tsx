@@ -1,24 +1,13 @@
 "use client";
 
-/**
- * LiveTicker — scrolling feed of the 20 most recent AI decisions.
- *
- * Subscribes to the Supabase `trades` table in real-time via Postgres
- * change notifications. When the agent writes a new row on the backend,
- * it appears here instantly — no polling, no page refresh.
- *
- * Clicking a row loads that trade's reasoning into the AgentMonologue panel.
- */
-
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
-import { Trade } from "@/lib/types";
+import { Trade }        from "@/lib/types";
 
-// Color scheme for each trade action badge
-const ACTION_STYLES: Record<string, string> = {
-  BUY:  "bg-positive/20 text-positive border border-positive/30",
-  SELL: "bg-negative/20 text-negative border border-negative/30",
-  HOLD: "bg-muted/10  text-muted   border border-muted/20",
+const ACTION: Record<string, string> = {
+  BUY:  "bg-positive-soft text-positive border-positive-border",
+  SELL: "bg-negative-soft text-negative border-negative-border",
+  HOLD: "bg-surface-2 text-muted border-line",
 };
 
 interface LiveTickerProps {
@@ -27,105 +16,86 @@ interface LiveTickerProps {
   selectedId:    string | null;
 }
 
-export default function LiveTicker({
-  initialTrades,
-  onTradeSelect,
-  selectedId,
-}: LiveTickerProps) {
+export default function LiveTicker({ initialTrades, onTradeSelect, selectedId }: LiveTickerProps) {
   const [trades, setTrades] = useState<Trade[]>(initialTrades);
-
-  // IDs of rows that just arrived — used to trigger the slide-in CSS animation
-  const [newIds, setNewIds] = useState<Set<string>>(new Set());
+  const [newIds, setNewIds]  = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const supabase = createClient();
-
-    const channel = supabase
+    const channel  = supabase
       .channel("trades-realtime")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "trades" },
-        (payload) => {
-          const incoming = payload.new as Trade;
-
-          // Prepend and keep the list at 20 rows maximum
-          setTrades((prev) => [incoming, ...prev].slice(0, 20));
-
-          // Tag as new so the CSS animation fires, then clear after it finishes
-          setNewIds((prev) => new Set(prev).add(incoming.id));
-          setTimeout(() => {
-            setNewIds((prev) => {
-              const next = new Set(prev);
-              next.delete(incoming.id);
-              return next;
-            });
-          }, 600);
-        }
-      )
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "trades" }, payload => {
+        const t = payload.new as Trade;
+        setTrades(prev => [t, ...prev].slice(0, 20));
+        setNewIds(prev => new Set(prev).add(t.id));
+        setTimeout(() => setNewIds(prev => { const n = new Set(prev); n.delete(t.id); return n; }), 500);
+      })
       .subscribe();
-
     return () => { supabase.removeChannel(channel); };
   }, []);
 
   return (
-    <div className="bg-surface border border-line rounded-lg overflow-hidden">
+    <div className="bg-surface border border-line rounded-2xl overflow-hidden shadow-card flex flex-col" style={{ minHeight: 500 }}>
 
-      {/* Header row */}
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-line">
-        <span className="pulse-dot w-2 h-2 rounded-full bg-positive shrink-0" />
-        <span className="text-[11px] font-bold tracking-widest text-muted uppercase">
-          Live Feed
+      {/* Header */}
+      <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-line shrink-0">
+        <span className="pulse-dot w-2 h-2 rounded-full bg-positive" />
+        <span className="text-sm font-semibold">Live Feed</span>
+        <span className="ml-auto text-[11px] font-mono text-muted bg-surface-2 border border-line px-2 py-0.5 rounded-full">
+          {trades.length} events
         </span>
-        <span className="ml-auto text-[11px] text-muted">{trades.length} events</span>
       </div>
 
-      {/* Trade list */}
-      <div className="overflow-y-auto max-h-[500px]">
+      {/* Trade rows */}
+      <div className="overflow-y-auto flex-1">
         {trades.length === 0 && (
-          <div className="px-4 py-10 text-center text-muted text-sm">
-            Waiting for market events...
+          <div className="flex flex-col items-center justify-center h-full py-20 gap-3 text-muted">
+            <div className="w-10 h-10 rounded-full border border-line flex items-center justify-center">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zm9.75-4.5a1.125 1.125 0 00-1.125 1.125v10.125a1.125 1.125 0 002.25 0V9.75A1.125 1.125 0 0012.75 8.625zm4.875 2.25a1.125 1.125 0 00-1.125 1.125v7.875a1.125 1.125 0 002.25 0v-7.875a1.125 1.125 0 00-1.125-1.125z" />
+              </svg>
+            </div>
+            <p className="text-sm">Waiting for market events…</p>
           </div>
         )}
 
-        {trades.map((trade) => (
+        {trades.map(trade => (
           <button
             key={trade.id}
             onClick={() => onTradeSelect(trade)}
             className={[
-              "w-full text-left px-4 py-3 border-b border-line/50",
-              "hover:bg-line/40 transition-colors duration-150",
-              selectedId === trade.id ? "bg-line/60 border-l-2 border-l-accent" : "",
+              "w-full text-left px-4 py-3.5 border-b border-line/50 transition-all duration-150",
+              selectedId === trade.id
+                ? "bg-selected border-l-2 border-l-accent"
+                : "hover:bg-hover",
               newIds.has(trade.id) ? "slide-in" : "",
             ].join(" ")}
           >
-            {/* Top row: ticker chip + action badge + timestamp */}
             <div className="flex items-center gap-2 mb-1.5">
-              <span className="text-accent font-bold text-sm w-14 shrink-0 truncate">
+              <span className="font-mono font-bold text-[13px] text-accent w-16 shrink-0 truncate">
                 {trade.ticker}
               </span>
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${ACTION_STYLES[trade.trade_action]}`}>
+              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border ${ACTION[trade.trade_action]}`}>
                 {trade.trade_action}
               </span>
-              <span className="ml-auto text-[10px] text-muted shrink-0">
-                {new Date(trade.created_at).toLocaleTimeString()}
+              <span className="ml-auto text-[10px] text-muted font-mono shrink-0">
+                {new Date(trade.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
             </div>
 
-            {/* Headline — truncated to 2 lines */}
-            <p className="text-[11px] text-primary/70 line-clamp-2 leading-relaxed">
+            <p className="text-xs text-secondary line-clamp-2 leading-relaxed mb-2">
               {trade.headline}
             </p>
 
-            {/* Score row */}
-            <div className="flex gap-4 mt-1.5">
-              <span className="text-[10px] text-muted">
-                sent{" "}
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-mono text-muted">
+                sentiment{" "}
                 <span className={trade.sentiment_score >= 0 ? "text-positive" : "text-negative"}>
-                  {trade.sentiment_score >= 0 ? "+" : ""}
-                  {trade.sentiment_score.toFixed(2)}
+                  {trade.sentiment_score >= 0 ? "+" : ""}{trade.sentiment_score.toFixed(2)}
                 </span>
               </span>
-              <span className="text-[10px] text-muted">
+              <span className="text-muted/40">·</span>
+              <span className="text-[10px] font-mono text-muted">
                 conf <span className="text-accent">{(trade.confidence_score * 100).toFixed(0)}%</span>
               </span>
             </div>
