@@ -79,12 +79,7 @@ class AgentState(TypedDict):
 
 def _make_check_cache_node(cache: HeadlineCache):
     def check_cache(state: AgentState) -> dict:
-        """Check Redis before spending tokens on the LLM.
-        Simulated (user-injected) headlines always bypass the cache so
-        the same headline can be re-injected and re-analyzed intentionally.
-        """
-        if state["news"].is_simulated:
-            return {"is_cached": False}
+        """Check Redis before spending tokens on the LLM."""
         cached = cache.is_duplicate(state["news"].headline)
         if cached:
             log.info("Cache HIT — skipping duplicate: %s", state["news"].headline[:60])

@@ -5,24 +5,22 @@ import AgentMonologue  from "@/components/AgentMonologue";
 import CustomNewsForm  from "@/components/CustomNewsForm";
 import LiveTicker      from "@/components/LiveTicker";
 import PnLChart        from "@/components/PnLChart";
-import SimulateButton  from "@/components/SimulateButton";
 import StatsBar        from "@/components/StatsBar";
 import SystemStatus    from "@/components/SystemStatus";
 import ThemeToggle     from "@/components/ThemeToggle";
 import { createClient } from "@/lib/supabase";
 import { Trade }      from "@/lib/types";
 
-const STACK = ["LangGraph", "Groq LLaMA 3.1 8B", "Alpaca", "Redis Streams", "Supabase", "Fly.io"];
+const STACK = ["LangGraph", "Groq Qwen3-32B", "Alpaca", "Redis Streams", "Supabase", "Fly.io"];
 
 interface DashboardClientProps {
   initialTrades: Trade[];
 }
 
 export default function DashboardClient({ initialTrades }: DashboardClientProps) {
-  const [trades,            setTrades]            = useState<Trade[]>(initialTrades);
-  const [newIds,            setNewIds]            = useState<Set<string>>(new Set());
-  const [selectedTrade,     setSelectedTrade]     = useState<Trade | null>(initialTrades[0] ?? null);
-  const [simulationMessage, setSimulationMessage] = useState<string | null>(null);
+  const [trades,        setTrades]        = useState<Trade[]>(initialTrades);
+  const [newIds,        setNewIds]        = useState<Set<string>>(new Set());
+  const [selectedTrade, setSelectedTrade] = useState<Trade | null>(initialTrades[0] ?? null);
 
   useEffect(() => {
     const supabase = createClient();
@@ -41,11 +39,6 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
 
     return () => { supabase.removeChannel(channel); };
   }, []); // single subscription, never re-runs
-
-  const handleSimulateStart    = () => setSimulationMessage(null);
-  const handleSimulateComplete = () => setSimulationMessage(
-    "✓ 5 scenarios injected into the live pipeline. Results appear in the feed within seconds."
-  );
 
   return (
     <div className="min-h-screen bg-background">
@@ -80,14 +73,7 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
       {/* ── Page content ───────────────────────────────────────────────── */}
       <main className="max-w-[1400px] mx-auto px-4 md:px-6 py-6 space-y-5">
 
-        {/* StatsBar now receives live trades — counts update in real-time */}
         <StatsBar trades={trades} />
-
-        {simulationMessage && (
-          <div className="px-4 py-3 bg-positive-soft border border-positive-border rounded-xl text-sm text-positive font-medium">
-            {simulationMessage}
-          </div>
-        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-[400px_1fr] gap-4">
 
@@ -101,10 +87,6 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
           <div className="flex flex-col gap-4">
             <AgentMonologue trade={selectedTrade} />
             <PnLChart />
-            <SimulateButton
-              onStart={handleSimulateStart}
-              onComplete={handleSimulateComplete}
-            />
             <CustomNewsForm />
           </div>
         </div>
