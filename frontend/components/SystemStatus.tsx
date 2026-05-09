@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
 import { BASE_PATH } from "@/lib/config";
 
 type S = "ok" | "stale" | "error" | "unknown" | "loading";
@@ -19,13 +18,13 @@ const SERVICES: { key: keyof Omit<StatusData, "lastTradeAt">; label: string }[] 
   { key: "agent",    label: "Agent"    },
 ];
 
-function dot(s: S) {
+function dotColor(s: S) {
   return {
     ok:      "bg-positive",
     stale:   "bg-warning",
     error:   "bg-negative",
     loading: "bg-muted animate-pulse",
-    unknown: "bg-muted opacity-50",
+    unknown: "bg-muted opacity-40",
   }[s];
 }
 
@@ -64,28 +63,25 @@ export default function SystemStatus() {
   const allOk = SERVICES.every(s => status[s.key] === "ok");
 
   return (
-    <div className="hidden items-center gap-1 lg:flex">
-
-      {/* Compact summary dot when all ok */}
+    <div className="hidden items-center lg:flex">
       {allOk ? (
-        <div className="flex items-center gap-2 rounded-lg border border-positive-border bg-positive-soft px-3 py-2">
+        <div className="flex items-center gap-2 rounded-xl border border-positive-border bg-positive-soft px-3 py-2">
           <span className="h-1.5 w-1.5 rounded-full bg-positive" />
-          <span className="text-[11px] font-semibold text-positive">Systems operational</span>
+          <span className="text-xs font-semibold text-positive">All systems operational</span>
           {status.lastTradeAt && (
-            <span className="text-[10px] text-positive opacity-75">last trade {relTime(status.lastTradeAt)}</span>
+            <span className="text-[11px] text-positive opacity-70">· {relTime(status.lastTradeAt)}</span>
           )}
         </div>
       ) : (
-        /* Individual dots when something is off */
         <div className="flex items-center gap-3">
           {SERVICES.map(({ key, label }) => (
-            <div key={key} className="flex items-center gap-1.5 group relative">
-              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot(status[key])}`} />
-              <span className="text-[11px] text-muted">{label}</span>
+            <div key={key} className="flex items-center gap-1.5">
+              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor(status[key])}`} />
+              <span className="text-xs text-muted">{label}</span>
             </div>
           ))}
           {status.lastTradeAt && (
-            <span className="border-l border-line pl-2 text-[11px] text-muted opacity-60">
+            <span className="border-l border-line pl-2.5 text-xs text-muted opacity-60">
               {relTime(status.lastTradeAt)}
             </span>
           )}

@@ -1,131 +1,111 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* ─── Dark theme (default) ─────────────────────────────────────── */
+/* ─── Light theme (default) ────────────────────────────────────── */
 :root {
-  color-scheme: dark;
-
-  --bg:               #05070d;
-  --surface:          #090d18;
-  --surface-2:        #111827;
-  --surface-3:        #172033;
-  --border:           rgba(174,190,255,0.14);
-  --hover:            rgba(174,190,255,0.08);
-  --selected:         rgba(167,139,250,0.14);
-
-  --accent:           #a78bfa;
-  --accent-soft:      rgba(167,139,250,0.16);
-  --accent-border:    rgba(167,139,250,0.38);
-  --cyan:             #22d3ee;
-  --cyan-soft:        rgba(34,211,238,0.13);
-  --cyan-border:      rgba(34,211,238,0.34);
-  --warning:          #f59e0b;
-  --warning-soft:     rgba(245,158,11,0.13);
-  --warning-border:   rgba(245,158,11,0.3);
-
-  --positive:         #34d399;
-  --positive-soft:    rgba(52,211,153,0.13);
-  --positive-border:  rgba(52,211,153,0.32);
-
-  --negative:         #fb7185;
-  --negative-soft:    rgba(251,113,133,0.13);
-  --negative-border:  rgba(251,113,133,0.32);
-
-  --text:             #f8fbff;
-  --text-2:           #b8c2d8;
-  --muted:            #73809d;
-  --page-sheen:       rgba(255,255,255,0.035);
-  --page-glow-a:      rgba(167,139,250,0.08);
-  --page-glow-b:      rgba(34,211,238,0.06);
-  --grid-line-a:      rgba(174,190,255,0.055);
-  --grid-line-b:      rgba(174,190,255,0.045);
-  --panel-gloss:      rgba(255,255,255,0.055);
-  --panel-fade:       rgba(255,255,255,0.015);
-  --panel-shadow:     rgba(0,0,0,0.28);
-  --panel-shadow-soft: rgba(0,0,0,0.2);
-
-  /* Raw values for recharts + non-Tailwind contexts */
-  --chart-grid:       rgba(174,190,255,0.09);
-  --chart-tick:       #73809d;
-  --chart-tooltip-bg: #090d18;
-  --chart-tooltip-border: rgba(174,190,255,0.18);
-}
-
-/* ─── Light theme ───────────────────────────────────────────────── */
-html.light {
   color-scheme: light;
 
-  --bg:               #eef3f8;
-  --surface:          #ffffff;
-  --surface-2:        #f5f7fb;
-  --surface-3:        #edf2f8;
-  --border:           rgba(30,41,59,0.1);
-  --hover:            rgba(30,41,59,0.045);
-  --selected:         rgba(99,102,241,0.08);
+  --bg:               #F4F6FA;
+  --surface:          #FFFFFF;
+  --surface-2:        #F8FAFC;
+  --surface-3:        #EEF2F7;
+  --border:           rgba(15,23,42,0.07);
+  --hover:            rgba(15,23,42,0.04);
+  --selected:         rgba(79,70,229,0.07);
 
-  --accent:           #6d5dfc;
-  --accent-soft:      rgba(109,93,252,0.1);
-  --accent-border:    rgba(109,93,252,0.24);
-  --cyan:             #0891b2;
-  --cyan-soft:        rgba(8,145,178,0.1);
-  --cyan-border:      rgba(8,145,178,0.24);
-  --warning:          #d97706;
-  --warning-soft:     rgba(217,119,6,0.1);
-  --warning-border:   rgba(217,119,6,0.22);
+  --accent:           #4F46E5;
+  --accent-soft:      rgba(79,70,229,0.08);
+  --accent-border:    rgba(79,70,229,0.18);
+
+  --cyan:             #0284C7;
+  --cyan-soft:        rgba(2,132,199,0.08);
+  --cyan-border:      rgba(2,132,199,0.18);
+
+  --warning:          #D97706;
+  --warning-soft:     rgba(217,119,6,0.08);
+  --warning-border:   rgba(217,119,6,0.18);
 
   --positive:         #059669;
-  --positive-soft:    rgba(5,150,105,0.1);
-  --positive-border:  rgba(5,150,105,0.22);
+  --positive-soft:    rgba(5,150,105,0.08);
+  --positive-border:  rgba(5,150,105,0.18);
 
-  --negative:         #dc2626;
-  --negative-soft:    rgba(220,38,38,0.09);
-  --negative-border:  rgba(220,38,38,0.22);
+  --negative:         #DC2626;
+  --negative-soft:    rgba(220,38,38,0.08);
+  --negative-border:  rgba(220,38,38,0.18);
 
-  --text:             #0f172a;
+  --text:             #0F172A;
   --text-2:           #475569;
-  --muted:            #9ca3af;
-  --page-sheen:       rgba(255,255,255,0.72);
-  --page-glow-a:      rgba(109,93,252,0.12);
-  --page-glow-b:      rgba(8,145,178,0.08);
-  --grid-line-a:      rgba(30,41,59,0.08);
-  --grid-line-b:      rgba(30,41,59,0.055);
-  --panel-gloss:      rgba(255,255,255,0.9);
-  --panel-fade:       rgba(255,255,255,0.42);
-  --panel-shadow:     rgba(15,23,42,0.09);
-  --panel-shadow-soft: rgba(15,23,42,0.06);
+  --muted:            #94A3B8;
 
-  --chart-grid:       rgba(0,0,0,0.05);
-  --chart-tick:       #9ca3af;
-  --chart-tooltip-bg: #ffffff;
-  --chart-tooltip-border: rgba(0,0,0,0.08);
+  --panel-shadow:      rgba(15,23,42,0.07);
+  --panel-shadow-soft: rgba(15,23,42,0.04);
+  --panel-gloss:       rgba(255,255,255,0.9);
+  --panel-fade:        rgba(255,255,255,0.6);
+
+  --chart-grid:        rgba(15,23,42,0.06);
+  --chart-tick:        #94A3B8;
+  --chart-tooltip-bg:  #FFFFFF;
+  --chart-tooltip-border: rgba(15,23,42,0.08);
+}
+
+/* ─── Dark theme ────────────────────────────────────────────────── */
+html.dark {
+  color-scheme: dark;
+
+  --bg:               #0F172A;
+  --surface:          #1E293B;
+  --surface-2:        #253347;
+  --surface-3:        #334155;
+  --border:           rgba(248,250,252,0.08);
+  --hover:            rgba(248,250,252,0.05);
+  --selected:         rgba(129,140,248,0.1);
+
+  --accent:           #818CF8;
+  --accent-soft:      rgba(129,140,248,0.12);
+  --accent-border:    rgba(129,140,248,0.28);
+
+  --cyan:             #38BDF8;
+  --cyan-soft:        rgba(56,189,248,0.1);
+  --cyan-border:      rgba(56,189,248,0.28);
+
+  --warning:          #FBBF24;
+  --warning-soft:     rgba(251,191,36,0.1);
+  --warning-border:   rgba(251,191,36,0.28);
+
+  --positive:         #34D399;
+  --positive-soft:    rgba(52,211,153,0.1);
+  --positive-border:  rgba(52,211,153,0.28);
+
+  --negative:         #F87171;
+  --negative-soft:    rgba(248,113,113,0.1);
+  --negative-border:  rgba(248,113,113,0.28);
+
+  --text:             #F8FAFC;
+  --text-2:           #CBD5E1;
+  --muted:            #64748B;
+
+  --panel-shadow:      rgba(0,0,0,0.32);
+  --panel-shadow-soft: rgba(0,0,0,0.2);
+  --panel-gloss:       rgba(255,255,255,0.04);
+  --panel-fade:        rgba(255,255,255,0.01);
+
+  --chart-grid:        rgba(248,250,252,0.06);
+  --chart-tick:        #64748B;
+  --chart-tooltip-bg:  #1E293B;
+  --chart-tooltip-border: rgba(248,250,252,0.1);
 }
 
 /* ─── Base ──────────────────────────────────────────────────────── */
 body {
   min-height: 100vh;
-  background:
-    linear-gradient(180deg, var(--page-sheen), transparent 280px),
-    linear-gradient(120deg, var(--page-glow-a), transparent 38%, var(--page-glow-b)),
-    var(--bg);
+  background: var(--bg);
   color: var(--text);
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
-}
-
-body::before {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  content: "";
-  background-image:
-    linear-gradient(var(--grid-line-a) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid-line-b) 1px, transparent 1px);
-  background-size: 56px 56px;
-  mask-image: linear-gradient(180deg, rgba(0,0,0,0.9), transparent 78%);
+  -moz-osx-font-smoothing: grayscale;
 }
 
 ::selection {
@@ -135,48 +115,38 @@ body::before {
 
 ::-webkit-scrollbar       { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
 /* ─── Animations ────────────────────────────────────────────────── */
 @keyframes slideIn {
-  from { opacity: 0; transform: translateY(-6px); }
-  to   { opacity: 1; transform: translateY(0);    }
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-.slide-in { animation: slideIn 0.25s ease-out forwards; }
+.slide-in { animation: slideIn 0.2s ease-out forwards; }
 
 @keyframes pulse-dot {
   0%, 100% { opacity: 1;   transform: scale(1);    }
-  50%       { opacity: 0.4; transform: scale(0.85); }
+  50%       { opacity: 0.4; transform: scale(0.75); }
 }
-.pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+.pulse-dot { animation: pulse-dot 2.4s ease-in-out infinite; }
 
-@keyframes shimmer {
-  0%   { background-position: -200% center; }
-  100% { background-position:  200% center; }
-}
-
+/* ─── Card primitives ───────────────────────────────────────────── */
 .glass-panel {
-  background:
-    linear-gradient(180deg, var(--panel-gloss), var(--panel-fade)),
-    color-mix(in srgb, var(--surface) 92%, transparent);
+  background: var(--surface);
   border: 1px solid var(--border);
   box-shadow:
-    0 20px 60px var(--panel-shadow),
-    inset 0 1px 0 rgba(255,255,255,0.06);
-  backdrop-filter: blur(22px);
+    0 1px 2px var(--panel-shadow-soft),
+    0 4px 20px var(--panel-shadow);
 }
 
 .glass-panel-subtle {
-  background:
-    linear-gradient(180deg, var(--panel-gloss), var(--panel-fade)),
-    var(--surface);
+  background: var(--surface);
   border: 1px solid var(--border);
-  box-shadow:
-    0 12px 34px var(--panel-shadow-soft),
-    inset 0 1px 0 rgba(255,255,255,0.045);
+  box-shadow: 0 1px 4px var(--panel-shadow-soft);
 }
 
+/* Stat card — left accent bar instead of neon top gradient */
 .metric-card {
   position: relative;
   overflow: hidden;
@@ -184,22 +154,24 @@ body::before {
 
 .metric-card::before {
   position: absolute;
-  inset: 0 0 auto 0;
-  height: 1px;
+  inset: 0 auto 0 0;
+  width: 3px;
   content: "";
-  background: linear-gradient(90deg, transparent, var(--accent), var(--cyan), transparent);
-  opacity: 0.74;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+  opacity: 0.6;
 }
 
-.scanline {
-  background-image: linear-gradient(90deg, var(--grid-line-b) 1px, transparent 1px);
-  background-size: 10px 100%;
-}
-
+/* ─── Button variants ───────────────────────────────────────────── */
 .cyber-button {
-  box-shadow: 0 0 0 1px var(--accent-border), 0 12px 28px var(--accent-soft);
+  /* clean primary — shadow done inline */
 }
 
+/* ─── Modal ─────────────────────────────────────────────────────── */
 .modal-backdrop {
-  background: color-mix(in srgb, var(--bg) 76%, transparent);
+  background: rgba(15, 23, 42, 0.36);
+}
+
+html.dark .modal-backdrop {
+  background: rgba(0, 0, 0, 0.6);
 }

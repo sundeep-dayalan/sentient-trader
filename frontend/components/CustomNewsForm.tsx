@@ -50,7 +50,7 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
   }
 
   return (
-    <div className={variant === "modal" ? "space-y-4" : "glass-panel h-full rounded-lg p-3.5"}>
+    <div className={variant === "modal" ? "space-y-4" : "glass-panel h-full rounded-2xl p-4"}>
 
       {/* Header */}
       <div className="flex items-start gap-3">
@@ -76,15 +76,15 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
           placeholder="AAPL"
           maxLength={6}
           disabled={state === "loading"}
-          className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-sm font-bold text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
+          className="w-full rounded-xl border border-line bg-surface-2 px-3.5 py-2.5 font-mono text-sm font-bold text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
         />
         <textarea
           value={headline}
           onChange={e => setHeadline(e.target.value)}
           placeholder="Apple beats Q3 earnings by 18%, raises full-year guidance"
-          rows={2}
+          rows={3}
           disabled={state === "loading"}
-          className="min-h-[58px] resize-none rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm leading-relaxed text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
+          className="min-h-[72px] resize-none rounded-xl border border-line bg-surface-2 px-3.5 py-2.5 text-sm leading-relaxed text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
         />
       </div>
 
@@ -100,7 +100,7 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
           onClick={inject}
           disabled={!canSubmit}
           className={[
-            "flex w-full shrink-0 items-center justify-center gap-1.5 rounded-lg border px-4 py-2 text-[12px] font-semibold",
+            "flex w-full shrink-0 items-center justify-center gap-1.5 rounded-xl border px-4 py-2.5 text-[13px] font-semibold",
             "transition-all duration-200",
             state === "loading"
               ? "bg-surface-2 border-line text-muted cursor-not-allowed"
@@ -109,7 +109,7 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
             : state === "error"
               ? "bg-negative-soft border-negative-border text-negative cursor-default"
               : canSubmit
-              ? "cyber-button bg-accent border-accent text-white hover:opacity-90 cursor-pointer"
+              ? "bg-accent border-accent text-white hover:opacity-90 cursor-pointer shadow-sm"
               : "bg-surface-2 border-line text-muted cursor-not-allowed",
           ].join(" ")}
         >

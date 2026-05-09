@@ -10,10 +10,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <head>
-        {/* Apply saved theme before first paint — prevents light/dark flash */}
+        {/* Apply saved dark theme before first paint to prevent flash */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{if(localStorage.getItem('st-theme')==='light')document.documentElement.classList.add('light');}catch(e){}})();`,
+            __html: `(function(){try{if(localStorage.getItem('st-theme')==='dark')document.documentElement.classList.add('dark');}catch(e){}})();`,
           }}
         />
       </head>

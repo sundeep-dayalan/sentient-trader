@@ -10,8 +10,6 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // All tokens resolve from CSS custom properties so both themes work
-        // without any dark: prefix in components.
         background:        "var(--bg)",
         surface:           "var(--surface)",
         "surface-2":       "var(--surface-2)",
@@ -39,19 +37,20 @@ const config: Config = {
         muted:             "var(--muted)",
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
-        mono: ["'JetBrains Mono'", "ui-monospace", "monospace"],
+        sans: ["'Plus Jakarta Sans'", "Inter", "system-ui", "-apple-system", "sans-serif"],
+        mono: ["'DM Mono'", "'JetBrains Mono'", "ui-monospace", "monospace"],
       },
       borderRadius: {
         "2xl": "16px",
-        "3xl": "20px",
+        "3xl": "24px",
       },
       boxShadow: {
-        card:    "0 18px 44px var(--panel-shadow), inset 0 1px 0 rgba(255,255,255,0.04)",
-        "card-md":"0 24px 70px var(--panel-shadow), inset 0 1px 0 rgba(255,255,255,0.05)",
-        glow:    "0 0 24px var(--accent-soft)",
-        "glow-positive": "0 0 24px var(--positive-soft)",
-        "glow-cyan": "0 0 24px var(--cyan-soft)",
+        card:    "0 1px 3px var(--panel-shadow-soft), 0 8px 28px var(--panel-shadow)",
+        "card-md": "0 2px 6px var(--panel-shadow-soft), 0 16px 48px var(--panel-shadow)",
+        "card-lg": "0 4px 12px var(--panel-shadow-soft), 0 24px 64px var(--panel-shadow)",
+        glow:    "0 0 0 3px var(--accent-soft)",
+        "glow-positive": "0 0 0 3px var(--positive-soft)",
+        "glow-cyan": "0 0 0 3px var(--cyan-soft)",
       },
     },
   },

@@ -14,7 +14,7 @@ const fmtD = (ts: string) => new Date(ts).toLocaleDateString("en-US", { month: "
 function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number }>; label?: string }) {
   if (!active || !payload?.[0]) return null;
   return (
-    <div className="rounded-lg border border-line bg-surface px-3 py-2.5 text-xs shadow-card-md">
+    <div className="rounded-xl border border-line bg-surface px-3.5 py-2.5 shadow-card text-xs">
       <p className="mb-1 text-muted">{label ? new Date(label).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</p>
       <p className="font-mono text-sm font-bold text-primary">{fmt(payload[0].value)}</p>
     </div>
@@ -45,35 +45,33 @@ export default function PnLChart() {
     return () => clearInterval(id);
   }, []);
 
-  const latest = data.at(-1)?.equity ?? 0;
-  const start  = data[0]?.equity     ?? 0;
-  const pnl    = latest - start;
-  const isUp   = pnl >= 0;
+  const latest    = data.at(-1)?.equity ?? 0;
+  const start     = data[0]?.equity     ?? 0;
+  const pnl       = latest - start;
+  const isUp      = pnl >= 0;
   const lineColor = isUp ? "var(--positive)" : "var(--negative)";
 
   return (
-    <div className="glass-panel flex h-full min-h-[220px] flex-col overflow-hidden rounded-lg">
+    <div className="glass-panel flex h-full min-h-[220px] flex-col overflow-hidden rounded-2xl">
 
-      {/* Header */}
-      <div className="flex shrink-0 items-center gap-3 border-b border-line px-4 py-3">
+      <div className="flex shrink-0 items-center gap-3 border-b border-line px-5 py-4">
         <div>
-          <p className="text-[10px] font-semibold uppercase text-muted">Paper Portfolio</p>
+          <p className="text-sm font-bold text-primary">Paper Portfolio</p>
           <p className="mt-0.5 text-xs text-muted">7-day equity curve</p>
         </div>
         {data.length > 0 && (
           <div className="ml-auto text-right">
             <p className="font-mono text-lg font-bold leading-tight text-primary">{fmt(latest)}</p>
-            <p className={`font-mono text-xs font-bold ${isUp ? "text-positive" : "text-negative"}`}>
-              {isUp ? "+" : "-"}{fmt(Math.abs(pnl))} all time
+            <p className={`font-mono text-xs font-semibold ${isUp ? "text-positive" : "text-negative"}`}>
+              {isUp ? "▲" : "▼"} {fmt(Math.abs(pnl))} all time
             </p>
           </div>
         )}
       </div>
 
-      {/* Chart area */}
-      <div className="min-h-[160px] flex-1 px-2 py-3">
+      <div className="min-h-[160px] flex-1 px-3 py-4">
         {loading && (
-          <div className="flex h-full items-center justify-center gap-1">
+          <div className="flex h-full items-center justify-center gap-1.5">
             {[0, 1, 2].map(i => (
               <div
                 key={i}
@@ -88,17 +86,13 @@ export default function PnLChart() {
         )}
         {!loading && !error && data.length === 0 && (
           <div className="flex h-full items-center justify-center text-sm text-muted">
-            No portfolio history yet. Make a trade first.
+            No portfolio history yet.
           </div>
         )}
         {!loading && !error && data.length > 0 && (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-              <CartesianGrid
-                strokeDasharray="3 3"
-                stroke="var(--chart-grid)"
-                vertical={false}
-              />
+            <LineChart data={data} margin={{ top: 4, right: 6, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
               <XAxis
                 dataKey="timestamp"
                 tickFormatter={fmtD}
@@ -118,9 +112,9 @@ export default function PnLChart() {
                 type="monotone"
                 dataKey="equity"
                 stroke={lineColor}
-                strokeWidth={3}
+                strokeWidth={2.5}
                 dot={false}
-                activeDot={{ r: 5, fill: "var(--accent)", stroke: "var(--surface)", strokeWidth: 2 }}
+                activeDot={{ r: 4, fill: "var(--accent)", stroke: "var(--surface)", strokeWidth: 2 }}
               />
             </LineChart>
           </ResponsiveContainer>
