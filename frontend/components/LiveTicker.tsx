@@ -17,6 +17,7 @@ interface LiveTickerProps {
   onLoadMore:    () => void;
   isLoadingMore: boolean;
   hasMore:       boolean;
+  previewLimit?: number;
 }
 
 export default function LiveTicker({
@@ -27,8 +28,11 @@ export default function LiveTicker({
   onLoadMore,
   isLoadingMore,
   hasMore,
+  previewLimit,
 }: LiveTickerProps) {
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const visibleTrades = previewLimit ? trades.slice(0, previewLimit) : trades;
+  const isPreview = Boolean(previewLimit);
 
   // Keep a stable ref to onLoadMore so the observer is created exactly once
   // and never needs to be torn down just because the callback identity changed.
@@ -63,11 +67,11 @@ export default function LiveTicker({
         <div className="flex items-center gap-3">
           <span className="pulse-dot h-2 w-2 rounded-full bg-positive shadow-glow-positive" />
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold">Live Signal Tape</p>
-              <p className="mt-0.5 text-[11px] text-muted">Realtime Supabase stream</p>
+            <p className="text-sm font-semibold">Recent news signals</p>
+            <p className="mt-0.5 text-[11px] text-muted">Latest market headlines analyzed by the agent</p>
           </div>
           <span className="rounded-md border border-cyan-border bg-cyan-soft px-2 py-1 font-mono text-[10px] text-cyan">
-            {trades.length} events
+            {isPreview ? `${visibleTrades.length} latest` : `${trades.length} events`}
           </span>
         </div>
       </div>
@@ -85,7 +89,7 @@ export default function LiveTicker({
           </div>
         )}
 
-        {trades.map(trade => {
+        {visibleTrades.map(trade => {
           const isSimulated = trade.is_simulated;
 
           return (
@@ -140,17 +144,19 @@ export default function LiveTicker({
         })}
 
         {/* ── Infinite scroll sentinel ──────────────────────────────── */}
-        <div ref={sentinelRef} className="flex items-center justify-center px-4 py-3">
-          {isLoadingMore && (
-            <div className="flex items-center gap-2 text-[11px] text-muted">
-              <span className="h-3 w-3 animate-spin rounded-full border-2 border-line border-t-muted" />
-              Loading more...
-            </div>
-          )}
-          {!isLoadingMore && !hasMore && trades.length > 0 && (
-            <span className="font-mono text-[10px] text-muted opacity-60">end of history</span>
-          )}
-        </div>
+        {!isPreview && (
+          <div ref={sentinelRef} className="flex items-center justify-center px-4 py-3">
+            {isLoadingMore && (
+              <div className="flex items-center gap-2 text-[11px] text-muted">
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-line border-t-muted" />
+                Loading more...
+              </div>
+            )}
+            {!isLoadingMore && !hasMore && trades.length > 0 && (
+              <span className="font-mono text-[10px] text-muted opacity-60">end of history</span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

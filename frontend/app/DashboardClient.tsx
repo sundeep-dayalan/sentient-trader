@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import AgentMonologue  from "@/components/AgentMonologue";
 import CustomNewsForm  from "@/components/CustomNewsForm";
 import LiveTicker      from "@/components/LiveTicker";
+import OrdersPage      from "@/components/OrdersPage";
 import PnLChart        from "@/components/PnLChart";
 import PortfolioMiniCard from "@/components/PortfolioMiniCard";
 import StatsBar        from "@/components/StatsBar";
@@ -58,6 +59,7 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
   const viewSubtitle: Partial<Record<ViewName, string>> = {
     Dashboard: "Overview of live AI trading activity.",
     Signals: "Detailed realtime signal history and decision trace.",
+    Orders: "Alpaca account context and order execution history.",
   };
 
   // ── Supabase Realtime ─────────────────────────────────────────────────────
@@ -230,6 +232,7 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
                     onLoadMore={loadMore}
                     isLoadingMore={isLoadingMore}
                     hasMore={hasMore}
+                    previewLimit={5}
                   />
 
                   <div className="grid min-h-0 min-w-0 gap-4 xl:grid-rows-[minmax(0,1fr)_240px]">
@@ -255,7 +258,9 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
               </div>
             )}
 
-            {activeView !== "Dashboard" && activeView !== "Signals" && (
+            {activeView === "Orders" && <OrdersPage />}
+
+            {activeView !== "Dashboard" && activeView !== "Signals" && activeView !== "Orders" && (
               <div className="glass-panel flex min-h-0 flex-1 items-center justify-center rounded-lg p-8 text-center">
                 <div>
                   <p className="text-sm font-semibold text-secondary">{activeView}</p>
