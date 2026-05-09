@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import AgentMonologue from "@/components/AgentMonologue";
-import LiveTicker     from "@/components/LiveTicker";
-import PnLChart       from "@/components/PnLChart";
-import SimulateButton from "@/components/SimulateButton";
-import StatsBar       from "@/components/StatsBar";
-import SystemStatus   from "@/components/SystemStatus";
-import ThemeToggle    from "@/components/ThemeToggle";
+import AgentMonologue  from "@/components/AgentMonologue";
+import CustomNewsForm  from "@/components/CustomNewsForm";
+import LiveTicker      from "@/components/LiveTicker";
+import PnLChart        from "@/components/PnLChart";
+import SimulateButton  from "@/components/SimulateButton";
+import StatsBar        from "@/components/StatsBar";
+import SystemStatus    from "@/components/SystemStatus";
+import ThemeToggle     from "@/components/ThemeToggle";
 import { createClient } from "@/lib/supabase";
 import { Trade }      from "@/lib/types";
 
@@ -104,6 +105,7 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
               onStart={handleSimulateStart}
               onComplete={handleSimulateComplete}
             />
+            <CustomNewsForm />
           </div>
         </div>
       </main>

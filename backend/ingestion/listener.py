@@ -80,9 +80,11 @@ class NewsListener:
             if pub_time is None:
                 continue
 
-            # Advance cursor to just after the latest article we processed
-            if pub_time > self._last_seen:
-                self._last_seen = pub_time
+            # Advance cursor to 1 second PAST the latest article.
+            # Alpaca's `start` param is inclusive, so without this +1s the
+            # boundary article would be re-fetched on every subsequent poll.
+            if pub_time >= self._last_seen:
+                self._last_seen = pub_time + timedelta(seconds=1)
 
             symbols = getattr(article, "symbols", None) or []
             if not symbols:
