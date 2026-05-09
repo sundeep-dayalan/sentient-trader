@@ -20,12 +20,13 @@ from pydantic import BaseModel, Field
 
 
 class NewsMessage(BaseModel):
-    """A single news article as it arrives from the Kafka topic."""
+    """A single news article as it arrives from the Redis stream."""
 
-    ticker: str
-    headline: str
-    source: str
+    ticker:       str
+    headline:     str
+    source:       str
     published_at: str
+    is_simulated: bool = False  # True when injected by the Simulate button
 
 
 class TradeAnalysis(BaseModel):

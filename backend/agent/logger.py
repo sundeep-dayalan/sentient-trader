@@ -48,6 +48,7 @@ class SupabaseLogger:
         trade_action: str,
         order_id: Optional[str] = None,
         quantity: int = 1,
+        is_simulated: bool = False,
     ) -> None:
         """
         Insert one row into the trades table.
@@ -56,14 +57,15 @@ class SupabaseLogger:
         subscribed browser clients — no polling, no refresh needed.
         """
         record = {
-            "ticker": ticker,
-            "headline": headline,
-            "sentiment_score": round(sentiment_score, 4),
+            "ticker":           ticker,
+            "headline":         headline,
+            "sentiment_score":  round(sentiment_score, 4),
             "confidence_score": round(confidence_score, 4),
-            "reasoning": reasoning,
-            "trade_action": trade_action,
-            "order_id": order_id,
-            "quantity": quantity,
+            "reasoning":        reasoning,
+            "trade_action":     trade_action,
+            "order_id":         order_id,
+            "quantity":         quantity,
+            "is_simulated":     is_simulated,
         }
 
         try:

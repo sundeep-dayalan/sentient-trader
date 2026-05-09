@@ -14,6 +14,7 @@ export interface Trade {
   trade_action: "BUY" | "SELL" | "HOLD";
   order_id: string | null;   // Alpaca order UUID — null if HOLD
   quantity: number;
+  is_simulated: boolean;     // true when injected via the Simulate button
 }
 
 export interface PortfolioPoint {

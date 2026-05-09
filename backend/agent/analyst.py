@@ -63,12 +63,13 @@ class AgentState(TypedDict):
     Everything the agent knows at each step of the graph.
     Nodes read from this dict and return partial updates to it.
     """
-    news: NewsMessage
-    is_cached: bool
-    analysis: Optional[TradeAnalysis]
-    should_trade: bool
+    news:           NewsMessage
+    is_cached:      bool
+    analysis:       Optional[TradeAnalysis]
+    should_trade:   bool
     trade_order_id: Optional[str]
-    error: Optional[str]
+    error:          Optional[str]
+    is_simulated:   bool  # propagated from NewsMessage → Supabase row
 
 
 # ── Node Factories ───────────────────────────────────────────────────────────
@@ -200,6 +201,7 @@ def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
             reasoning=a.reasoning,
             trade_action=a.action,
             order_id=state.get("trade_order_id"),
+            is_simulated=state.get("is_simulated", False),
         )
 
         # Mark as seen for HOLD decisions too, so we don't re-analyze the same

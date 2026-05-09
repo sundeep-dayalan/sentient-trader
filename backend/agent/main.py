@@ -59,12 +59,13 @@ def main() -> None:
     def process_news(news: NewsMessage) -> None:
         """Run one news article through the full agent graph."""
         initial_state = {
-            "news": news,
-            "is_cached": False,
-            "analysis": None,
-            "should_trade": False,
+            "news":           news,
+            "is_cached":      False,
+            "analysis":       None,
+            "should_trade":   False,
             "trade_order_id": None,
-            "error": None,
+            "error":          None,
+            "is_simulated":   news.is_simulated,
         }
         try:
             graph.invoke(initial_state)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import AgentMonologue from "@/components/AgentMonologue";
 import LiveTicker     from "@/components/LiveTicker";
 import PnLChart       from "@/components/PnLChart";
@@ -18,16 +18,10 @@ interface DashboardClientProps {
 }
 
 export default function DashboardClient({ initialTrades }: DashboardClientProps) {
-  // Lifted up from LiveTicker so StatsBar (and anything else) stays in sync
   const [trades,            setTrades]            = useState<Trade[]>(initialTrades);
   const [newIds,            setNewIds]            = useState<Set<string>>(new Set());
-  const [simulatedIds,      setSimulatedIds]      = useState<Set<string>>(new Set());
   const [selectedTrade,     setSelectedTrade]     = useState<Trade | null>(initialTrades[0] ?? null);
   const [simulationMessage, setSimulationMessage] = useState<string | null>(null);
-
-  // Ref so the realtime callback always reads the current simulation state
-  // without needing to re-subscribe every time isSimulating changes
-  const isSimulatingRef = useRef(false);
 
   useEffect(() => {
     const supabase = createClient();
@@ -41,26 +35,16 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
         // Slide-in animation
         setNewIds(prev => new Set(prev).add(t.id));
         setTimeout(() => setNewIds(prev => { const n = new Set(prev); n.delete(t.id); return n; }), 500);
-
-        // Tag as simulated if the button was running when this row arrived
-        if (isSimulatingRef.current) {
-          setSimulatedIds(prev => new Set(prev).add(t.id));
-        }
       })
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
   }, []); // single subscription, never re-runs
 
-  const handleSimulateStart = () => {
-    isSimulatingRef.current = true;
-    setSimulationMessage(null);
-  };
-
-  const handleSimulateComplete = () => {
-    isSimulatingRef.current = false;
-    setSimulationMessage("✓ 5 scenarios injected into the live pipeline. Results appear in the feed within seconds.");
-  };
+  const handleSimulateStart    = () => setSimulationMessage(null);
+  const handleSimulateComplete = () => setSimulationMessage(
+    "✓ 5 scenarios injected into the live pipeline. Results appear in the feed within seconds."
+  );
 
   return (
     <div className="min-h-screen bg-background">
@@ -109,7 +93,6 @@ export default function DashboardClient({ initialTrades }: DashboardClientProps)
           <LiveTicker
             trades={trades}
             newIds={newIds}
-            simulatedIds={simulatedIds}
             onTradeSelect={setSelectedTrade}
             selectedId={selectedTrade?.id ?? null}
           />

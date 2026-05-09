@@ -6,6 +6,7 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { PortfolioPoint } from "@/lib/types";
+import { BASE_PATH }      from "@/lib/config";
 
 const fmt  = (v: number) => `$${v.toLocaleString("en-US", { minimumFractionDigits: 0 })}`;
 const fmtD = (ts: string) => new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -29,7 +30,7 @@ export default function PnLChart() {
 
   const fetchPortfolio = async () => {
     try {
-      const res  = await fetch("/sentient-trader/api/portfolio");
+      const res  = await fetch(`${BASE_PATH}/api/portfolio`);
       const json = await res.json();
       setData(json.history ?? []);
       setError(null);

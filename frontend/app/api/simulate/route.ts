@@ -46,10 +46,11 @@ export async function POST(req: NextRequest) {
       "XADD",
       streamKey,
       "*",
-      "ticker",       ticker,
-      "headline",     headline,
-      "source",       source ?? "simulation",
-      "published_at", new Date().toISOString(),
+      "ticker",        ticker,
+      "headline",      headline,
+      "source",        source ?? "simulation",
+      "published_at",  new Date().toISOString(),
+      "is_simulated",  "true",   // Pydantic coerces "true" → bool True on the agent side
     ];
 
     const response = await fetch(redisUrl, {

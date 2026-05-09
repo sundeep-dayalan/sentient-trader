@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { BASE_PATH } from "@/lib/config";
+
 type S = "ok" | "stale" | "error" | "unknown" | "loading";
 
 interface StatusData {
@@ -47,7 +49,7 @@ export default function SystemStatus() {
   useEffect(() => {
     const load = async () => {
       try {
-        const r = await fetch("/sentient-trader/api/status");
+        const r = await fetch(`${BASE_PATH}/api/status`);
         setStatus(await r.json());
       } catch {
         setStatus(s => ({ ...s, alpaca: "error", supabase: "error" }));

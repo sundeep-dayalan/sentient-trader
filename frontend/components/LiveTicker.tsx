@@ -11,12 +11,11 @@ const ACTION: Record<string, string> = {
 interface LiveTickerProps {
   trades:       Trade[];
   newIds:       Set<string>;
-  simulatedIds: Set<string>;
   onTradeSelect:(trade: Trade) => void;
   selectedId:   string | null;
 }
 
-export default function LiveTicker({ trades, newIds, simulatedIds, onTradeSelect, selectedId }: LiveTickerProps) {
+export default function LiveTicker({ trades, newIds, onTradeSelect, selectedId }: LiveTickerProps) {
   return (
     <div className="bg-surface border border-line rounded-2xl overflow-hidden shadow-card flex flex-col" style={{ minHeight: 500 }}>
 
@@ -43,7 +42,7 @@ export default function LiveTicker({ trades, newIds, simulatedIds, onTradeSelect
         )}
 
         {trades.map(trade => {
-          const isSimulated = simulatedIds.has(trade.id);
+          const isSimulated = trade.is_simulated;
 
           return (
             <button

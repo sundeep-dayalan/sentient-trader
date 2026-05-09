@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { SIMULATION_SCENARIOS } from "@/lib/constants";
+import { BASE_PATH }            from "@/lib/config";
 
 interface SimulateButtonProps {
   onStart:    () => void;
@@ -19,7 +20,7 @@ export default function SimulateButton({ onStart, onComplete }: SimulateButtonPr
 
     for (let i = 0; i < SIMULATION_SCENARIOS.length; i++) {
       try {
-        await fetch("/sentient-trader/api/simulate", {
+        await fetch(`${BASE_PATH}/api/simulate`, {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify(SIMULATION_SCENARIOS[i]),
