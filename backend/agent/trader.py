@@ -14,6 +14,7 @@ Design choices:
 """
 
 import logging
+import os
 from typing import Optional
 
 from alpaca.common.exceptions import APIError
@@ -44,7 +45,7 @@ class AlpacaTrader:
         self,
         ticker: str,
         action: str,
-        quantity: int = config.ORDER_QTY,
+        quantity: Optional[int] = None,
     ) -> Optional[str]:
         """
         Submit a market order and return the Alpaca order ID.
@@ -55,11 +56,12 @@ class AlpacaTrader:
           - Trying to SELL a ticker we don't hold
           - Account has insufficient buying power
         """
+        qty = quantity if quantity is not None else config.ORDER_QTY
         side = OrderSide.BUY if action == "BUY" else OrderSide.SELL
 
         order_request = MarketOrderRequest(
             symbol=ticker,
-            qty=quantity,
+            qty=qty,
             side=side,
             time_in_force=TimeInForce.DAY,  # auto-cancels at end of day if unfilled
         )
@@ -68,7 +70,7 @@ class AlpacaTrader:
             order = self._client.submit_order(order_data=order_request)
             log.info(
                 "Order submitted: %s %d %s → order_id=%s",
-                action, quantity, ticker, order.id,
+                action, qty, ticker, order.id,
             )
             return str(order.id)
 

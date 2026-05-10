@@ -3,6 +3,7 @@ groq==0.13.1
 instructor==1.7.2
 langgraph==0.2.28
 pydantic==2.8.2
+pytz==2024.1
 supabase==2.7.4
 upstash-redis==1.7.0
 python-dotenv==1.0.1
