@@ -14,7 +14,6 @@ Design choices:
 """
 
 import logging
-import os
 from typing import Optional
 
 from alpaca.common.exceptions import APIError
@@ -22,10 +21,9 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import MarketOrderRequest
 
-log = logging.getLogger("agent.trader")
+import config
 
-# Shares per order — small by default to keep the demo portfolio healthy
-ORDER_QTY = int(os.environ.get("ORDER_QUANTITY", "1"))
+log = logging.getLogger("agent.trader")
 
 
 class AlpacaTrader:
@@ -46,7 +44,7 @@ class AlpacaTrader:
         self,
         ticker: str,
         action: str,
-        quantity: int = ORDER_QTY,
+        quantity: int = config.ORDER_QTY,
     ) -> Optional[str]:
         """
         Submit a market order and return the Alpaca order ID.

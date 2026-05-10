@@ -3,6 +3,14 @@
  * These mirror the Supabase `trades` table columns exactly.
  */
 
+export interface PersonaOpinion {
+  name:       string;                               // "Momentum Trader" | "Value Investor" | "Risk Manager"
+  stance:     "BULLISH" | "BEARISH" | "NEUTRAL";
+  conviction: number;                               // 0.0–1.0, shown as a conviction bar in the UI
+  view:       string;                               // one-sentence headline take (always visible on card)
+  reasoning:  string;                               // full 2-3 sentence reasoning (shown below the take)
+}
+
 export interface Trade {
   id: string;
   created_at: string;
@@ -13,11 +21,12 @@ export interface Trade {
   article_id: string | null;
   sentiment_score: number;   // -1.0 to 1.0
   confidence_score: number;  // 0.0 to 1.0
-  reasoning: string;
+  reasoning: string;         // committee consensus summary (one-liner shown on trade cards)
   trade_action: "BUY" | "SELL" | "HOLD";
   order_id: string | null;   // Alpaca order UUID — null if HOLD
   quantity: number;
   is_simulated: boolean;     // true when injected via the Simulate button
+  committee_debate: PersonaOpinion[] | null;  // three persona opinions; null for pre-migration rows
 }
 
 export interface DashboardStats {

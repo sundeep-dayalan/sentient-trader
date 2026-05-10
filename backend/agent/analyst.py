@@ -1,21 +1,29 @@
 """
-AI Analyst — LangGraph + Groq
-===============================
-The cognitive core of Sentient Trader. Defines a LangGraph state machine
-that processes each news headline through a structured decision pipeline.
+AI Analyst — LangGraph + Groq Multi-Agent Committee
+=====================================================
+The cognitive core of Sentient Trader. A LangGraph state machine that runs
+a sequential three-persona debate before synthesizing a final trade decision.
 
 Graph topology:
-                                                    ┌──────────────────────┐
-  START → [check_cache] ──── cached? YES ──────────→│         END          │
-                │                                    └──────────────────────┘
+
+  START → [check_cache] ──── cached? YES ──────────────────────────────→ END
+                │
              not cached
                 │
-          [analyze] ← calls Groq LLaMA 3.1 8B via instructor
+        [fetch_context]   pulls live price + day-change from Alpaca Data API
                 │
-         [assess_risk] ← checks sentiment/confidence thresholds
+    [momentum_analyst]    Groq call #1 — trend/momentum lens
+                │
+      [value_analyst]     Groq call #2 — reads momentum opinion, responds
+                │
+       [risk_analyst]     Groq call #3 — reads both, stress-tests conclusions
+                │
+        [synthesizer]     Groq call #4 — weighs the debate, makes final call
+                │
+        [assess_risk]     pure Python — checks sentiment/confidence thresholds
                 │
       ┌─────────┴──────────┐
-   trade?                 hold?
+   trade?                hold?
       │                    │
  [execute_trade]      [log_result]
       │                    │
@@ -23,11 +31,22 @@ Graph topology:
       │
      END
 
-Why LangGraph instead of a plain function chain?
-  - State is explicit and type-checked at every step
-  - Adding a new node (e.g., a "research" step that fetches earnings data)
-    requires zero changes to existing nodes — just wire a new edge
-  - The conditional routing makes the decision logic readable at a glance
+Why sequential instead of parallel personas?
+  Parallel gives three independent opinions. Sequential gives a real argument:
+  the value investor reads the momentum trader's take before responding, so
+  genuine disagreement surfaces rather than each persona talking past the others.
+
+Why four Groq calls instead of one?
+  Each call has its own system prompt locking the model into a specific worldview.
+  A system prompt is context-window-level conditioning — it's fundamentally
+  different from asking the same model to "roleplay" three voices in one prompt,
+  where the first persona's framing contaminates the others.
+
+ModelRouter: quota-aware cascade
+  Each Groq model has its own independent rate-limit bucket.
+  Order: openai/gpt-oss-120b → llama-3.3-70b-versatile → llama-3.1-8b-instant
+  On a 429: per-minute limits skip to next tier; daily-exhausted models are
+  blacklisted in-memory for the session.
 """
 
 from __future__ import annotations
@@ -37,49 +56,195 @@ import os
 from typing import Any, Optional, TypedDict
 
 import instructor
-from groq import Groq
+from alpaca.data import StockHistoricalDataClient
+from alpaca.data.requests import StockSnapshotRequest
+from groq import Groq, RateLimitError
 from langgraph.graph import END, START, StateGraph
 
+import config
 from cache import HeadlineCache
 from logger import SupabaseLogger
-from schemas import NewsMessage, TradeAnalysis
+from schemas import (
+    NewsMessage,
+    PersonaAnalysis,
+    PersonaOpinion,
+    SynthesisResult,
+    TradeAnalysis,
+)
 from trader import AlpacaTrader
 
 log = logging.getLogger("agent.analyst")
 
 
-# Trading thresholds — read from environment so they can be tuned via
-# `flyctl secrets set` without a full redeploy.
-BUY_SENTIMENT_THRESHOLD = float(os.environ.get("BUY_SENTIMENT_THRESHOLD", "0.8"))
-SELL_SENTIMENT_THRESHOLD = float(os.environ.get("SELL_SENTIMENT_THRESHOLD", "-0.8"))
-CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.9"))
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
+# ── ModelRouter ──────────────────────────────────────────────────────────────
+
+class ModelRouter:
+    """
+    Tries Groq models in quality-descending order, falling back on rate limits.
+
+    Groq enforces two types of limits:
+      - Per-minute (RPM / TPM): transient — skip to next tier, don't blacklist.
+      - Daily (req/day / TPD):  persistent — blacklist the model for the session.
+
+    The in-memory blacklist means we don't waste RTT on known-exhausted models.
+    It resets on process restart, which is acceptable since daily limits also
+    reset at midnight UTC.
+
+    If OVERRIDE_MODEL env var is set, the cascade is bypassed entirely —
+    useful for local testing against a specific model tier.
+
+    Tier order (quality / TPM tradeoff):
+      1. openai/gpt-oss-120b     — 1K req/day,  8K TPM  (highest reasoning quality)
+      2. llama-3.3-70b-versatile — 1K req/day, 12K TPM  (strong quality, more headroom)
+      3. llama-3.1-8b-instant    — 14.4K req/day, 6K TPM (volume fallback)
+    """
+
+    TIERS: list[str] = config.MODEL_CASCADE
+
+    # Groq error messages that signal a daily (persistent) quota exhaustion.
+    _DAILY_EXHAUSTION_MARKERS = ("per day", "daily", "quota exceeded", "day limit")
+
+    def __init__(self) -> None:
+        self._blacklisted: set[str] = set()
+
+    def call(
+        self,
+        client: Any,
+        response_model: type,
+        messages: list[dict],
+        *,
+        max_retries: int = 1,
+    ) -> tuple[Any, str]:
+        """
+        Invoke the LLM with automatic model-tier fallback.
+
+        Returns: (parsed_response, model_name_that_succeeded)
+        Raises:  RuntimeError if all tiers are exhausted or blacklisted.
+                 Any non-rate-limit exception propagates immediately.
+        """
+        # Hard override: bypass cascade entirely
+        if config.MODEL_OVERRIDE:
+            result = client.chat.completions.create(
+                model=config.MODEL_OVERRIDE,
+                response_model=response_model,
+                messages=messages,
+                max_retries=max_retries,
+            )
+            return result, config.MODEL_OVERRIDE
+
+        available = [m for m in self.TIERS if m not in self._blacklisted]
+        if not available:
+            raise RuntimeError(
+                f"All Groq model tiers exhausted for this session. "
+                f"Blacklisted: {self._blacklisted}"
+            )
+
+        for model in available:
+            try:
+                result = client.chat.completions.create(
+                    model=model,
+                    response_model=response_model,
+                    messages=messages,
+                    max_retries=max_retries,
+                )
+                log.debug("ModelRouter: %s succeeded", model)
+                return result, model
+
+            except RateLimitError as exc:
+                msg = str(exc).lower()
+                is_daily = any(marker in msg for marker in self._DAILY_EXHAUSTION_MARKERS)
+                if is_daily:
+                    log.warning(
+                        "ModelRouter: daily quota exhausted for %s — blacklisting for session",
+                        model,
+                    )
+                    self._blacklisted.add(model)
+                else:
+                    # Per-minute limit — don't blacklist, just skip this call
+                    log.warning(
+                        "ModelRouter: per-minute rate limit on %s — falling back to %s",
+                        model,
+                        self.TIERS[self.TIERS.index(model) + 1]
+                        if self.TIERS.index(model) + 1 < len(self.TIERS)
+                        else "nothing (exhausted)",
+                    )
+                continue
+
+            except Exception:
+                # Schema validation failures, network errors, etc. — don't try next tier,
+                # the problem isn't the model choice.
+                raise
+
+        raise RuntimeError(
+            f"All available Groq tiers rate-limited. Blacklisted: {self._blacklisted}"
+        )
 
 
-# ── LangGraph State ─────────────────────────────────────────────────────────
+# ── LangGraph State ──────────────────────────────────────────────────────────
 
 class AgentState(TypedDict):
     """
     Everything the agent knows at each step of the graph.
-    Nodes read from this dict and return partial updates to it.
+    Nodes read from this dict and return partial updates.
+
+    The three persona opinion fields accumulate as the debate progresses:
+      - momentum_opinion is set by momentum_analyst
+      - value_opinion    is set by value_analyst (after reading momentum_opinion)
+      - risk_opinion     is set by risk_analyst  (after reading both above)
+    The synthesizer reads all three, then sets analysis.
     """
-    news:           NewsMessage
-    is_cached:      bool
-    analysis:       Optional[TradeAnalysis]
-    should_trade:   bool
-    trade_order_id: Optional[str]
-    error:          Optional[str]
-    is_simulated:   bool  # propagated from NewsMessage → Supabase row
+    news:              NewsMessage
+    is_cached:         bool
+    market_context:    Optional[dict]          # {price, day_change_pct} from Alpaca
+    momentum_opinion:  Optional[PersonaAnalysis]
+    value_opinion:     Optional[PersonaAnalysis]
+    risk_opinion:      Optional[PersonaAnalysis]
+    analysis:          Optional[TradeAnalysis]  # assembled after synthesis
+    should_trade:      bool
+    trade_order_id:    Optional[str]
+    error:             Optional[str]
+    is_simulated:      bool
+
+
+# ── Shared Prompt Helpers ────────────────────────────────────────────────────
+
+def _market_line(ticker: str, ctx: Optional[dict]) -> str:
+    """Format the market context header line shared across all four prompts."""
+    if ctx and ctx.get("price") is not None:
+        change = (
+            f" ({ctx['day_change_pct']:+.2f}% today)"
+            if ctx.get("day_change_pct") is not None
+            else ""
+        )
+        return f"MARKET: {ticker} @ ${ctx['price']:.2f}{change}"
+    return f"MARKET: {ticker} (live price unavailable)"
+
+
+def _opinion_block(label: str, opinion: PersonaAnalysis) -> str:
+    """Format one persona's opinion for inclusion in downstream prompts."""
+    return (
+        f"{label} [{opinion.stance}, conviction={opinion.conviction:.2f}]:\n"
+        f"  Take: \"{opinion.headline_take}\"\n"
+        f"  Reasoning: {opinion.analysis}"
+    )
+
+
+def _to_persona_opinion(name: str, pa: PersonaAnalysis) -> PersonaOpinion:
+    """Convert a raw LLM output (PersonaAnalysis) to the storage type (PersonaOpinion)."""
+    return PersonaOpinion(
+        name=name,
+        stance=pa.stance,
+        conviction=pa.conviction,
+        view=pa.headline_take,
+        reasoning=pa.analysis,
+    )
 
 
 # ── Node Factories ───────────────────────────────────────────────────────────
-# We use factory functions (functions that return functions) so each node
-# closes over its dependency (cache, groq_client, etc.) at build time.
-# This keeps node signatures clean: they only take AgentState as input.
 
 def _make_check_cache_node(cache: HeadlineCache):
     def check_cache(state: AgentState) -> dict:
-        """Check Redis before spending tokens on the LLM."""
+        """Check Redis before spending any API quota on this headline."""
         cached = cache.is_duplicate(state["news"].headline)
         if cached:
             log.info("Cache HIT — skipping duplicate: %s", state["news"].headline[:60])
@@ -87,74 +252,333 @@ def _make_check_cache_node(cache: HeadlineCache):
     return check_cache
 
 
-def _make_analyze_node(groq_client: Any):
-    def analyze(state: AgentState) -> dict:
-        """
-        Call Groq with instructor to get a structured TradeAnalysis.
+def _make_fetch_context_node():
+    """
+    Pull live market data from Alpaca before the debate starts.
 
-        instructor wraps the Groq client and automatically retries if
-        the LLM returns JSON that fails Pydantic validation. This makes
-        structured output reliable without any manual parsing code.
-        """
+    Knowing the current price and day-change grounds the committee's analysis:
+    a NVDA headline on a day where NVDA is already +8% reads very differently
+    from the same headline on a flat day.
+
+    Fails gracefully — if Alpaca is unreachable or the ticker is non-standard
+    (common in simulate mode), market_context is None and each persona prompt
+    falls back to "live price unavailable".
+    """
+    try:
+        data_client = StockHistoricalDataClient(
+            api_key=os.environ["ALPACA_API_KEY"],
+            secret_key=os.environ["ALPACA_SECRET_KEY"],
+        )
+    except Exception as exc:
+        log.warning("Alpaca data client init failed: %s", exc)
+        data_client = None
+
+    def fetch_context(state: AgentState) -> dict:
+        if data_client is None:
+            return {"market_context": None}
+
+        ticker = state["news"].ticker
+        try:
+            snap = data_client.get_stock_snapshot(
+                StockSnapshotRequest(symbol_or_symbols=ticker)
+            ).get(ticker)
+
+            if not snap:
+                return {"market_context": None}
+
+            price = float(snap.latest_trade.price) if snap.latest_trade else None
+
+            day_change_pct = None
+            if snap.daily_bar and snap.previous_daily_bar and snap.previous_daily_bar.close:
+                prev = float(snap.previous_daily_bar.close)
+                curr = float(snap.daily_bar.close)
+                day_change_pct = round(((curr - prev) / prev) * 100, 2)
+
+            ctx = {
+                "price":          round(price, 2) if price is not None else None,
+                "day_change_pct": day_change_pct,
+            }
+            log.info(
+                "Context [%s]: $%.2f  %s",
+                ticker,
+                ctx["price"] or 0,
+                f"({ctx['day_change_pct']:+.2f}%)" if ctx["day_change_pct"] is not None else "(change n/a)",
+            )
+            return {"market_context": ctx}
+
+        except Exception as exc:
+            log.warning("Could not fetch market context for %s: %s", ticker, exc)
+            return {"market_context": None}
+
+    return fetch_context
+
+
+def _make_momentum_analyst_node(router: ModelRouter, client: Any):
+    """
+    Groq call #1 — the Momentum Trader.
+
+    No prior opinions to reference. Sees only the headline and live market
+    context. Produces an unconditioned, purely technical/momentum read.
+    """
+    def momentum_analyst(state: AgentState) -> dict:
+        if state.get("error"):
+            return {"momentum_opinion": None}
+
         news = state["news"]
-
         prompt = (
-            f"You are a quantitative trading analyst. Analyze this financial news "
-            f"headline and determine its likely market impact on the stock {news.ticker}.\n\n"
-            f"Headline: \"{news.headline}\"\n"
-            f"Source: {news.source}\n\n"
-            f"Provide a sentiment score (-1.0 to 1.0), a confidence level (0.0 to 1.0), "
-            f"a brief 1-2 sentence reasoning, and a recommended trade action."
+            f"{_market_line(news.ticker, state.get('market_context'))}\n"
+            f"HEADLINE: \"{news.headline}\" — {news.source}\n\n"
+            f"Analyze this headline's impact on {news.ticker} from your momentum trading perspective."
         )
 
         try:
-            analysis: TradeAnalysis = groq_client.chat.completions.create(
-                model=GROQ_MODEL,
-                response_model=TradeAnalysis,
-                messages=[{"role": "user", "content": prompt}],
-                max_retries=2,  # instructor retries if schema validation fails
+            result, model = router.call(
+                client,
+                PersonaAnalysis,
+                [
+                    {"role": "system",  "content": config.MOMENTUM_SYSTEM_PROMPT},
+                    {"role": "user",    "content": prompt},
+                ],
             )
             log.info(
-                "[%s] sentiment=%.2f  confidence=%.2f  action=%s",
-                news.ticker, analysis.sentiment, analysis.confidence, analysis.action,
+                "Momentum [%s] %s (conviction=%.2f) via %s",
+                news.ticker, result.stance, result.conviction, model,
+            )
+            return {"momentum_opinion": result}
+
+        except Exception as exc:
+            log.error("Momentum analyst failed for [%s]: %s", news.ticker, exc)
+            return {"momentum_opinion": None, "error": str(exc)}
+
+    return momentum_analyst
+
+
+def _make_value_analyst_node(router: ModelRouter, client: Any):
+    """
+    Groq call #2 — the Value Investor.
+
+    Sees the momentum trader's full opinion in the prompt. This is the first
+    true debate step: the value investor can agree, disagree, or nuance —
+    and their response is conditioned on what the momentum trader actually said.
+    """
+    def value_analyst(state: AgentState) -> dict:
+        if state.get("error"):
+            return {"value_opinion": None}
+
+        news = state["news"]
+        m = state.get("momentum_opinion")
+
+        prior_section = (
+            f"\n\nMOMENTUM TRADER'S TAKE:\n{_opinion_block('MOMENTUM TRADER', m)}"
+            if m else "\n\n(No momentum analysis available — reason independently.)"
+        )
+
+        prompt = (
+            f"{_market_line(news.ticker, state.get('market_context'))}\n"
+            f"HEADLINE: \"{news.headline}\" — {news.source}"
+            f"{prior_section}\n\n"
+            f"As the Value Investor, respond to this headline and to the Momentum Trader's assessment. "
+            f"Do the fundamentals confirm or contradict their directional call?"
+        )
+
+        try:
+            result, model = router.call(
+                client,
+                PersonaAnalysis,
+                [
+                    {"role": "system", "content": config.VALUE_SYSTEM_PROMPT},
+                    {"role": "user",   "content": prompt},
+                ],
+            )
+            log.info(
+                "Value     [%s] %s (conviction=%.2f) via %s",
+                news.ticker, result.stance, result.conviction, model,
+            )
+            return {"value_opinion": result}
+
+        except Exception as exc:
+            log.error("Value analyst failed for [%s]: %s", news.ticker, exc)
+            return {"value_opinion": None, "error": str(exc)}
+
+    return value_analyst
+
+
+def _make_risk_analyst_node(router: ModelRouter, client: Any):
+    """
+    Groq call #3 — the Risk Manager.
+
+    Sees both prior opinions in full. Their mandate is adversarial: find the
+    flaw in both arguments. A strong risk opinion with high conviction should
+    suppress the synthesizer's final confidence significantly.
+    """
+    def risk_analyst(state: AgentState) -> dict:
+        if state.get("error"):
+            return {"risk_opinion": None}
+
+        news = state["news"]
+        m = state.get("momentum_opinion")
+        v = state.get("value_opinion")
+
+        debate_section = "\n\nDEBATE SO FAR:"
+        if m:
+            debate_section += f"\n{_opinion_block('MOMENTUM TRADER', m)}"
+        if v:
+            debate_section += f"\n{_opinion_block('VALUE INVESTOR', v)}"
+        if not m and not v:
+            debate_section += "\n(No prior analyses available — reason independently.)"
+
+        prompt = (
+            f"{_market_line(news.ticker, state.get('market_context'))}\n"
+            f"HEADLINE: \"{news.headline}\" — {news.source}"
+            f"{debate_section}\n\n"
+            f"As the Risk Manager, stress-test the above conclusions for {news.ticker}. "
+            f"What tail risk, regulatory exposure, or macro factor are both analysts missing?"
+        )
+
+        try:
+            result, model = router.call(
+                client,
+                PersonaAnalysis,
+                [
+                    {"role": "system", "content": config.RISK_SYSTEM_PROMPT},
+                    {"role": "user",   "content": prompt},
+                ],
+            )
+            log.info(
+                "Risk      [%s] %s (conviction=%.2f) via %s",
+                news.ticker, result.stance, result.conviction, model,
+            )
+            return {"risk_opinion": result}
+
+        except Exception as exc:
+            log.error("Risk analyst failed for [%s]: %s", news.ticker, exc)
+            return {"risk_opinion": None, "error": str(exc)}
+
+    return risk_analyst
+
+
+def _make_synthesizer_node(router: ModelRouter, client: Any):
+    """
+    Groq call #4 — the Portfolio Manager.
+
+    Receives the full debate transcript. Produces a SynthesisResult, then
+    assembles the final TradeAnalysis from all three PersonaOpinion objects.
+
+    If any persona failed (opinion is None), we still synthesize on whatever
+    is available — one bad API call shouldn't void the whole analysis.
+    """
+    def synthesizer(state: AgentState) -> dict:
+        if state.get("error"):
+            return {"analysis": None}
+
+        news = state["news"]
+        m = state.get("momentum_opinion")
+        v = state.get("value_opinion")
+        r = state.get("risk_opinion")
+
+        # If ALL three failed, we have nothing to synthesize
+        if not any([m, v, r]):
+            return {"analysis": None, "error": "All persona analyses failed — cannot synthesize"}
+
+        def opinion_entry(label: str, op: Optional[PersonaAnalysis]) -> str:
+            if op is None:
+                return f"{label}: (analysis unavailable)"
+            return _opinion_block(label, op)
+
+        debate_transcript = "\n\n".join([
+            opinion_entry("MOMENTUM TRADER", m),
+            opinion_entry("VALUE INVESTOR",  v),
+            opinion_entry("RISK MANAGER",    r),
+        ])
+
+        prompt = (
+            f"{_market_line(news.ticker, state.get('market_context'))}\n"
+            f"HEADLINE: \"{news.headline}\" — {news.source}\n\n"
+            f"FULL COMMITTEE DEBATE:\n{debate_transcript}\n\n"
+            f"As the Portfolio Manager for {news.ticker}, synthesize this debate into a final "
+            f"trade decision. Weight conviction scores — high-conviction dissenters matter. "
+            f"Acknowledge the key tension if the committee was split."
+        )
+
+        try:
+            synthesis, model = router.call(
+                client,
+                SynthesisResult,
+                [
+                    {"role": "system", "content": config.SYNTHESIS_SYSTEM_PROMPT},
+                    {"role": "user",   "content": prompt},
+                ],
+            )
+
+            # Assemble the final TradeAnalysis from all debate components.
+            # Substitute a neutral placeholder for any persona whose call failed.
+            def safe_opinion(name: str, pa: Optional[PersonaAnalysis]) -> PersonaOpinion:
+                if pa is not None:
+                    return _to_persona_opinion(name, pa)
+                return PersonaOpinion(
+                    name=name,
+                    stance="NEUTRAL",
+                    conviction=0.0,
+                    view="Analysis unavailable for this persona.",
+                    reasoning="This persona's LLM call failed; opinion not included in synthesis.",
+                )
+
+            analysis = TradeAnalysis(
+                committee=[
+                    safe_opinion("Momentum Trader", m),
+                    safe_opinion("Value Investor",  v),
+                    safe_opinion("Risk Manager",    r),
+                ],
+                sentiment=synthesis.sentiment,
+                confidence=synthesis.confidence,
+                reasoning=synthesis.reasoning,
+                action=synthesis.action,
+            )
+
+            log.info(
+                "Synthesis [%s] action=%s  sentiment=%.2f  confidence=%.2f  via %s | "
+                "committee: %s",
+                news.ticker,
+                analysis.action,
+                analysis.sentiment,
+                analysis.confidence,
+                model,
+                " | ".join(
+                    f"{p.name.split()[0]}={p.stance}({p.conviction:.2f})"
+                    for p in analysis.committee
+                ),
             )
             return {"analysis": analysis, "error": None}
 
-        except Exception as e:
-            # Log the full cause chain so we can see the raw Groq error message
-            cause = getattr(e, "__cause__", None) or getattr(e, "last_attempt", None)
-            log.error(
-                "LLM call failed for [%s] model=%s: %s | cause: %s",
-                news.ticker, GROQ_MODEL, e, cause,
-            )
-            return {"analysis": None, "error": str(e)}
+        except Exception as exc:
+            log.error("Synthesizer failed for [%s]: %s", news.ticker, exc)
+            return {"analysis": None, "error": str(exc)}
 
-    return analyze
+    return synthesizer
 
 
 def _make_assess_risk_node():
     def assess_risk(state: AgentState) -> dict:
         """
-        Decide whether the analysis clears the thresholds for a real order.
+        Dual gate: requires both a strong directional signal AND high confidence.
 
-        We require BOTH a strong directional signal AND high confidence.
-        This dual gate keeps the false-positive rate low on noisy news days.
-        Example: a mildly bullish headline (sentiment=0.6) never triggers a BUY
-        even if the model is very confident (confidence=0.95).
+        The committee process naturally produces lower confidence on split
+        decisions (by design in the synthesizer prompt), so a 2-vs-1 debate
+        result will be harder to clear this gate than a unanimous one.
         """
-        if state["analysis"] is None:
+        if state.get("analysis") is None:
             return {"should_trade": False}
 
         a = state["analysis"]
-        is_strong_buy = a.action == "BUY" and a.sentiment >= BUY_SENTIMENT_THRESHOLD
-        is_strong_sell = a.action == "SELL" and a.sentiment <= SELL_SENTIMENT_THRESHOLD
-        is_confident = a.confidence >= CONFIDENCE_THRESHOLD
+        is_strong_buy  = a.action == "BUY"  and a.sentiment >= config.BUY_SENTIMENT_THRESHOLD
+        is_strong_sell = a.action == "SELL" and a.sentiment <= config.SELL_SENTIMENT_THRESHOLD
+        is_confident   = a.confidence >= config.CONFIDENCE_THRESHOLD
 
         should_trade = (is_strong_buy or is_strong_sell) and is_confident
 
         log.info(
-            "Risk assessment: should_trade=%s  (sentiment=%.2f, confidence=%.2f, action=%s)",
-            should_trade, a.sentiment, a.confidence, a.action,
+            "Risk gate: should_trade=%s  (action=%s  sentiment=%.2f  confidence=%.2f)",
+            should_trade, a.action, a.sentiment, a.confidence,
         )
         return {"should_trade": should_trade}
 
@@ -164,19 +588,15 @@ def _make_assess_risk_node():
 def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
     def execute_trade(state: AgentState) -> dict:
         """Submit the order to Alpaca and mark the headline as seen in Redis."""
-        news = state["news"]
+        news   = state["news"]
         action = state["analysis"].action
 
         order_id = trader.place_order(
             ticker=news.ticker,
             action=action,
-            quantity=1,
+            quantity=config.ORDER_QTY,
         )
-
-        # Mark as seen AFTER a successful trade attempt to prevent double-trading
-        # if this node is somehow called twice for the same message
         cache.mark_seen(news.headline)
-
         return {"trade_order_id": order_id}
 
     return execute_trade
@@ -185,18 +605,17 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
 def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
     def log_result(state: AgentState) -> dict:
         """
-        Write the full interaction to Supabase — runs for every analyzed headline.
-        The Supabase Realtime subscription on the frontend picks this up instantly.
+        Write the full debate record to Supabase — runs for every analyzed headline.
 
-        Always returns at least one state key — LangGraph 0.2.x requires every
-        node to produce at least one update or it raises InvalidUpdateError.
+        committee_debate is stored as JSONB containing all three personas with
+        their conviction scores and full reasoning — the complete audit trail
+        of how the decision was reached.
         """
-        if state["analysis"] is None:
-            # LLM failed — nothing to log, but we must return a state update
+        if state.get("analysis") is None:
             return {"error": state.get("error", "analysis_failed")}
 
         news = state["news"]
-        a = state["analysis"]
+        a    = state["analysis"]
 
         db.log_trade(
             ticker=news.ticker,
@@ -210,10 +629,9 @@ def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
             article_source=news.source,
             article_url=news.article_url,
             article_id=news.article_id,
+            committee_debate=[p.model_dump() for p in a.committee],
         )
 
-        # Mark as seen for HOLD decisions too, so we don't re-analyze the same
-        # story from a different source 30 seconds later
         if not state.get("trade_order_id"):
             cache.mark_seen(news.headline)
 
@@ -225,12 +643,10 @@ def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
 # ── Routing Functions ────────────────────────────────────────────────────────
 
 def _route_after_cache_check(state: AgentState) -> str:
-    """If this is a duplicate headline, skip everything and end the graph run."""
-    return "skip" if state["is_cached"] else "analyze"
+    return "skip" if state["is_cached"] else "fetch_context"
 
 
 def _route_after_risk_assessment(state: AgentState) -> str:
-    """Branch to execute_trade only if thresholds were cleared."""
     return "execute_trade" if state["should_trade"] else "log_result"
 
 
@@ -243,29 +659,39 @@ def build_agent_graph(
 ) -> Any:
     """
     Assemble and compile the LangGraph state machine.
-    Returns a compiled graph; call .invoke(initial_state) to process one headline.
+
+    The ModelRouter and instructor client are created once here and shared
+    across all four persona nodes via closure — no re-initialization per message.
     """
     groq_client = instructor.from_groq(Groq(api_key=os.environ["GROQ_API_KEY"]))
+    router      = ModelRouter()
 
     graph = StateGraph(AgentState)
 
-    # Register every node with its factory-produced function
-    graph.add_node("check_cache",   _make_check_cache_node(cache))
-    graph.add_node("analyze",       _make_analyze_node(groq_client))
-    graph.add_node("assess_risk",   _make_assess_risk_node())
-    graph.add_node("execute_trade", _make_execute_trade_node(trader, cache))
-    graph.add_node("log_result",    _make_log_result_node(db, cache))
+    graph.add_node("check_cache",       _make_check_cache_node(cache))
+    graph.add_node("fetch_context",     _make_fetch_context_node())
+    graph.add_node("momentum_analyst",  _make_momentum_analyst_node(router, groq_client))
+    graph.add_node("value_analyst",     _make_value_analyst_node(router, groq_client))
+    graph.add_node("risk_analyst",      _make_risk_analyst_node(router, groq_client))
+    graph.add_node("synthesizer",       _make_synthesizer_node(router, groq_client))
+    graph.add_node("assess_risk",       _make_assess_risk_node())
+    graph.add_node("execute_trade",     _make_execute_trade_node(trader, cache))
+    graph.add_node("log_result",        _make_log_result_node(db, cache))
 
-    # Wire the edges
     graph.add_edge(START, "check_cache")
 
     graph.add_conditional_edges(
         "check_cache",
         _route_after_cache_check,
-        {"skip": END, "analyze": "analyze"},
+        {"skip": END, "fetch_context": "fetch_context"},
     )
 
-    graph.add_edge("analyze", "assess_risk")
+    # Sequential debate chain — order is deliberate
+    graph.add_edge("fetch_context",    "momentum_analyst")
+    graph.add_edge("momentum_analyst", "value_analyst")
+    graph.add_edge("value_analyst",    "risk_analyst")
+    graph.add_edge("risk_analyst",     "synthesizer")
+    graph.add_edge("synthesizer",      "assess_risk")
 
     graph.add_conditional_edges(
         "assess_risk",
@@ -274,6 +700,6 @@ def build_agent_graph(
     )
 
     graph.add_edge("execute_trade", "log_result")
-    graph.add_edge("log_result", END)
+    graph.add_edge("log_result",    END)
 
     return graph.compile()

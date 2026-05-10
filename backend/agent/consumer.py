@@ -11,7 +11,7 @@ Redis Streams with consumer groups provide the same semantics as Kafka:
   - Un-ACKed messages are redeliverable if the consumer crashes (at-least-once)
 
 How the polling loop works:
-  1. xreadgroup(">" = new messages only) pulls up to BATCH_SIZE entries
+  1. xreadgroup(">" = new messages only) pulls up to config.BATCH_SIZE entries
   2. For each entry: parse flat-list fields → NewsMessage → call callback → xack
   3. If the stream is empty: sleep 1 second and poll again
   4. On any error: log, sleep 5 seconds, retry
@@ -28,16 +28,10 @@ from typing import Callable
 
 from upstash_redis import Redis
 
+import config
 from schemas import NewsMessage
 
 log = logging.getLogger("agent.consumer")
-
-STREAM_KEY     = os.environ.get("REDIS_STREAM_KEY", "market-news")
-CONSUMER_GROUP = "sentient-agent-group"
-CONSUMER_NAME  = "agent-worker-1"
-BATCH_SIZE     = 10
-POLL_INTERVAL  = 1.0   # seconds to wait when stream is empty
-ERROR_RETRY    = 5.0   # seconds to wait after an unexpected error
 
 
 class RedisStreamConsumer:
@@ -60,11 +54,11 @@ class RedisStreamConsumer:
         to replay old news on restart. mkstream creates the stream if absent.
         """
         try:
-            self._redis.xgroup_create(STREAM_KEY, CONSUMER_GROUP, "$", mkstream=True)
-            log.info("Consumer group '%s' created on stream '%s'", CONSUMER_GROUP, STREAM_KEY)
+            self._redis.xgroup_create(config.STREAM_KEY, config.CONSUMER_GROUP, "$", mkstream=True)
+            log.info("Consumer group '%s' created on stream '%s'", config.CONSUMER_GROUP, config.STREAM_KEY)
         except Exception as e:
             if "BUSYGROUP" in str(e):
-                log.info("Consumer group '%s' already exists — resuming", CONSUMER_GROUP)
+                log.info("Consumer group '%s' already exists — resuming", config.CONSUMER_GROUP)
             else:
                 raise
 
@@ -73,20 +67,20 @@ class RedisStreamConsumer:
         Poll the Redis stream forever.
         on_message: called with a parsed NewsMessage for each new entry.
         """
-        log.info("Redis stream consumer ready (stream=%s, group=%s)", STREAM_KEY, CONSUMER_GROUP)
+        log.info("Redis stream consumer ready (stream=%s, group=%s)", config.STREAM_KEY, config.CONSUMER_GROUP)
 
         while True:
             try:
                 # ">" = give me messages not yet delivered to any consumer in this group
                 results = self._redis.xreadgroup(
-                    CONSUMER_GROUP,
-                    CONSUMER_NAME,
-                    {STREAM_KEY: ">"},
-                    count=BATCH_SIZE,
+                    config.CONSUMER_GROUP,
+                    config.CONSUMER_NAME,
+                    {config.STREAM_KEY: ">"},
+                    count=config.BATCH_SIZE,
                 )
 
                 if not results:
-                    time.sleep(POLL_INTERVAL)
+                    time.sleep(config.POLL_INTERVAL)
                     continue
 
                 # results format: [["stream-key", [["entry-id", ["f","v",...]], ...]]]
@@ -98,8 +92,8 @@ class RedisStreamConsumer:
                 log.info("Consumer shutting down...")
                 break
             except Exception as e:
-                log.error("Stream poll error: %s — retrying in %.0fs", e, ERROR_RETRY)
-                time.sleep(ERROR_RETRY)
+                log.error("Stream poll error: %s — retrying in %.0fs", e, config.ERROR_RETRY)
+                time.sleep(config.ERROR_RETRY)
 
     def _process_entry(
         self,
@@ -128,6 +122,6 @@ class RedisStreamConsumer:
         finally:
             # ACK even on parse failures so bad messages don't block the group
             try:
-                self._redis.xack(STREAM_KEY, CONSUMER_GROUP, entry_id)
+                self._redis.xack(config.STREAM_KEY, config.CONSUMER_GROUP, entry_id)
             except Exception as e:
                 log.error("Failed to ACK entry %s: %s", entry_id, e)

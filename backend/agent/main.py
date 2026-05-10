@@ -6,7 +6,8 @@ Entry point for the AI trading agent.
 This service runs forever on Fly.io as a background worker:
   1. Consumes news messages from Kafka (put there by the ingestion service)
   2. Runs each headline through the LangGraph pipeline:
-       check_cache → analyze (Groq LLaMA) → assess_risk → [trade] → log
+       check_cache → fetch_context → momentum_analyst → value_analyst
+       → risk_analyst → synthesizer → assess_risk → [trade] → log
 
 The full round-trip per headline is typically 300-600ms:
   - Redis cache check:  ~10ms
@@ -31,6 +32,7 @@ from schemas import NewsMessage
 from trader import AlpacaTrader
 
 load_dotenv()
+config.reload_from_supabase()  # apply any changes saved via the Settings UI
 
 # Suppress httpx's per-request INFO logs — they flood the output during polling
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -59,13 +61,17 @@ def main() -> None:
     def process_news(news: NewsMessage) -> None:
         """Run one news article through the full agent graph."""
         initial_state = {
-            "news":           news,
-            "is_cached":      False,
-            "analysis":       None,
-            "should_trade":   False,
-            "trade_order_id": None,
-            "error":          None,
-            "is_simulated":   news.is_simulated,
+            "news":             news,
+            "is_cached":        False,
+            "market_context":   None,
+            "momentum_opinion": None,
+            "value_opinion":    None,
+            "risk_opinion":     None,
+            "analysis":         None,
+            "should_trade":     False,
+            "trade_order_id":   None,
+            "error":            None,
+            "is_simulated":     news.is_simulated,
         }
         try:
             graph.invoke(initial_state)

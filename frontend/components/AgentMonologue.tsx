@@ -1,9 +1,16 @@
 "use client";
 
 import { articleSourceLabel, safeArticleUrl } from "@/lib/news";
-import { Trade } from "@/lib/types";
+import { PersonaOpinion, Trade } from "@/lib/types";
 
 interface AgentMonologueProps { trade: Trade | null; }
+
+// Avatar initials and icon colour per persona
+const PERSONA_META: Record<string, { initial: string; colour: string }> = {
+  "Momentum Trader": { initial: "M", colour: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
+  "Value Investor":  { initial: "V", colour: "bg-purple-500/20 text-purple-400 border-purple-500/30" },
+  "Risk Manager":    { initial: "R", colour: "bg-amber-500/20 text-amber-400 border-amber-500/30" },
+};
 
 export default function AgentMonologue({ trade }: AgentMonologueProps) {
   if (!trade) {
@@ -16,7 +23,7 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
             </svg>
           </div>
           <p className="text-base font-bold text-primary">Decision Core</p>
-          <p className="mt-1.5 text-sm text-muted">Select a signal to inspect the agent's reasoning trace.</p>
+          <p className="mt-1.5 text-sm text-muted">Select a signal to inspect the agent&apos;s reasoning trace.</p>
         </div>
       </div>
     );
@@ -33,7 +40,7 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
 
   const sentimentPct  = Math.min(100, Math.max(0, ((trade.sentiment_score + 1) / 2) * 100));
   const confidencePct = Math.round(trade.confidence_score * 100);
-  const articleUrl = safeArticleUrl(trade.article_url);
+  const articleUrl    = safeArticleUrl(trade.article_url);
 
   return (
     <div className="glass-panel flex h-full min-h-[360px] flex-col overflow-hidden rounded-2xl xl:min-h-0">
@@ -117,9 +124,26 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
           </div>
         </div>
 
-        {/* AI Reasoning */}
+        {/* Committee Debate */}
+        {trade.committee_debate && trade.committee_debate.length > 0 && (
+          <div className="rounded-xl border border-line bg-surface-2 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Committee Debate</p>
+              <span className="text-[10px] text-muted">
+                {summariseVote(trade.committee_debate)}
+              </span>
+            </div>
+            <div className="space-y-3">
+              {trade.committee_debate.map((p) => (
+                <PersonaCard key={p.name} persona={p} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Consensus */}
         <div className="rounded-xl border border-line bg-surface-2 p-4">
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">AI Reasoning</p>
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">Portfolio Manager Consensus</p>
           <p className="text-sm leading-relaxed text-secondary">{trade.reasoning}</p>
         </div>
 
@@ -141,6 +165,74 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Sub-components ───────────────────────────────────────────────────────────
+
+function summariseVote(committee: PersonaOpinion[]): string {
+  const counts: Record<string, number> = { BULLISH: 0, BEARISH: 0, NEUTRAL: 0 };
+  committee.forEach((p) => counts[p.stance]++);
+  const parts = Object.entries(counts)
+    .filter(([, n]) => n > 0)
+    .map(([stance, n]) => `${n} ${stance.toLowerCase()}`);
+  return parts.join(" · ");
+}
+
+function PersonaCard({ persona }: { persona: PersonaOpinion }) {
+  const meta = PERSONA_META[persona.name] ?? { initial: persona.name[0], colour: "bg-surface-3 text-muted border-line" };
+
+  const stanceColour =
+    persona.stance === "BULLISH" ? "text-positive bg-positive-soft border-positive-border" :
+    persona.stance === "BEARISH" ? "text-negative bg-negative-soft border-negative-border" :
+                                   "text-muted bg-surface-3 border-line";
+
+  const convictionPct = Math.round(persona.conviction * 100);
+  const convictionColour =
+    convictionPct >= 70 ? "bg-accent" :
+    convictionPct >= 40 ? "bg-amber-500" :
+                          "bg-muted";
+
+  return (
+    <div className="rounded-lg border border-line bg-surface p-3.5">
+
+      {/* Row 1: avatar + name + stance badge + conviction */}
+      <div className="flex items-center gap-2.5">
+        <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border text-xs font-bold ${meta.colour}`}>
+          {meta.initial}
+        </div>
+
+        <span className="flex-1 text-xs font-semibold text-primary">{persona.name}</span>
+
+        <span className={`rounded-md border px-1.5 py-0.5 text-[10px] font-bold ${stanceColour}`}>
+          {persona.stance}
+        </span>
+      </div>
+
+      {/* Conviction bar */}
+      <div className="mt-2.5 flex items-center gap-2">
+        <span className="w-14 shrink-0 text-[10px] text-muted">Conviction</span>
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-3">
+          <div
+            className={`h-full rounded-full transition-all duration-500 ${convictionColour}`}
+            style={{ width: `${convictionPct}%` }}
+          />
+        </div>
+        <span className="w-7 text-right font-mono text-[10px] text-muted">{convictionPct}%</span>
+      </div>
+
+      {/* Sharp one-liner take */}
+      <p className="mt-2.5 border-l-2 border-line pl-2.5 text-[11px] font-medium leading-relaxed text-primary">
+        {persona.view}
+      </p>
+
+      {/* Full reasoning */}
+      {persona.reasoning && persona.reasoning !== persona.view && (
+        <p className="mt-1.5 text-[11px] leading-relaxed text-secondary">
+          {persona.reasoning}
+        </p>
+      )}
     </div>
   );
 }

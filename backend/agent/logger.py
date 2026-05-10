@@ -8,6 +8,11 @@ This is what powers the "Agent Monologue" on the dashboard:
 the recruiter can see the AI was actively reasoning even when it
 decided the signal wasn't strong enough to pull the trigger.
 
+committee_debate is stored as JSONB so the frontend can render
+the individual persona opinions without a schema change — the column
+can hold any JSON shape while the TypeScript type enforces structure
+on the read side.
+
 Implementation note:
   We use the SERVICE ROLE key (not the anon key) because:
   - This runs server-side on Fly.io — the key is never exposed
@@ -52,9 +57,14 @@ class SupabaseLogger:
         article_source: Optional[str] = None,
         article_url: Optional[str] = None,
         article_id: Optional[str] = None,
+        committee_debate: Optional[list] = None,
     ) -> None:
         """
         Insert one row into the trades table.
+
+        committee_debate is a list of dicts like:
+          [{"name": "Momentum Trader", "stance": "BULLISH", "view": "..."},  ...]
+        Supabase stores this as JSONB automatically.
 
         Supabase Realtime picks this up immediately and pushes it to any
         subscribed browser clients — no polling, no refresh needed.
@@ -76,6 +86,8 @@ class SupabaseLogger:
             record["article_url"] = article_url
         if article_id:
             record["article_id"] = article_id
+        if committee_debate:
+            record["committee_debate"] = committee_debate
 
         try:
             self._client.table("trades").insert(record).execute()
