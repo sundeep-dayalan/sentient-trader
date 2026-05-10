@@ -97,6 +97,8 @@ class NewsListener:
                         headline=article.headline,
                         source=getattr(article, "source", None) or "unknown",
                         published_at=pub_time.isoformat(),
+                        article_url=getattr(article, "url", None),
+                        article_id=str(getattr(article, "id", "")) or None,
                     )
                     new_articles += 1
                     break  # one message per article even if multiple tickers match

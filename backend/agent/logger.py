@@ -49,6 +49,9 @@ class SupabaseLogger:
         order_id: Optional[str] = None,
         quantity: int = 1,
         is_simulated: bool = False,
+        article_source: Optional[str] = None,
+        article_url: Optional[str] = None,
+        article_id: Optional[str] = None,
     ) -> None:
         """
         Insert one row into the trades table.
@@ -67,6 +70,12 @@ class SupabaseLogger:
             "quantity":         quantity,
             "is_simulated":     is_simulated,
         }
+        if article_source:
+            record["article_source"] = article_source
+        if article_url:
+            record["article_url"] = article_url
+        if article_id:
+            record["article_id"] = article_id
 
         try:
             self._client.table("trades").insert(record).execute()

@@ -26,6 +26,8 @@ class NewsMessage(BaseModel):
     headline:     str
     source:       str
     published_at: str
+    article_url:  Optional[str] = None
+    article_id:   Optional[str] = None
     is_simulated: bool = False  # True when injected by the Simulate button
 
 

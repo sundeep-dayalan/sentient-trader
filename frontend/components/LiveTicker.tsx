@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { safeArticleUrl } from "@/lib/news";
 import { Trade } from "@/lib/types";
 
 const ACTION_STYLE: Record<string, string> = {
@@ -82,51 +83,79 @@ export default function LiveTicker({
           </div>
         )}
 
-        {visibleTrades.map(trade => (
-          <button
-            key={trade.id}
-            onClick={() => onTradeSelect(trade)}
-            className={[
-              "mb-2 w-full rounded-xl border p-3.5 text-left transition-all duration-150",
-              selectedId === trade.id
-                ? "border-accent-border bg-selected shadow-sm"
-                : "border-[var(--dashboard-border)] bg-[var(--dashboard-row)] hover:border-accent-border hover:bg-hover",
-              newIds.has(trade.id) ? "slide-in" : "",
-            ].join(" ")}
-          >
-            <div className="mb-2.5 flex items-center gap-2">
-              <span className="font-mono text-[13px] font-bold text-accent">{trade.ticker}</span>
-              <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${ACTION_STYLE[trade.trade_action]}`}>
-                {trade.trade_action}
-              </span>
-              {trade.is_simulated && (
-                <span className="rounded-full border border-warning-border bg-warning-soft px-2 py-0.5 text-[10px] font-semibold text-warning">
-                  SIM
-                </span>
-              )}
-              <span className="ml-auto shrink-0 text-[11px] text-muted">
-                {new Date(trade.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              </span>
-            </div>
+        {visibleTrades.map(trade => {
+          const articleUrl = safeArticleUrl(trade.article_url);
 
-            <p className="mb-3 line-clamp-2 text-xs leading-relaxed text-secondary">
-              {trade.headline}
-            </p>
-
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1 rounded-lg border border-line bg-surface px-2.5 py-1 text-[11px]">
-                <span className="text-muted">sentiment</span>
-                <span className={`font-mono font-semibold ${trade.sentiment_score >= 0 ? "text-positive" : "text-negative"}`}>
-                  {trade.sentiment_score >= 0 ? "+" : ""}{trade.sentiment_score.toFixed(2)}
+          return (
+            <div
+              key={trade.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => onTradeSelect(trade)}
+              onKeyDown={(event) => {
+                if (event.currentTarget !== event.target) return;
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onTradeSelect(trade);
+                }
+              }}
+              className={[
+                "mb-2 w-full cursor-pointer rounded-xl border p-3.5 text-left transition-all duration-150",
+                selectedId === trade.id
+                  ? "border-accent-border bg-selected shadow-sm"
+                  : "border-[var(--dashboard-border)] bg-[var(--dashboard-row)] hover:border-accent-border hover:bg-hover",
+                newIds.has(trade.id) ? "slide-in" : "",
+              ].join(" ")}
+            >
+              <div className="mb-2.5 flex items-center gap-2">
+                <span className="font-mono text-[13px] font-bold text-accent">{trade.ticker}</span>
+                <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${ACTION_STYLE[trade.trade_action]}`}>
+                  {trade.trade_action}
                 </span>
+                {trade.is_simulated && (
+                  <span className="rounded-full border border-warning-border bg-warning-soft px-2 py-0.5 text-[10px] font-semibold text-warning">
+                    SIM
+                  </span>
+                )}
+                <div className="ml-auto flex shrink-0 items-center gap-2">
+                  {articleUrl && (
+                    <a
+                      href={articleUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(event) => event.stopPropagation()}
+                      aria-label={`Open source article for ${trade.ticker}`}
+                      title="Open source article"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-line bg-surface text-muted transition hover:border-accent-border hover:text-accent"
+                    >
+                      <ExternalLinkIcon />
+                    </a>
+                  )}
+                  <span className="text-[11px] text-muted">
+                    {new Date(trade.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </div>
               </div>
-              <div className="flex items-center gap-1 rounded-lg border border-line bg-surface px-2.5 py-1 text-[11px]">
-                <span className="text-muted">conf</span>
-                <span className="font-mono font-semibold text-accent">{(trade.confidence_score * 100).toFixed(0)}%</span>
+
+              <p className="mb-3 line-clamp-2 text-xs leading-relaxed text-secondary">
+                {trade.headline}
+              </p>
+
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 rounded-lg border border-line bg-surface px-2.5 py-1 text-[11px]">
+                  <span className="text-muted">sentiment</span>
+                  <span className={`font-mono font-semibold ${trade.sentiment_score >= 0 ? "text-positive" : "text-negative"}`}>
+                    {trade.sentiment_score >= 0 ? "+" : ""}{trade.sentiment_score.toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 rounded-lg border border-line bg-surface px-2.5 py-1 text-[11px]">
+                  <span className="text-muted">conf</span>
+                  <span className="font-mono font-semibold text-accent">{(trade.confidence_score * 100).toFixed(0)}%</span>
+                </div>
               </div>
             </div>
-          </button>
-        ))}
+          );
+        })}
 
         {/* Infinite scroll sentinel */}
         {!isPreview && (
@@ -144,5 +173,15 @@ export default function LiveTicker({
         )}
       </div>
     </div>
+  );
+}
+
+function ExternalLinkIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14 3h7v7" />
+      <path d="M10 14 21 3" />
+      <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+    </svg>
   );
 }

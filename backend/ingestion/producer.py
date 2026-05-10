@@ -15,7 +15,7 @@ and the AI agent — if the agent goes down, messages stay in the stream
 and are processed when it comes back up.
 
 Message fields stored in each stream entry:
-  ticker, headline, source, published_at
+  ticker, headline, source, published_at, article_url, article_id
 """
 
 import json
@@ -54,6 +54,8 @@ class RedisStreamProducer:
         headline: str,
         source: str,
         published_at: str,
+        article_url: str | None = None,
+        article_id: str | None = None,
     ) -> None:
         """
         Append one news article to the Redis Stream.
@@ -68,6 +70,10 @@ class RedisStreamProducer:
             "source":       source,
             "published_at": published_at,
         }
+        if article_url:
+            message["article_url"] = article_url
+        if article_id:
+            message["article_id"] = article_id
 
         try:
             entry_id = self._redis.xadd(

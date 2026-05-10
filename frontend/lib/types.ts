@@ -8,6 +8,9 @@ export interface Trade {
   created_at: string;
   ticker: string;
   headline: string;
+  article_url: string | null;
+  article_source: string | null;
+  article_id: string | null;
   sentiment_score: number;   // -1.0 to 1.0
   confidence_score: number;  // 0.0 to 1.0
   reasoning: string;

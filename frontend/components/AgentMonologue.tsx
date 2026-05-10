@@ -1,5 +1,6 @@
 "use client";
 
+import { articleSourceLabel, safeArticleUrl } from "@/lib/news";
 import { Trade } from "@/lib/types";
 
 interface AgentMonologueProps { trade: Trade | null; }
@@ -32,6 +33,7 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
 
   const sentimentPct  = Math.min(100, Math.max(0, ((trade.sentiment_score + 1) / 2) * 100));
   const confidencePct = Math.round(trade.confidence_score * 100);
+  const articleUrl = safeArticleUrl(trade.article_url);
 
   return (
     <div className="glass-panel flex h-full min-h-[360px] flex-col overflow-hidden rounded-2xl xl:min-h-0">
@@ -58,7 +60,20 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
 
         {/* Headline */}
         <div className="rounded-xl border border-line bg-surface-2 p-4">
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">Market Headline</p>
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Market Headline</p>
+            {articleUrl && (
+              <a
+                href={articleUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1 text-[11px] font-semibold text-secondary transition hover:border-accent-border hover:text-accent"
+              >
+                <span className="max-w-[140px] truncate">{articleSourceLabel(trade.article_source)}</span>
+                <ExternalLinkIcon />
+              </a>
+            )}
+          </div>
           <p className="border-l-2 border-accent pl-3.5 text-sm leading-relaxed text-primary">
             &quot;{trade.headline}&quot;
           </p>
@@ -127,5 +142,15 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
         )}
       </div>
     </div>
+  );
+}
+
+function ExternalLinkIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14 3h7v7" />
+      <path d="M10 14 21 3" />
+      <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+    </svg>
   );
 }

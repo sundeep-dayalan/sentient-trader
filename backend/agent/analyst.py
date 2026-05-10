@@ -207,6 +207,9 @@ def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
             trade_action=a.action,
             order_id=state.get("trade_order_id"),
             is_simulated=state.get("is_simulated", False),
+            article_source=news.source,
+            article_url=news.article_url,
+            article_id=news.article_id,
         )
 
         # Mark as seen for HOLD decisions too, so we don't re-analyze the same
