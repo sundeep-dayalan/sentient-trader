@@ -663,7 +663,10 @@ def build_agent_graph(
     The ModelRouter and instructor client are created once here and shared
     across all four persona nodes via closure — no re-initialization per message.
     """
-    groq_client = instructor.from_groq(Groq(api_key=os.environ["GROQ_API_KEY"]))
+    groq_client = instructor.from_groq(
+        Groq(api_key=os.environ["GROQ_API_KEY"]),
+        mode=instructor.Mode.JSON,
+    )
     router      = ModelRouter()
 
     graph = StateGraph(AgentState)
