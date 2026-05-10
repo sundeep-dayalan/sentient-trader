@@ -5,12 +5,87 @@ import { PersonaOpinion, Trade } from "@/lib/types";
 
 interface AgentMonologueProps { trade: Trade | null; }
 
-// Avatar initials and icon colour per persona
 const PERSONA_META: Record<string, { initial: string; colour: string }> = {
   "Momentum Trader": { initial: "M", colour: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
   "Value Investor":  { initial: "V", colour: "bg-purple-500/20 text-purple-400 border-purple-500/30" },
   "Risk Manager":    { initial: "R", colour: "bg-amber-500/20 text-amber-400 border-amber-500/30" },
 };
+
+const TOOLTIPS = {
+  sentiment:    "Score from -1.0 (very bearish) to +1.0 (very bullish). The Portfolio Manager produces this after weighing all three personas' stances and convictions.",
+  confidence:   "How certain the committee is in their call. A split debate lowers this — a unanimous 3-0 vote at high conviction produces higher confidence than a 2-1 split.",
+  committee:    "Three AI personas debate the headline sequentially. Each reads the previous persona's full opinion before responding, producing genuine disagreement rather than independent monologues.",
+  conviction:   "How strongly this persona believes their own stance. A high-conviction dissenter (0.8+) can pull the Portfolio Manager's final confidence down even if outvoted 2-1.",
+  bullish:      "Expects the stock price to rise. The bull thrusts its horns upward — prices going up.",
+  bearish:      "Expects the stock price to fall. The bear swipes its paws downward — prices going down.",
+  neutral:      "No strong directional view. Acts as a dissenting voice against whichever side has the majority, lowering overall confidence.",
+  consensus:    "The Portfolio Manager's final synthesis — written after weighing all three debate opinions and their conviction scores. This is the reasoning behind the BUY / SELL / HOLD decision.",
+  action:       "The final trade decision. BUY = purchase shares, SELL = sell shares, HOLD = do nothing. Only fires a real order if sentiment and confidence both clear the configured thresholds.",
+  marketOrder:  "Executes immediately at the current market price. Chosen over limit orders because news-driven trades prioritise speed over price precision.",
+  paperTrading: "Simulated trading with real market data but no real money. Used to validate strategy before ever risking live capital.",
+};
+
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+
+function Tooltip({ text, side = "top" }: { text: string; side?: "top" | "bottom" }) {
+  const isTop = side === "top";
+  return (
+    <span className="group relative inline-flex shrink-0 cursor-default items-center">
+      <InfoIcon />
+      <span
+        className={[
+          "pointer-events-none absolute left-1/2 z-50 w-56 -translate-x-1/2 rounded-xl border border-line bg-surface px-3 py-2.5",
+          "text-[11px] leading-relaxed text-secondary shadow-xl opacity-0 transition-opacity duration-150 group-hover:opacity-100",
+          isTop ? "bottom-full mb-2" : "top-full mt-2",
+        ].join(" ")}
+      >
+        {text}
+        {/* arrow */}
+        <span className={[
+          "absolute left-1/2 -translate-x-1/2 border-4 border-transparent",
+          isTop ? "top-full border-t-line -mt-px" : "bottom-full border-b-line -mb-px",
+        ].join(" ")} />
+      </span>
+    </span>
+  );
+}
+
+// ── Labelled section header with optional tooltip ─────────────────────────────
+
+function SectionLabel({ label, tooltip, side }: { label: string; tooltip?: string; side?: "top" | "bottom" }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">{label}</p>
+      {tooltip && <Tooltip text={tooltip} side={side} />}
+    </div>
+  );
+}
+
+// ── Stance badge with tooltip ─────────────────────────────────────────────────
+
+function StanceBadge({ stance }: { stance: string }) {
+  const colour =
+    stance === "BULLISH" ? "text-positive bg-positive-soft border-positive-border" :
+    stance === "BEARISH" ? "text-negative bg-negative-soft border-negative-border" :
+                           "text-muted bg-surface-3 border-line";
+
+  const tip =
+    stance === "BULLISH" ? TOOLTIPS.bullish :
+    stance === "BEARISH" ? TOOLTIPS.bearish :
+                           TOOLTIPS.neutral;
+
+  return (
+    <span className={`group relative inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-bold ${colour}`}>
+      {stance}
+      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-48 -translate-x-1/2 rounded-xl border border-line bg-surface px-3 py-2 text-[11px] leading-relaxed font-normal text-secondary shadow-xl opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+        {tip}
+        <span className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-line" />
+      </span>
+    </span>
+  );
+}
+
+// ── Root component ────────────────────────────────────────────────────────────
 
 export default function AgentMonologue({ trade }: AgentMonologueProps) {
   if (!trade) {
@@ -57,13 +132,18 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
               </span>
             </div>
           </div>
-          <span className={`rounded-xl border px-3 py-1.5 text-xs font-bold ${actionColor} ${actionBg}`}>
+          {/* Action badge with tooltip */}
+          <span className={`group relative inline-flex cursor-default items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold ${actionColor} ${actionBg}`}>
             {trade.trade_action}
+            <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-line bg-surface px-3 py-2.5 text-[11px] font-normal leading-relaxed text-secondary shadow-xl opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+              {TOOLTIPS.action}
+              <span className="absolute bottom-full right-3 border-4 border-transparent border-b-line" />
+            </span>
           </span>
         </div>
       </div>
 
-      <div className="modern-scroll min-h-0 flex-1 space-y-3 overflow-y-auto p-5 pr-4">
+      <div className="modern-scroll min-h-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto p-5 pr-4">
 
         {/* Headline */}
         <div className="rounded-xl border border-line bg-surface-2 p-4">
@@ -90,7 +170,7 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
         <div className="grid gap-3 md:grid-cols-2">
           <div className="rounded-xl border border-line bg-surface-2 p-4">
             <div className="mb-3 flex items-center justify-between">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Sentiment</p>
+              <SectionLabel label="Sentiment" tooltip={TOOLTIPS.sentiment} />
               <span className={`font-mono text-sm font-bold ${trade.sentiment_score >= 0 ? "text-positive" : "text-negative"}`}>
                 {trade.sentiment_score >= 0 ? "+" : ""}{trade.sentiment_score.toFixed(3)}
               </span>
@@ -109,7 +189,7 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
 
           <div className="rounded-xl border border-line bg-surface-2 p-4">
             <div className="mb-3 flex items-center justify-between">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Confidence</p>
+              <SectionLabel label="Confidence" tooltip={TOOLTIPS.confidence} />
               <span className="font-mono text-sm font-bold text-accent">{confidencePct}%</span>
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-surface-3">
@@ -128,7 +208,7 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
         {trade.committee_debate && trade.committee_debate.length > 0 && (
           <div className="rounded-xl border border-line bg-surface-2 p-4">
             <div className="mb-3 flex items-center justify-between">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Committee Debate</p>
+              <SectionLabel label="Committee Debate" tooltip={TOOLTIPS.committee} />
               <span className="text-[10px] text-muted">
                 {summariseVote(trade.committee_debate)}
               </span>
@@ -143,8 +223,8 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
 
         {/* Consensus */}
         <div className="rounded-xl border border-line bg-surface-2 p-4">
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">Portfolio Manager Consensus</p>
-          <p className="text-sm leading-relaxed text-secondary">{trade.reasoning}</p>
+          <SectionLabel label="Portfolio Manager Consensus" tooltip={TOOLTIPS.consensus} />
+          <p className="mt-2 text-sm leading-relaxed text-secondary">{trade.reasoning}</p>
         </div>
 
         {/* Order confirmation */}
@@ -158,9 +238,24 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
             <div className="min-w-0">
               <p className="text-xs font-bold text-positive">Order Executed via Alpaca</p>
               <p className="mt-0.5 break-all font-mono text-[11px] text-positive opacity-80">{trade.order_id}</p>
-              <p className="mt-0.5 text-[11px] text-positive opacity-70">
-                {trade.quantity} share(s) · Paper Trading · Market Order
-              </p>
+              <div className="mt-0.5 flex items-center gap-1 text-[11px] text-positive opacity-70">
+                {trade.quantity} share(s) ·{" "}
+                <span className="group relative inline-flex cursor-default items-center gap-0.5">
+                  Paper Trading
+                  <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-52 -translate-x-1/2 rounded-xl border border-line bg-surface px-3 py-2 text-[11px] leading-relaxed font-normal text-secondary shadow-xl opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+                    {TOOLTIPS.paperTrading}
+                    <span className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-line" />
+                  </span>
+                </span>{" "}
+                ·{" "}
+                <span className="group relative inline-flex cursor-default items-center gap-0.5">
+                  Market Order
+                  <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-52 -translate-x-1/2 rounded-xl border border-line bg-surface px-3 py-2 text-[11px] leading-relaxed font-normal text-secondary shadow-xl opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+                    {TOOLTIPS.marketOrder}
+                    <span className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-line" />
+                  </span>
+                </span>
+              </div>
             </div>
           </div>
         )}
@@ -169,25 +264,19 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
   );
 }
 
-// ── Sub-components ───────────────────────────────────────────────────────────
+// ── Sub-components ────────────────────────────────────────────────────────────
 
 function summariseVote(committee: PersonaOpinion[]): string {
   const counts: Record<string, number> = { BULLISH: 0, BEARISH: 0, NEUTRAL: 0 };
   committee.forEach((p) => counts[p.stance]++);
-  const parts = Object.entries(counts)
+  return Object.entries(counts)
     .filter(([, n]) => n > 0)
-    .map(([stance, n]) => `${n} ${stance.toLowerCase()}`);
-  return parts.join(" · ");
+    .map(([stance, n]) => `${n} ${stance.toLowerCase()}`)
+    .join(" · ");
 }
 
 function PersonaCard({ persona }: { persona: PersonaOpinion }) {
   const meta = PERSONA_META[persona.name] ?? { initial: persona.name[0], colour: "bg-surface-3 text-muted border-line" };
-
-  const stanceColour =
-    persona.stance === "BULLISH" ? "text-positive bg-positive-soft border-positive-border" :
-    persona.stance === "BEARISH" ? "text-negative bg-negative-soft border-negative-border" :
-                                   "text-muted bg-surface-3 border-line";
-
   const convictionPct = Math.round(persona.conviction * 100);
   const convictionColour =
     convictionPct >= 70 ? "bg-accent" :
@@ -195,24 +284,23 @@ function PersonaCard({ persona }: { persona: PersonaOpinion }) {
                           "bg-muted";
 
   return (
-    <div className="rounded-lg border border-line bg-surface p-3.5">
+    <div className="min-w-0 rounded-lg border border-line bg-surface p-3.5">
 
-      {/* Row 1: avatar + name + stance badge + conviction */}
+      {/* Row 1: avatar + name + stance badge */}
       <div className="flex items-center gap-2.5">
         <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border text-xs font-bold ${meta.colour}`}>
           {meta.initial}
         </div>
-
         <span className="flex-1 text-xs font-semibold text-primary">{persona.name}</span>
-
-        <span className={`rounded-md border px-1.5 py-0.5 text-[10px] font-bold ${stanceColour}`}>
-          {persona.stance}
-        </span>
+        <StanceBadge stance={persona.stance} />
       </div>
 
-      {/* Conviction bar */}
+      {/* Conviction bar with tooltip */}
       <div className="mt-2.5 flex items-center gap-2">
-        <span className="w-14 shrink-0 text-[10px] text-muted">Conviction</span>
+        <div className="flex shrink-0 items-center gap-1 text-[10px] text-muted">
+          Conviction
+          <Tooltip text={TOOLTIPS.conviction} side="bottom" />
+        </div>
         <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-3">
           <div
             className={`h-full rounded-full transition-all duration-500 ${convictionColour}`}
@@ -234,6 +322,18 @@ function PersonaCard({ persona }: { persona: PersonaOpinion }) {
         </p>
       )}
     </div>
+  );
+}
+
+// ── Icons ─────────────────────────────────────────────────────────────────────
+
+function InfoIcon() {
+  return (
+    <svg className="h-3 w-3 shrink-0 text-muted opacity-60 transition-opacity group-hover:opacity-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4" />
+      <path d="M12 8h.01" />
+    </svg>
   );
 }
 

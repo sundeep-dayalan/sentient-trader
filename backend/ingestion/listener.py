@@ -97,6 +97,7 @@ class NewsListener:
                         headline=article.headline,
                         source=getattr(article, "source", None) or "unknown",
                         published_at=pub_time.isoformat(),
+                        summary=getattr(article, "summary", None) or None,
                         article_url=getattr(article, "url", None),
                         article_id=str(getattr(article, "id", "")) or None,
                     )

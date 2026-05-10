@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Optional, TypedDict
 
 import instructor
@@ -106,6 +107,7 @@ class ModelRouter:
 
     def __init__(self) -> None:
         self._blacklisted: set[str] = set()
+        self._rate_limited_until: dict[str, float] = {}  # model → epoch when 60s cooldown expires
 
     def call(
         self,
@@ -132,7 +134,11 @@ class ModelRouter:
             )
             return result, config.MODEL_OVERRIDE
 
-        available = [m for m in self.TIERS if m not in self._blacklisted]
+        available = [
+            m for m in self.TIERS
+            if m not in self._blacklisted
+            and time.time() >= self._rate_limited_until.get(m, 0)
+        ]
         if not available:
             raise RuntimeError(
                 f"All Groq model tiers exhausted for this session. "
@@ -160,13 +166,11 @@ class ModelRouter:
                     )
                     self._blacklisted.add(model)
                 else:
-                    # Per-minute limit — don't blacklist, just skip this call
+                    # Per-minute limit — cool down this model for 60s, fall back now
+                    self._rate_limited_until[model] = time.time() + 60
                     log.warning(
-                        "ModelRouter: per-minute rate limit on %s — falling back to %s",
+                        "ModelRouter: per-minute rate limit on %s — cooling down 60s, trying next tier",
                         model,
-                        self.TIERS[self.TIERS.index(model) + 1]
-                        if self.TIERS.index(model) + 1 < len(self.TIERS)
-                        else "nothing (exhausted)",
                     )
                 continue
 
@@ -218,6 +222,13 @@ def _market_line(ticker: str, ctx: Optional[dict]) -> str:
         )
         return f"MARKET: {ticker} @ ${ctx['price']:.2f}{change}"
     return f"MARKET: {ticker} (live price unavailable)"
+
+
+def _summary_section(news: "NewsMessage") -> str:
+    """Return a formatted article summary block, or empty string if none available."""
+    if not news.summary:
+        return ""
+    return f"\n\nARTICLE SUMMARY:\n{news.summary.strip()}"
 
 
 def _opinion_block(label: str, opinion: PersonaAnalysis) -> str:
@@ -327,7 +338,8 @@ def _make_momentum_analyst_node(router: ModelRouter, client: Any):
         news = state["news"]
         prompt = (
             f"{_market_line(news.ticker, state.get('market_context'))}\n"
-            f"HEADLINE: \"{news.headline}\" — {news.source}\n\n"
+            f"HEADLINE: \"{news.headline}\" — {news.source}"
+            f"{_summary_section(news)}\n\n"
             f"Analyze this headline's impact on {news.ticker} from your momentum trading perspective."
         )
 
@@ -376,6 +388,7 @@ def _make_value_analyst_node(router: ModelRouter, client: Any):
         prompt = (
             f"{_market_line(news.ticker, state.get('market_context'))}\n"
             f"HEADLINE: \"{news.headline}\" — {news.source}"
+            f"{_summary_section(news)}"
             f"{prior_section}\n\n"
             f"As the Value Investor, respond to this headline and to the Momentum Trader's assessment. "
             f"Do the fundamentals confirm or contradict their directional call?"
@@ -430,6 +443,7 @@ def _make_risk_analyst_node(router: ModelRouter, client: Any):
         prompt = (
             f"{_market_line(news.ticker, state.get('market_context'))}\n"
             f"HEADLINE: \"{news.headline}\" — {news.source}"
+            f"{_summary_section(news)}"
             f"{debate_section}\n\n"
             f"As the Risk Manager, stress-test the above conclusions for {news.ticker}. "
             f"What tail risk, regulatory exposure, or macro factor are both analysts missing?"
@@ -493,7 +507,8 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
 
         prompt = (
             f"{_market_line(news.ticker, state.get('market_context'))}\n"
-            f"HEADLINE: \"{news.headline}\" — {news.source}\n\n"
+            f"HEADLINE: \"{news.headline}\" — {news.source}"
+            f"{_summary_section(news)}\n\n"
             f"FULL COMMITTEE DEBATE:\n{debate_transcript}\n\n"
             f"As the Portfolio Manager for {news.ticker}, synthesize this debate into a final "
             f"trade decision. Weight conviction scores — high-conviction dissenters matter. "
@@ -610,12 +625,30 @@ def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
         committee_debate is stored as JSONB containing all three personas with
         their conviction scores and full reasoning — the complete audit trail
         of how the decision was reached.
-        """
-        if state.get("analysis") is None:
-            return {"error": state.get("error", "analysis_failed")}
 
+        Even on total failure we write a HOLD row so the signal is visible in the
+        UI (with reasoning explaining why analysis was skipped).
+        """
         news = state["news"]
-        a    = state["analysis"]
+
+        if state.get("analysis") is None:
+            err = state.get("error", "analysis_failed")
+            db.log_trade(
+                ticker=news.ticker,
+                headline=news.headline,
+                sentiment_score=0.0,
+                confidence_score=0.0,
+                reasoning=f"Analysis skipped — {err}",
+                trade_action="HOLD",
+                is_simulated=state.get("is_simulated", False),
+                article_source=news.source,
+                article_url=news.article_url,
+                article_id=news.article_id,
+            )
+            cache.mark_seen(news.headline)
+            return {"error": err}
+
+        a = state["analysis"]
 
         db.log_trade(
             ticker=news.ticker,

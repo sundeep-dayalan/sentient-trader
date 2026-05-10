@@ -23,10 +23,12 @@ import { NextRequest, NextResponse } from "next/server";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { ticker, headline, source } = body as {
-      ticker:   string;
-      headline: string;
-      source?:  string;
+    const { ticker, headline, source, summary, article_url } = body as {
+      ticker:      string;
+      headline:    string;
+      source?:     string;
+      summary?:    string;
+      article_url?: string;
     };
 
     if (!ticker || !headline) {
@@ -50,7 +52,9 @@ export async function POST(req: NextRequest) {
       "headline",      headline,
       "source",        source ?? "simulation",
       "published_at",  new Date().toISOString(),
-      "is_simulated",  "true",   // Pydantic coerces "true" → bool True on the agent side
+      "is_simulated",  "true",
+      ...(summary     ? ["summary",     summary]     : []),
+      ...(article_url ? ["article_url", article_url] : []),
     ];
 
     const response = await fetch(redisUrl, {

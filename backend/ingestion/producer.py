@@ -54,6 +54,7 @@ class RedisStreamProducer:
         headline: str,
         source: str,
         published_at: str,
+        summary: str | None = None,
         article_url: str | None = None,
         article_id: str | None = None,
     ) -> None:
@@ -70,6 +71,8 @@ class RedisStreamProducer:
             "source":       source,
             "published_at": published_at,
         }
+        if summary:
+            message["summary"] = summary
         if article_url:
             message["article_url"] = article_url
         if article_id:

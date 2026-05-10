@@ -10,10 +10,12 @@ interface CustomNewsFormProps {
 }
 
 export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProps) {
-  const [ticker,   setTicker]   = useState("");
-  const [headline, setHeadline] = useState("");
-  const [state,    setState]    = useState<State>("idle");
-  const [errMsg,   setErrMsg]   = useState("");
+  const [ticker,     setTicker]     = useState("");
+  const [headline,   setHeadline]   = useState("");
+  const [summary,    setSummary]    = useState("");
+  const [articleUrl, setArticleUrl] = useState("");
+  const [state,      setState]      = useState<State>("idle");
+  const [errMsg,     setErrMsg]     = useState("");
 
   const canSubmit = ticker.trim().length > 0 && headline.trim().length > 10 && state !== "loading";
 
@@ -27,9 +29,11 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({
-          ticker:   ticker.trim().toUpperCase(),
-          headline: headline.trim(),
-          source:   "custom",
+          ticker:      ticker.trim().toUpperCase(),
+          headline:    headline.trim(),
+          source:      "simulation",
+          summary:     summary.trim()    || undefined,
+          article_url: articleUrl.trim() || undefined,
         }),
       });
 
@@ -40,7 +44,8 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
 
       setState("success");
       setHeadline("");
-      // Reset to idle after 4s so the form can be reused
+      setSummary("");
+      setArticleUrl("");
       setTimeout(() => setState("idle"), 4000);
     } catch (e) {
       setErrMsg(e instanceof Error ? e.message : "Unknown error");
@@ -62,40 +67,77 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
         <div>
           <h3 className="text-sm font-semibold leading-tight">Signal Injector</h3>
           <p className="text-[11px] text-muted">
-            {variant === "modal" ? "Send a ticker and headline through the live AI pipeline." : "Manual headline test"}
+            {variant === "modal" ? "Send a news article through the live AI pipeline." : "Manual headline test"}
           </p>
         </div>
       </div>
 
       {/* Inputs */}
-      <div className="mt-3 flex flex-col gap-2">
-        <input
-          type="text"
-          value={ticker}
-          onChange={e => setTicker(e.target.value.toUpperCase().replace(/[^A-Z]/g, ""))}
-          placeholder="AAPL"
-          maxLength={6}
-          disabled={state === "loading"}
-          className="w-full rounded-xl border border-line bg-surface-2 px-3.5 py-2.5 font-mono text-sm font-bold text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
-        />
-        <textarea
-          value={headline}
-          onChange={e => setHeadline(e.target.value)}
-          placeholder="Apple beats Q3 earnings by 18%, raises full-year guidance"
-          rows={3}
-          disabled={state === "loading"}
-          className="min-h-[72px] resize-none rounded-xl border border-line bg-surface-2 px-3.5 py-2.5 text-sm leading-relaxed text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
-        />
+      <div className="mt-3 flex flex-col gap-2.5">
+
+        {/* Ticker */}
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">Ticker *</label>
+          <input
+            type="text"
+            value={ticker}
+            onChange={e => setTicker(e.target.value.toUpperCase().replace(/[^A-Z]/g, ""))}
+            placeholder="TSLA"
+            maxLength={6}
+            disabled={state === "loading"}
+            className="w-full rounded-xl border border-line bg-surface-2 px-3.5 py-2.5 font-mono text-sm font-bold text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
+          />
+        </div>
+
+        {/* Headline */}
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">Headline *</label>
+          <textarea
+            value={headline}
+            onChange={e => setHeadline(e.target.value)}
+            placeholder="Apple beats Q3 earnings by 18%, raises full-year guidance"
+            rows={2}
+            disabled={state === "loading"}
+            className="w-full resize-none rounded-xl border border-line bg-surface-2 px-3.5 py-2.5 text-sm leading-relaxed text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
+          />
+          {headline.length > 0 && headline.length <= 10 && (
+            <p className="mt-0.5 text-[10px] text-warning">Too short — add more context.</p>
+          )}
+        </div>
+
+        {/* Summary */}
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
+            Article Summary <span className="text-muted font-normal normal-case">(optional — gives personas richer context)</span>
+          </label>
+          <textarea
+            value={summary}
+            onChange={e => setSummary(e.target.value)}
+            placeholder="Apple reported Q3 revenue of $94.9B, up 5% year-over-year, beating analyst estimates of $84.5B. EPS came in at $1.40 vs $1.35 expected. The company raised full-year guidance citing strong iPhone 15 demand in emerging markets..."
+            rows={4}
+            disabled={state === "loading"}
+            className="w-full resize-none rounded-xl border border-line bg-surface-2 px-3.5 py-2.5 text-sm leading-relaxed text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
+          />
+        </div>
+
+        {/* Article URL */}
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
+            Article URL <span className="text-muted font-normal normal-case">(optional)</span>
+          </label>
+          <input
+            type="url"
+            value={articleUrl}
+            onChange={e => setArticleUrl(e.target.value)}
+            placeholder="https://..."
+            disabled={state === "loading"}
+            className="w-full rounded-xl border border-line bg-surface-2 px-3.5 py-2.5 text-sm text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
+          />
+        </div>
       </div>
 
-      {/* Footer row: hint + button */}
-      <div className="mt-2.5 flex flex-col gap-2">
-        <p className="min-h-3 text-[10px] text-muted">
-          {headline.length > 0 && headline.length <= 10 && (
-            <span className="text-warning">Headline too short. Add more context.</span>
-          )}
-        </p>
-
+      {/* Submit button */}
+      <div className="mt-1">
         <button
           onClick={inject}
           disabled={!canSubmit}
@@ -108,40 +150,22 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
               ? "bg-positive-soft border-positive-border text-positive cursor-default"
             : state === "error"
               ? "bg-negative-soft border-negative-border text-negative cursor-default"
-              : canSubmit
+            : canSubmit
               ? "bg-accent border-accent text-white hover:opacity-90 cursor-pointer shadow-sm"
               : "bg-surface-2 border-line text-muted cursor-not-allowed",
           ].join(" ")}
         >
           {state === "loading" && (
-            <>
-              <span className="h-3 w-3 animate-spin rounded-full border-2 border-line border-t-muted" />
-              Injecting...
-            </>
+            <><span className="h-3 w-3 animate-spin rounded-full border-2 border-line border-t-muted" />Injecting...</>
           )}
           {state === "success" && (
-            <>
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-              </svg>
-              Injected
-            </>
+            <><svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>Injected</>
           )}
           {state === "error" && (
-            <>
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-              {errMsg.slice(0, 24)}
-            </>
+            <><svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>{errMsg.slice(0, 32)}</>
           )}
           {state === "idle" && (
-            <>
-              <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M8 5.14v14l11-7-11-7z" />
-              </svg>
-              Inject
-            </>
+            <><svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v14l11-7-11-7z" /></svg>Inject</>
           )}
         </button>
       </div>

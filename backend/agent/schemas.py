@@ -33,6 +33,7 @@ class NewsMessage(BaseModel):
     headline:     str
     source:       str
     published_at: str
+    summary:      Optional[str] = None   # Alpaca article summary — 1-3 paragraphs
     article_url:  Optional[str] = None
     article_id:   Optional[str] = None
     is_simulated: bool = False
