@@ -24,6 +24,7 @@ import sys
 
 from dotenv import load_dotenv
 
+import config
 from analyst import build_agent_graph
 from cache import HeadlineCache
 from consumer import RedisStreamConsumer
@@ -32,17 +33,17 @@ from schemas import NewsMessage
 from trader import AlpacaTrader
 
 load_dotenv()
-config.reload_from_supabase()  # apply any changes saved via the Settings UI
 
-# Suppress httpx's per-request INFO logs — they flood the output during polling
-logging.getLogger("httpx").setLevel(logging.WARNING)
-
+# Set up logging first so any startup errors are visible in Fly logs
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
     stream=sys.stdout,
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+config.reload_from_supabase()
 
 log = logging.getLogger("agent.main")
 
