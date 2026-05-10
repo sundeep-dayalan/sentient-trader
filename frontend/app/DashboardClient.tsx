@@ -9,6 +9,7 @@ import PnLChart        from "@/components/PnLChart";
 import StatsBar        from "@/components/StatsBar";
 import SystemStatus    from "@/components/SystemStatus";
 import ThemeToggle     from "@/components/ThemeToggle";
+import PipelinePage    from "@/components/PipelinePage";
 import { BASE_PATH }   from "@/lib/config";
 import { createClient } from "@/lib/supabase";
 import { DashboardStats, Trade } from "@/lib/types";
@@ -746,7 +747,11 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
             {activeView === "Orders" && <OrdersPage />}
 
-            {activeView !== "Dashboard" && activeView !== "Signals" && activeView !== "Orders" && (
+            {activeView === "Pipeline" && (
+              <PipelinePage stats={dashboardStats} trades={trades} newIds={newIds} />
+            )}
+
+            {activeView !== "Dashboard" && activeView !== "Signals" && activeView !== "Orders" && activeView !== "Pipeline" && (
               <div className="glass-panel flex min-h-[520px] flex-1 items-center justify-center rounded-2xl p-10 text-center">
                 <div>
                   <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl bg-surface-2 text-muted">
