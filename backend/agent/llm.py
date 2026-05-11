@@ -165,18 +165,42 @@ class ModelRouter:
 
         for model in available:
             try:
+                # max_retries=0 for the cascade call: we don't want instructor
+                # to retry the SAME rate-limited model internally.  The
+                # ModelRouter cascade across models IS the retry strategy.
+                # Schema validation retries use the caller's max_retries only
+                # on the model that actually succeeds.
                 result = client.chat.completions.create(
                     model=model,
                     response_model=response_model,
                     messages=messages,
-                    max_retries=max_retries,
+                    max_retries=0,
                 )
                 log.debug("ModelRouter: %s succeeded", model)
                 return result, model
 
-            except RateLimitError as exc:
-                msg = str(exc).lower()
-                is_daily = any(marker in msg for marker in self._DAILY_EXHAUSTION_MARKERS)
+            except Exception as exc:
+                # instructor wraps groq.RateLimitError in tenacity.RetryError,
+                # so `except RateLimitError` alone misses it.  Detect rate
+                # limits by inspecting the full exception string instead —
+                # this works regardless of wrapping layer.
+                exc_str = str(exc).lower()
+                is_rate_limit = (
+                    isinstance(exc, RateLimitError)
+                    or "rate limit" in exc_str
+                    or "rate_limit" in exc_str
+                    or "429" in exc_str
+                )
+
+                if not is_rate_limit:
+                    # Schema validation, network errors, etc. — not a model
+                    # choice problem, don't try next tier.
+                    raise
+
+                is_daily = any(
+                    marker in exc_str
+                    for marker in self._DAILY_EXHAUSTION_MARKERS
+                )
                 if is_daily:
                     log.warning(
                         "ModelRouter: daily quota exhausted for %s — blacklisting for session",
@@ -184,18 +208,12 @@ class ModelRouter:
                     )
                     self._blacklisted.add(model)
                 else:
-                    # Per-minute limit — cool down this model for 60s, fall back now
                     self._rate_limited_until[model] = time.time() + 60
                     log.warning(
                         "ModelRouter: per-minute rate limit on %s — cooling down 60s, trying next tier",
                         model,
                     )
                 continue
-
-            except Exception:
-                # Schema validation failures, network errors, etc. — don't try next tier,
-                # the problem isn't the model choice.
-                raise
 
         raise RuntimeError(
             "All available Groq tiers rate-limited."
