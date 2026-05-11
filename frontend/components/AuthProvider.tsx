@@ -4,7 +4,7 @@
  * Wrap your app with <AuthProvider> to give every component access to:
  *   - user:           The current Supabase user object (or null)
  *   - isAnonymous:    Whether the user is anonymously signed in
- *   - isSuperUser:    Whether the user's email is in the super users list
+ *   - isSuperUser:    Whether the server confirms this user is an admin
  *   - isLoading:      Whether we're still checking the auth state
  *   - signInWithGithub(), signInWithGoogle(), signInWithMagicLink(email)
  *   - signOut()
@@ -15,6 +15,10 @@
  * 3. When the user clicks "Sign in with GitHub/Google", we redirect to the
  *    OAuth provider. When they come back, the anonymous account is upgraded
  *    to a real account automatically (Supabase handles this).
+ *
+ * SECURITY (SEC-02 FIX):
+ * Super user status is determined server-side via GET /api/auth/me.
+ * The admin email list is never exposed to the frontend bundle.
  *
  * Usage:
  *   import { useAuth } from "@/components/AuthProvider"
@@ -52,24 +56,22 @@ export function useAuth(): AuthContextValue {
   return context;
 }
 
-// ── Helper: check if email is in the super users list ──────────
-function checkSuperUser(user: User | null): boolean {
-  if (!user || !user.email) return false;
-
-  // Read from a public env var so the browser can check
-  const superEmails = process.env.NEXT_PUBLIC_SUPER_USER_EMAILS ?? "";
-  const allowedEmails = superEmails
-    .split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter((e) => e.length > 0);
-
-  return allowedEmails.includes(user.email.toLowerCase());
-}
-
 // ── Helper: get auth callback URL ──────────────────────────────
 function getAuthCallbackUrl(): string {
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
   return `${window.location.origin}${basePath}/auth/callback`;
+}
+
+// ── Helper: fetch super user status from the server ────────────
+async function fetchUserRole(): Promise<{ isSuperUser: boolean }> {
+  try {
+    const res = await fetch("/api/auth/me", { credentials: "same-origin" });
+    if (!res.ok) return { isSuperUser: false };
+    const data = await res.json();
+    return { isSuperUser: data.isSuperUser === true };
+  } catch {
+    return { isSuperUser: false };
+  }
 }
 
 // ── Provider Component ─────────────────────────────────────────
@@ -78,10 +80,19 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
   const [user,       setUser]       = useState<User | null>(null);
   const [session,    setSession]    = useState<Session | null>(null);
   const [isLoading,  setIsLoading]  = useState(true);
+  const [isSuperUser_, setIsSuperUser] = useState(false);
 
   // Derived state
   const isAnonymous = user?.is_anonymous === true;
-  const isSuperUser_ = checkSuperUser(user);
+
+  // ── Fetch super user status whenever user changes ─────────────
+  useEffect(() => {
+    if (!user || user.is_anonymous) {
+      setIsSuperUser(false);
+      return;
+    }
+    fetchUserRole().then(({ isSuperUser }) => setIsSuperUser(isSuperUser));
+  }, [user]);
 
   // ── Initialize: check session, exchange OAuth code, or sign in anonymously ──
   useEffect(() => {
@@ -211,3 +222,4 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
     </AuthContext.Provider>
   );
 }
+
