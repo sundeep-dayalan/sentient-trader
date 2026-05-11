@@ -1,6 +1,6 @@
 """
-AI Analyst — LangGraph + Groq Multi-Agent Committee
-=====================================================
+AI Analyst — LangGraph Multi-Agent Committee
+==============================================
 The cognitive core of Sentient Trader. A LangGraph state machine that runs
 a sequential three-persona debate before synthesizing a final trade decision.
 
@@ -12,13 +12,13 @@ Graph topology:
                 │
         [fetch_context]   pulls live price + day-change from Alpaca Data API
                 │
-    [momentum_analyst]    Groq call #1 — trend/momentum lens
+    [momentum_analyst]    LLM call #1 — trend/momentum lens
                 │
-      [value_analyst]     Groq call #2 — reads momentum opinion, responds
+      [value_analyst]     LLM call #2 — reads momentum opinion, responds
                 │
-       [risk_analyst]     Groq call #3 — reads both, stress-tests conclusions
+       [risk_analyst]     LLM call #3 — reads both, stress-tests conclusions
                 │
-        [synthesizer]     Groq call #4 — weighs the debate, makes final call
+        [synthesizer]     LLM call #4 — weighs the debate, makes final call
                 │
         [assess_risk]     pure Python — checks sentiment/confidence thresholds
                 │
@@ -36,17 +36,14 @@ Why sequential instead of parallel personas?
   the value investor reads the momentum trader's take before responding, so
   genuine disagreement surfaces rather than each persona talking past the others.
 
-Why four Groq calls instead of one?
+Why four LLM calls instead of one?
   Each call has its own system prompt locking the model into a specific worldview.
   A system prompt is context-window-level conditioning — it's fundamentally
   different from asking the same model to "roleplay" three voices in one prompt,
   where the first persona's framing contaminates the others.
 
-ModelRouter: quota-aware cascade
-  Each Groq model has its own independent rate-limit bucket.
-  Order: openai/gpt-oss-120b → llama-3.3-70b-versatile → llama-3.1-8b-instant
-  On a 429: per-minute limits skip to next tier; daily-exhausted models are
-  blacklisted in-memory for the session.
+LLM provider details (model tiers, rate-limit handling, client init) live in
+llm.py — this file is provider-agnostic.
 """
 
 from __future__ import annotations
@@ -54,17 +51,15 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-import time
 from typing import Any, Optional, TypedDict
 
-import instructor
 from alpaca.data import StockHistoricalDataClient
 from alpaca.data.requests import StockSnapshotRequest
-from groq import Groq, RateLimitError
 from langgraph.graph import END, START, StateGraph
 
 import config
 from cache import HeadlineCache
+from llm import ModelRouter, create_llm_client, sanitize_llm_error
 from logger import SupabaseLogger
 from schemas import (
     NewsMessage,
@@ -76,113 +71,6 @@ from schemas import (
 from trader import AlpacaTrader
 
 log = logging.getLogger("agent.analyst")
-
-
-# ── ModelRouter ──────────────────────────────────────────────────────────────
-
-class ModelRouter:
-    """
-    Tries Groq models in quality-descending order, falling back on rate limits.
-
-    Groq enforces two types of limits:
-      - Per-minute (RPM / TPM): transient — skip to next tier, don't blacklist.
-      - Daily (req/day / TPD):  persistent — blacklist the model for the session.
-
-    The in-memory blacklist means we don't waste RTT on known-exhausted models.
-    It resets on process restart, which is acceptable since daily limits also
-    reset at midnight UTC.
-
-    If OVERRIDE_MODEL env var is set, the cascade is bypassed entirely —
-    useful for local testing against a specific model tier.
-
-    Tier order (quality / TPM tradeoff):
-      1. openai/gpt-oss-120b     — 1K req/day,  8K TPM  (highest reasoning quality)
-      2. llama-3.3-70b-versatile — 1K req/day, 12K TPM  (strong quality, more headroom)
-      3. llama-3.1-8b-instant    — 14.4K req/day, 6K TPM (volume fallback)
-    """
-
-    TIERS: list[str] = config.MODEL_CASCADE
-
-    # Groq error messages that signal a daily (persistent) quota exhaustion.
-    _DAILY_EXHAUSTION_MARKERS = ("per day", "daily", "quota exceeded", "day limit")
-
-    def __init__(self) -> None:
-        self._blacklisted: set[str] = set()
-        self._rate_limited_until: dict[str, float] = {}  # model → epoch when 60s cooldown expires
-
-    def call(
-        self,
-        client: Any,
-        response_model: type,
-        messages: list[dict],
-        *,
-        max_retries: int = 1,
-    ) -> tuple[Any, str]:
-        """
-        Invoke the LLM with automatic model-tier fallback.
-
-        Returns: (parsed_response, model_name_that_succeeded)
-        Raises:  RuntimeError if all tiers are exhausted or blacklisted.
-                 Any non-rate-limit exception propagates immediately.
-        """
-        # Hard override: bypass cascade entirely
-        if config.MODEL_OVERRIDE:
-            result = client.chat.completions.create(
-                model=config.MODEL_OVERRIDE,
-                response_model=response_model,
-                messages=messages,
-                max_retries=max_retries,
-            )
-            return result, config.MODEL_OVERRIDE
-
-        available = [
-            m for m in self.TIERS
-            if m not in self._blacklisted
-            and time.time() >= self._rate_limited_until.get(m, 0)
-        ]
-        if not available:
-            raise RuntimeError(
-                f"All Groq model tiers exhausted for this session. "
-                f"Blacklisted: {self._blacklisted}"
-            )
-
-        for model in available:
-            try:
-                result = client.chat.completions.create(
-                    model=model,
-                    response_model=response_model,
-                    messages=messages,
-                    max_retries=max_retries,
-                )
-                log.debug("ModelRouter: %s succeeded", model)
-                return result, model
-
-            except RateLimitError as exc:
-                msg = str(exc).lower()
-                is_daily = any(marker in msg for marker in self._DAILY_EXHAUSTION_MARKERS)
-                if is_daily:
-                    log.warning(
-                        "ModelRouter: daily quota exhausted for %s — blacklisting for session",
-                        model,
-                    )
-                    self._blacklisted.add(model)
-                else:
-                    # Per-minute limit — cool down this model for 60s, fall back now
-                    self._rate_limited_until[model] = time.time() + 60
-                    log.warning(
-                        "ModelRouter: per-minute rate limit on %s — cooling down 60s, trying next tier",
-                        model,
-                    )
-                continue
-
-            except Exception:
-                # Schema validation failures, network errors, etc. — don't try next tier,
-                # the problem isn't the model choice.
-                raise
-
-        raise RuntimeError(
-            f"All available Groq tiers rate-limited. Blacklisted: {self._blacklisted}"
-        )
 
 
 # ── LangGraph State ──────────────────────────────────────────────────────────
@@ -327,15 +215,12 @@ def _make_fetch_context_node():
 
 def _make_momentum_analyst_node(router: ModelRouter, client: Any):
     """
-    Groq call #1 — the Momentum Trader.
+    LLM call #1 — the Momentum Trader.
 
     No prior opinions to reference. Sees only the headline and live market
     context. Produces an unconditioned, purely technical/momentum read.
     """
     def momentum_analyst(state: AgentState) -> dict:
-        if state.get("error"):
-            return {"momentum_opinion": None}
-
         news = state["news"]
         prompt = (
             f"{_market_line(news.ticker, state.get('market_context'))}\n"
@@ -361,23 +246,20 @@ def _make_momentum_analyst_node(router: ModelRouter, client: Any):
 
         except Exception as exc:
             log.error("Momentum analyst failed for [%s]: %s", news.ticker, exc)
-            return {"momentum_opinion": None, "error": str(exc)}
+            return {"momentum_opinion": None}
 
     return momentum_analyst
 
 
 def _make_value_analyst_node(router: ModelRouter, client: Any):
     """
-    Groq call #2 — the Value Investor.
+    LLM call #2 — the Value Investor.
 
     Sees the momentum trader's full opinion in the prompt. This is the first
     true debate step: the value investor can agree, disagree, or nuance —
     and their response is conditioned on what the momentum trader actually said.
     """
     def value_analyst(state: AgentState) -> dict:
-        if state.get("error"):
-            return {"value_opinion": None}
-
         news = state["news"]
         m = state.get("momentum_opinion")
 
@@ -412,23 +294,20 @@ def _make_value_analyst_node(router: ModelRouter, client: Any):
 
         except Exception as exc:
             log.error("Value analyst failed for [%s]: %s", news.ticker, exc)
-            return {"value_opinion": None, "error": str(exc)}
+            return {"value_opinion": None}
 
     return value_analyst
 
 
 def _make_risk_analyst_node(router: ModelRouter, client: Any):
     """
-    Groq call #3 — the Risk Manager.
+    LLM call #3 — the Risk Manager.
 
     Sees both prior opinions in full. Their mandate is adversarial: find the
     flaw in both arguments. A strong risk opinion with high conviction should
     suppress the synthesizer's final confidence significantly.
     """
     def risk_analyst(state: AgentState) -> dict:
-        if state.get("error"):
-            return {"risk_opinion": None}
-
         news = state["news"]
         m = state.get("momentum_opinion")
         v = state.get("value_opinion")
@@ -467,14 +346,14 @@ def _make_risk_analyst_node(router: ModelRouter, client: Any):
 
         except Exception as exc:
             log.error("Risk analyst failed for [%s]: %s", news.ticker, exc)
-            return {"risk_opinion": None, "error": str(exc)}
+            return {"risk_opinion": None}
 
     return risk_analyst
 
 
 def _make_synthesizer_node(router: ModelRouter, client: Any):
     """
-    Groq call #4 — the Portfolio Manager.
+    LLM call #4 — the Portfolio Manager.
 
     Receives the full debate transcript. Produces a SynthesisResult, then
     assembles the final TradeAnalysis from all three PersonaOpinion objects.
@@ -483,9 +362,6 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
     is available — one bad API call shouldn't void the whole analysis.
     """
     def synthesizer(state: AgentState) -> dict:
-        if state.get("error"):
-            return {"analysis": None}
-
         news = state["news"]
         m = state.get("momentum_opinion")
         v = state.get("value_opinion")
@@ -493,7 +369,10 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
 
         # If ALL three failed, we have nothing to synthesize
         if not any([m, v, r]):
-            return {"analysis": None, "error": "All persona analyses failed — cannot synthesize"}
+            return {
+                "analysis": None,
+                "error": "All AI model tiers are temporarily unavailable — the system will retry on the next signal.",
+            }
 
         def opinion_entry(label: str, op: Optional[PersonaAnalysis]) -> str:
             if op is None:
@@ -568,7 +447,7 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
 
         except Exception as exc:
             log.error("Synthesizer failed for [%s]: %s", news.ticker, exc)
-            return {"analysis": None, "error": str(exc)}
+            return {"analysis": None, "error": sanitize_llm_error(exc)}
 
     return synthesizer
 
@@ -708,23 +587,20 @@ def build_agent_graph(
     """
     Assemble and compile the LangGraph state machine.
 
-    The ModelRouter and instructor client are created once here and shared
+    The ModelRouter and LLM client are created once here and shared
     across all four persona nodes via closure — no re-initialization per message.
     """
-    groq_client = instructor.from_groq(
-        Groq(api_key=os.environ["GROQ_API_KEY"]),
-        mode=instructor.Mode.JSON,
-    )
-    router      = ModelRouter()
+    llm_client = create_llm_client()
+    router     = ModelRouter()
 
     graph = StateGraph(AgentState)
 
     graph.add_node("check_cache",       _make_check_cache_node(cache))
     graph.add_node("fetch_context",     _make_fetch_context_node())
-    graph.add_node("momentum_analyst",  _make_momentum_analyst_node(router, groq_client))
-    graph.add_node("value_analyst",     _make_value_analyst_node(router, groq_client))
-    graph.add_node("risk_analyst",      _make_risk_analyst_node(router, groq_client))
-    graph.add_node("synthesizer",       _make_synthesizer_node(router, groq_client))
+    graph.add_node("momentum_analyst",  _make_momentum_analyst_node(router, llm_client))
+    graph.add_node("value_analyst",     _make_value_analyst_node(router, llm_client))
+    graph.add_node("risk_analyst",      _make_risk_analyst_node(router, llm_client))
+    graph.add_node("synthesizer",       _make_synthesizer_node(router, llm_client))
     graph.add_node("assess_risk",       _make_assess_risk_node())
     graph.add_node("execute_trade",     _make_execute_trade_node(trader, cache))
     graph.add_node("log_result",        _make_log_result_node(db, cache))
