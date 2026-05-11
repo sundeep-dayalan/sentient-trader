@@ -49,7 +49,8 @@ export async function GET() {
     .single();
 
   if (error || !data?.config) {
-    return NextResponse.json({ error: error?.message ?? "Config row not found — run migration 004" }, { status: 500 });
+    console.error("agent-config GET error:", error?.message ?? "Config row not found");
+    return NextResponse.json({ error: "Failed to load agent configuration." }, { status: 500 });
   }
 
   const row = data.config as Record<string, unknown>;
@@ -165,7 +166,10 @@ export async function POST(request: Request) {
     .eq("id", 1)
     .select();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) {
+    console.error("agent-config POST error:", error.message);
+    return NextResponse.json({ error: "Failed to update configuration. Please try again." }, { status: 500 });
+  }
   if (!updated || updated.length === 0) return NextResponse.json({ error: "Write blocked by RLS — check agent_config policies in Supabase" }, { status: 500 });
   return NextResponse.json({ ok: true });
 }

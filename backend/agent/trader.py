@@ -46,6 +46,7 @@ class AlpacaTrader:
         ticker: str,
         action: str,
         quantity: Optional[int] = None,
+        client_order_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Submit a market order and return the Alpaca order ID.
@@ -64,6 +65,7 @@ class AlpacaTrader:
             qty=qty,
             side=side,
             time_in_force=TimeInForce.DAY,  # auto-cancels at end of day if unfilled
+            client_order_id=client_order_id,  # Alpaca rejects duplicates — idempotent
         )
 
         try:

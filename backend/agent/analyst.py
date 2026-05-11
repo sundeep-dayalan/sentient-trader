@@ -51,6 +51,7 @@ ModelRouter: quota-aware cascade
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
@@ -591,6 +592,15 @@ def _make_assess_risk_node():
 
         should_trade = (is_strong_buy or is_strong_sell) and is_confident
 
+        # ── SIM safety: simulated signals never trigger Alpaca orders ──
+        if state.get("is_simulated", False) and should_trade:
+            log.info(
+                "Risk gate: BLOCKED simulated signal from trading "
+                "(action=%s  sentiment=%.2f  confidence=%.2f)",
+                a.action, a.sentiment, a.confidence,
+            )
+            should_trade = False
+
         log.info(
             "Risk gate: should_trade=%s  (action=%s  sentiment=%.2f  confidence=%.2f)",
             should_trade, a.action, a.sentiment, a.confidence,
@@ -606,10 +616,15 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
         news   = state["news"]
         action = state["analysis"].action
 
+        # Deterministic client_order_id prevents duplicate orders if the
+        # worker crashes after placing the order but before xack (SEC-04).
+        client_order_id = hashlib.sha256(news.headline.encode()).hexdigest()[:36]
+
         order_id = trader.place_order(
             ticker=news.ticker,
             action=action,
             quantity=config.ORDER_QTY,
+            client_order_id=client_order_id,
         )
         cache.mark_seen(news.headline)
         return {"trade_order_id": order_id}

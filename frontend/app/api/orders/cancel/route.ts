@@ -4,14 +4,14 @@
  * Cancels one or more Alpaca paper orders server-side.
  *
  * SECURITY:
- * - Requires authenticated (non-anonymous) user (F-003)
+ * - Requires authenticated super user (SEC-03 fix: prevents IDOR)
  * - Caps orderIds array at 50 to prevent abuse
  *
  * Body: { orderIds: string[] }
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { requireNonAnonymous } from "@/lib/auth-helpers";
+import { requireSuperUser } from "@/lib/auth-helpers";
 
 const ALPACA_BASE_URL = "https://paper-api.alpaca.markets";
 
@@ -58,8 +58,8 @@ async function cancelOrder(orderId: string): Promise<CancelResult> {
 }
 
 export async function POST(request: NextRequest) {
-  // ── Auth check: requires a real (non-anonymous) login ─────────
-  const authResult = await requireNonAnonymous();
+  // ── Auth check: requires a super user (admin) ─────────────────
+  const authResult = await requireSuperUser();
   if (authResult instanceof NextResponse) return authResult;
 
   try {

@@ -227,8 +227,26 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
           <p className="mt-2 text-sm leading-relaxed text-secondary">{trade.reasoning}</p>
         </div>
 
-        {/* Order confirmation */}
-        {trade.order_id && (
+        {/* SIM signal notice — simulated signals never trigger Alpaca orders */}
+        {trade.is_simulated && (
+          <div className="flex items-start gap-3 rounded-xl border border-warning-border bg-warning-soft px-4 py-3.5">
+            <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-warning">
+              <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+              </svg>
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-warning">Simulated Signal — No Orders Placed</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-warning opacity-80">
+                This signal was injected via the Simulate feature. Alpaca orders are always
+                skipped for simulated signals, regardless of confidence or sentiment scores.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Order confirmation — only for real (non-simulated) signals */}
+        {trade.order_id && !trade.is_simulated && (
           <div className="flex items-start gap-3 rounded-xl border border-positive-border bg-positive-soft px-4 py-3.5">
             <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-positive">
               <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
