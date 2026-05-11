@@ -58,12 +58,13 @@ class SupabaseLogger:
         article_url: Optional[str] = None,
         article_id: Optional[str] = None,
         committee_debate: Optional[list] = None,
+        model: Optional[str] = None,
     ) -> None:
         """
         Insert one row into the trades table.
 
         committee_debate is a list of dicts like:
-          [{"name": "Momentum Trader", "stance": "BULLISH", "view": "..."},  ...]
+          [{"name": "Momentum Trader", "stance": "BULLISH", "view": "...", "model": "..."},  ...]
         Supabase stores this as JSONB automatically.
 
         Supabase Realtime picks this up immediately and pushes it to any
@@ -88,6 +89,8 @@ class SupabaseLogger:
             record["article_id"] = article_id
         if committee_debate:
             record["committee_debate"] = committee_debate
+        if model:
+            record["model"] = model
 
         try:
             self._client.table("trades").insert(record).execute()

@@ -9,6 +9,7 @@ export interface PersonaOpinion {
   conviction: number;                               // 0.0–1.0, shown as a conviction bar in the UI
   view:       string;                               // one-sentence headline take (always visible on card)
   reasoning:  string;                               // full 2-3 sentence reasoning (shown below the take)
+  model?:     string | null;                        // LLM model that powered this persona
 }
 
 export interface Trade {
@@ -27,6 +28,7 @@ export interface Trade {
   quantity: number;
   is_simulated: boolean;     // true when injected via the Simulate button
   committee_debate: PersonaOpinion[] | null;  // three persona opinions; null for pre-migration rows
+  model?: string | null;     // LLM model that powered the synthesis
 }
 
 export interface DashboardStats {

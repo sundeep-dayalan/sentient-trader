@@ -92,6 +92,9 @@ class AgentState(TypedDict):
     momentum_opinion:  Optional[PersonaAnalysis]
     value_opinion:     Optional[PersonaAnalysis]
     risk_opinion:      Optional[PersonaAnalysis]
+    momentum_model:    Optional[str]           # model that powered each persona
+    value_model:       Optional[str]
+    risk_model:        Optional[str]
     analysis:          Optional[TradeAnalysis]  # assembled after synthesis
     should_trade:      bool
     trade_order_id:    Optional[str]
@@ -129,7 +132,7 @@ def _opinion_block(label: str, opinion: PersonaAnalysis) -> str:
     )
 
 
-def _to_persona_opinion(name: str, pa: PersonaAnalysis) -> PersonaOpinion:
+def _to_persona_opinion(name: str, pa: PersonaAnalysis, model: Optional[str] = None) -> PersonaOpinion:
     """Convert a raw LLM output (PersonaAnalysis) to the storage type (PersonaOpinion)."""
     return PersonaOpinion(
         name=name,
@@ -137,6 +140,7 @@ def _to_persona_opinion(name: str, pa: PersonaAnalysis) -> PersonaOpinion:
         conviction=pa.conviction,
         view=pa.headline_take,
         reasoning=pa.analysis,
+        model=model,
     )
 
 
@@ -242,11 +246,11 @@ def _make_momentum_analyst_node(router: ModelRouter, client: Any):
                 "Momentum [%s] %s (conviction=%.2f) via %s",
                 news.ticker, result.stance, result.conviction, model,
             )
-            return {"momentum_opinion": result}
+            return {"momentum_opinion": result, "momentum_model": model}
 
         except Exception as exc:
             log.error("Momentum analyst failed for [%s]: %s", news.ticker, exc)
-            return {"momentum_opinion": None}
+            return {"momentum_opinion": None, "momentum_model": None}
 
     return momentum_analyst
 
@@ -290,11 +294,11 @@ def _make_value_analyst_node(router: ModelRouter, client: Any):
                 "Value     [%s] %s (conviction=%.2f) via %s",
                 news.ticker, result.stance, result.conviction, model,
             )
-            return {"value_opinion": result}
+            return {"value_opinion": result, "value_model": model}
 
         except Exception as exc:
             log.error("Value analyst failed for [%s]: %s", news.ticker, exc)
-            return {"value_opinion": None}
+            return {"value_opinion": None, "value_model": None}
 
     return value_analyst
 
@@ -342,11 +346,11 @@ def _make_risk_analyst_node(router: ModelRouter, client: Any):
                 "Risk      [%s] %s (conviction=%.2f) via %s",
                 news.ticker, result.stance, result.conviction, model,
             )
-            return {"risk_opinion": result}
+            return {"risk_opinion": result, "risk_model": model}
 
         except Exception as exc:
             log.error("Risk analyst failed for [%s]: %s", news.ticker, exc)
-            return {"risk_opinion": None}
+            return {"risk_opinion": None, "risk_model": None}
 
     return risk_analyst
 
@@ -407,27 +411,29 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
 
             # Assemble the final TradeAnalysis from all debate components.
             # Substitute a neutral placeholder for any persona whose call failed.
-            def safe_opinion(name: str, pa: Optional[PersonaAnalysis]) -> PersonaOpinion:
+            def safe_opinion(name: str, pa: Optional[PersonaAnalysis], mdl: Optional[str] = None) -> PersonaOpinion:
                 if pa is not None:
-                    return _to_persona_opinion(name, pa)
+                    return _to_persona_opinion(name, pa, model=mdl)
                 return PersonaOpinion(
                     name=name,
                     stance="NEUTRAL",
                     conviction=0.0,
                     view="Analysis unavailable for this persona.",
                     reasoning="This persona's LLM call failed; opinion not included in synthesis.",
+                    model=None,
                 )
 
             analysis = TradeAnalysis(
                 committee=[
-                    safe_opinion("Momentum Trader", m),
-                    safe_opinion("Value Investor",  v),
-                    safe_opinion("Risk Manager",    r),
+                    safe_opinion("Momentum Trader", m, state.get("momentum_model")),
+                    safe_opinion("Value Investor",  v, state.get("value_model")),
+                    safe_opinion("Risk Manager",    r, state.get("risk_model")),
                 ],
                 sentiment=synthesis.sentiment,
                 confidence=synthesis.confidence,
                 reasoning=synthesis.reasoning,
                 action=synthesis.action,
+                model=model,
             )
 
             log.info(
@@ -552,11 +558,13 @@ def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
             reasoning=a.reasoning,
             trade_action=a.action,
             order_id=state.get("trade_order_id"),
+            quantity=config.ORDER_QTY,
             is_simulated=state.get("is_simulated", False),
             article_source=news.source,
             article_url=news.article_url,
             article_id=news.article_id,
             committee_debate=[p.model_dump() for p in a.committee],
+            model=a.model,
         )
 
         if not state.get("trade_order_id"):

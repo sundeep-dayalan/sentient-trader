@@ -124,6 +124,7 @@ class PersonaOpinion(BaseModel):
     conviction: float  # 0.0–1.0, used for the UI conviction bar
     view:       str    # = PersonaAnalysis.headline_take — the one-liner shown on the card
     reasoning:  str    # = PersonaAnalysis.analysis — full text shown on expand
+    model:      Optional[str] = None  # LLM model that powered this persona (e.g. "qwen/qwen3-32b")
 
 
 class TradeAnalysis(BaseModel):
@@ -145,3 +146,4 @@ class TradeAnalysis(BaseModel):
     confidence: float = Field(ge=0.0,  le=1.0)
     reasoning:  str    # consensus one-liner
     action:     Literal["BUY", "SELL", "HOLD"]
+    model:      Optional[str] = None  # LLM model that powered the synthesis

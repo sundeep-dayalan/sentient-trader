@@ -223,7 +223,14 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
 
         {/* Consensus */}
         <div className="rounded-xl border border-line bg-surface-2 p-4">
-          <SectionLabel label="Portfolio Manager Consensus" tooltip={TOOLTIPS.consensus} />
+          <div className="flex items-center justify-between">
+            <SectionLabel label="Portfolio Manager Consensus" tooltip={TOOLTIPS.consensus} />
+            {trade.model && (
+              <span className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-[9px] text-muted">
+                {trade.model.split('/').pop()} {/* E.g. "gpt-oss-120b" */}
+              </span>
+            )}
+          </div>
           <p className="mt-2 text-sm leading-relaxed text-secondary">{trade.reasoning}</p>
         </div>
 
@@ -309,7 +316,14 @@ function PersonaCard({ persona }: { persona: PersonaOpinion }) {
         <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border text-xs font-bold ${meta.colour}`}>
           {meta.initial}
         </div>
-        <span className="flex-1 text-xs font-semibold text-primary">{persona.name}</span>
+        <div className="flex flex-1 flex-col justify-center">
+          <span className="text-xs font-semibold text-primary">{persona.name}</span>
+          {persona.model && (
+            <span className="font-mono text-[9px] text-muted">
+              {persona.model.split('/').pop()}
+            </span>
+          )}
+        </div>
         <StanceBadge stance={persona.stance} />
       </div>
 

@@ -18,10 +18,23 @@ log = logging.getLogger("agent.config")
 
 # ── Infrastructure — deployment-level, not stored in Supabase ────────────────
 
+# Model cascade — ordered by reasoning quality (best first).
+# The ModelRouter tries each model in order, falling back on rate limits.
+# Add or remove models freely — the router handles any list length.
+#
+# Excluded models (incompatible with instructor structured output):
+#   groq/compound, groq/compound-mini  — agentic compound systems, not chat completion
+#   meta-llama/llama-prompt-guard-*    — prompt safety classifiers, not general LLMs
+#   openai/gpt-oss-safeguard-20b       — safety classifier, not general LLM
+#   whisper-*                          — audio transcription, not text generation
+#   allam-2-7b                         — Arabic-focused, poor English financial analysis
 MODEL_CASCADE: list[str] = [
-    "openai/gpt-oss-120b",
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
+    "openai/gpt-oss-120b",                          #  9K req/day,  200K TPD — best reasoning
+    "qwen/qwen3-32b",                               #  9K req/day,  500K TPD — strong reasoning, huge TPD
+    "llama-3.3-70b-versatile",                       #  9K req/day,  100K TPD — proven workhorse
+    "meta-llama/llama-4-scout-17b-16e-instruct",     #  9K req/day,  500K TPD — Llama 4, good quality
+    "openai/gpt-oss-10b",                            #  9K req/day,  200K TPD — smaller but decent
+    "llama-3.1-8b-instant",                          # 14.4K req/day, 500K TPD — volume fallback
 ]
 
 STREAM_KEY     = os.environ.get("REDIS_STREAM_KEY", "market-news")

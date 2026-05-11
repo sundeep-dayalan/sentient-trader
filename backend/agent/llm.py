@@ -14,14 +14,15 @@ No other file in the agent package needs to change.
 ModelRouter: quota-aware cascade
   Each Groq model has its own independent rate-limit bucket.
   Order: openai/gpt-oss-120b → llama-3.3-70b-versatile → llama-3.1-8b-instant
-  On a 429: per-minute limits skip to next tier; daily-exhausted models are
-  blacklisted in-memory for the session.
+  On a 429: the actual retry-after duration from Groq's response is used
+  as the cooldown — no hardcoded values or permanent blacklisting.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from typing import Any
 
@@ -76,19 +77,66 @@ def sanitize_llm_error(exc: Exception) -> str:
     return "AI analysis temporarily unavailable — the system will retry on the next signal."
 
 
+# ── Retry-After Parsing ─────────────────────────────────────────────────────
+
+def _parse_retry_after(exc: Exception) -> float:
+    """
+    Extract the retry-after duration (seconds) from a rate-limit error.
+
+    Checks three sources in priority order:
+      1. ``retry-after`` HTTP header on the raw Groq response — most
+         reliable, set by Groq's API gateway, value is in seconds.
+      2. Error message text — Groq embeds "try again in XmY.Zs" in the
+         JSON body.  Parsed via regex as a fallback.
+      3. Default 60s if neither source is available.
+    """
+    # ── 1. HTTP header (requires unwrapped groq.RateLimitError) ──────
+    raw_exc: Exception | None = exc
+    for _ in range(5):  # walk the exception chain, bounded depth
+        if isinstance(raw_exc, RateLimitError):
+            break
+        raw_exc = getattr(raw_exc, "__cause__", None) or getattr(raw_exc, "__context__", None)
+        if raw_exc is None:
+            break
+
+    if isinstance(raw_exc, RateLimitError) and hasattr(raw_exc, "response") and raw_exc.response:
+        header = raw_exc.response.headers.get("retry-after")
+        if header:
+            try:
+                return float(header)
+            except ValueError:
+                pass
+
+    # ── 2. Parse "try again in XmY.Zs" from the error message ────────
+    match = re.search(
+        r"try again in\s+(?:(\d+(?:\.\d+)?)m)?\s*(?:(\d+(?:\.\d+)?)s)?",
+        str(exc),
+        re.IGNORECASE,
+    )
+    if match:
+        minutes = float(match.group(1)) if match.group(1) else 0.0
+        seconds = float(match.group(2)) if match.group(2) else 0.0
+        parsed = minutes * 60 + seconds
+        if parsed > 0:
+            return parsed
+
+    # ── 3. Default fallback ──────────────────────────────────────────
+    return 60.0
+
+
 # ── ModelRouter ──────────────────────────────────────────────────────────────
 
 class ModelRouter:
     """
     Tries LLM models in quality-descending order, falling back on rate limits.
 
-    Groq enforces two types of limits:
-      - Per-minute (RPM / TPM): transient — skip to next tier, don't blacklist.
-      - Daily (req/day / TPD):  persistent — blacklist the model for the session.
+    When a model returns 429, the actual ``retry-after`` duration from Groq's
+    response is used as the cooldown.  Groq's daily token limit (TPD) is a
+    rolling 24-hour window, so a few minutes of cooldown is typically all
+    that's needed — no permanent blacklisting required.
 
-    The in-memory blacklist means we don't waste RTT on known-exhausted models.
-    It resets on process restart, which is acceptable since daily limits also
-    reset at midnight UTC.
+    If all tiers are cooling down simultaneously, the router waits for the
+    soonest one to expire (up to 10 minutes) instead of failing immediately.
 
     If OVERRIDE_MODEL env var is set, the cascade is bypassed entirely —
     useful for local testing against a specific model tier.
@@ -101,12 +149,9 @@ class ModelRouter:
 
     TIERS: list[str] = config.MODEL_CASCADE
 
-    # Groq error messages that signal a daily (persistent) quota exhaustion.
-    _DAILY_EXHAUSTION_MARKERS = ("per day", "daily", "quota exceeded", "day limit")
-
     def __init__(self) -> None:
-        self._blacklisted: set[str] = set()
-        self._rate_limited_until: dict[str, float] = {}  # model → epoch when 60s cooldown expires
+        # model → epoch when cooldown expires (dynamic TTL from retry-after)
+        self._cooldown_until: dict[str, float] = {}
 
     def call(
         self,
@@ -120,7 +165,7 @@ class ModelRouter:
         Invoke the LLM with automatic model-tier fallback.
 
         Returns: (parsed_response, model_name_that_succeeded)
-        Raises:  RuntimeError if all tiers are exhausted or blacklisted.
+        Raises:  RuntimeError if all tiers are exhausted.
                  Any non-rate-limit exception propagates immediately.
         """
         # Hard override: bypass cascade entirely
@@ -133,34 +178,28 @@ class ModelRouter:
             )
             return result, config.MODEL_OVERRIDE
 
+        now = time.time()
         available = [
             m for m in self.TIERS
-            if m not in self._blacklisted
-            and time.time() >= self._rate_limited_until.get(m, 0)
+            if now >= self._cooldown_until.get(m, 0)
         ]
         if not available:
-            # Check if any non-blacklisted model is just on a transient cooldown
-            cooldown_models = {
-                m: self._rate_limited_until[m]
-                for m in self.TIERS
-                if m not in self._blacklisted and m in self._rate_limited_until
-            }
-            if cooldown_models:
-                # Wait for the soonest cooldown to expire, then retry once
-                soonest = min(cooldown_models.values())
-                wait = soonest - time.time()
-                if 0 < wait <= 90:  # don't wait more than 90s
-                    log.info("ModelRouter: all tiers cooling down — waiting %.0fs for next available model", wait)
-                    time.sleep(wait + 1)
-                    # Re-check availability after waiting
-                    available = [
-                        m for m in self.TIERS
-                        if m not in self._blacklisted
-                        and time.time() >= self._rate_limited_until.get(m, 0)
-                    ]
+            # All models are cooling down — wait for the soonest one
+            soonest = min(self._cooldown_until.values())
+            wait = soonest - time.time()
+            if 0 < wait <= 600:  # don't wait more than 10 minutes
+                log.info(
+                    "ModelRouter: all tiers cooling down — waiting %.0fs for next available model",
+                    wait,
+                )
+                time.sleep(wait + 1)
+                available = [
+                    m for m in self.TIERS
+                    if time.time() >= self._cooldown_until.get(m, 0)
+                ]
             if not available:
                 raise RuntimeError(
-                    "All Groq model tiers exhausted for this session."
+                    "All Groq model tiers exhausted."
                 )
 
         for model in available:
@@ -168,8 +207,6 @@ class ModelRouter:
                 # max_retries=0 for the cascade call: we don't want instructor
                 # to retry the SAME rate-limited model internally.  The
                 # ModelRouter cascade across models IS the retry strategy.
-                # Schema validation retries use the caller's max_retries only
-                # on the model that actually succeeds.
                 result = client.chat.completions.create(
                     model=model,
                     response_model=response_model,
@@ -197,22 +234,13 @@ class ModelRouter:
                     # choice problem, don't try next tier.
                     raise
 
-                is_daily = any(
-                    marker in exc_str
-                    for marker in self._DAILY_EXHAUSTION_MARKERS
+                retry_after = _parse_retry_after(exc)
+                self._cooldown_until[model] = time.time() + retry_after
+                log.warning(
+                    "ModelRouter: rate-limited on %s — cooling down %.0fs (retry-after), trying next tier",
+                    model,
+                    retry_after,
                 )
-                if is_daily:
-                    log.warning(
-                        "ModelRouter: daily quota exhausted for %s — blacklisting for session",
-                        model,
-                    )
-                    self._blacklisted.add(model)
-                else:
-                    self._rate_limited_until[model] = time.time() + 60
-                    log.warning(
-                        "ModelRouter: per-minute rate limit on %s — cooling down 60s, trying next tier",
-                        model,
-                    )
                 continue
 
         raise RuntimeError(
