@@ -254,7 +254,7 @@ sequenceDiagram
     N->>R: headline + market price + summary
     R-->>S: all three opinions in full
     N->>S: headline + market price + summary
-    S-->>DB: action (BUY/SELL/HOLD) + sentiment + confidence + full committee debate
+    S-->>DB: action (BUY/SELL/HOLD) + sentiment + confidence + full decision trace
 ```
 
 #### Call #1 — Momentum Trader
@@ -301,7 +301,7 @@ TradeAnalysis(
 )
 ```
 
-This is what gets stored in Supabase as the signal record — the full committee debate is preserved as JSONB in `committee_debate`.
+This is what gets stored in Supabase as the signal record. The top-level trade columns keep the dashboard fast, while the complete raw Decision Core audit trail is preserved as JSONB in `decision_trace`: exact LLM messages, structured outputs, committee debate, Portfolio Manager synthesis, risk gate, and execution metadata.
 
 ---
 
@@ -465,11 +465,12 @@ New signals appear instantly when the agent writes to Supabase — no polling, n
 
 ### Signal detail view
 
-`AgentMonologue.tsx` renders the full `committee_debate` JSONB stored per signal:
+`AgentMonologue.tsx` renders the `decision_trace` JSONB stored per signal:
 - Stance badge (BULLISH / BEARISH / NEUTRAL) with color coding
 - Conviction bar (0–100% filled)
 - Full reasoning text per persona
 - Synthesizer action badge (BUY / SELL / HOLD) with sentiment and confidence scores
+- Raw LLM operation trace with the exact messages and structured response for each Decision Core call
 - Info icon tooltips on every trading term (sentiment, confidence, conviction, stance, consensus, action, paper trading)
 
 ### Signal Injector
@@ -490,7 +491,7 @@ Submits to `/api/simulate` which calls Upstash directly. The full pipeline fires
 |---|---|---|
 | Message bus | Upstash Redis Stream `market-news` | Durable ordered queue between ingestion and agent (max 1,000 entries) |
 | Deduplication | Upstash Redis (same instance) | SHA-256 headline hash with 5-min TTL — `HeadlineCache` |
-| Signal log | Supabase `trades` table | Every decision, full committee debate as JSONB, Realtime-enabled |
+| Signal log | Supabase `trades` table | Every decision, full Decision Core trace as JSONB, Realtime-enabled |
 | Config | Supabase `agent_config` table | Single row (id=1) — all trading parameters, editable via Settings UI |
 
 ### Supabase `trades` table schema
@@ -511,7 +512,7 @@ Submits to `/api/simulate` which calls Upstash directly. The full pipeline fires
 | `article_source` | `text` | News source name |
 | `article_url` | `text` | Link to original article |
 | `article_id` | `text` | Alpaca article ID |
-| `committee_debate` | `jsonb` | Array of `{name, stance, conviction, view, reasoning}` per persona |
+| `decision_trace` | `jsonb` | Generic Decision Core trace: LLM inputs/outputs, committee debate, Portfolio Manager decision, risk gate, execution |
 
 ### Redis Stream message format
 
@@ -568,7 +569,7 @@ This avoids exposing the service role key in Vercel environment variables while 
 | Agent pipeline | LangGraph 0.2 StateGraph | Explicit conditional routing, composable nodes, no hidden side-effects |
 | Message bus | Upstash Redis Streams | At-least-once delivery, consumer groups, persistent backlog — Kafka semantics without Kafka |
 | Market data | Alpaca News REST + Data API + Paper Trading API | Free tier; news, live prices, and paper orders in one platform |
-| Database | Supabase (Postgres + Realtime) | JSONB for committee debates, Realtime subscriptions for zero-polling live feed |
+| Database | Supabase (Postgres + Realtime) | JSONB for Decision Core traces, Realtime subscriptions for zero-polling live feed |
 | Backend deploy | Two Fly.io workers (shared-cpu-1x, 256 MB) | Independent failure domains; ingestion and agent scale and fail separately |
 | Frontend | Next.js 14 App Router + Tailwind CSS | Server components for Alpaca portfolio API (key never exposed to browser) |
 | Charts | Recharts | PnL equity curve and stats panels |
@@ -628,11 +629,14 @@ sentient-trader/
 │
 ├── supabase/
 │   └── migrations/
-│       ├── 001_create_trades.sql          # trades table + indexes + Realtime enable
-│       ├── 002_add_committee_debate.sql   # committee_debate JSONB column
-│       ├── 003_add_article_fields.sql     # article_source, article_url, article_id
+│       ├── 001_initial_schema.sql         # trades table + indexes + Realtime enable
+│       ├── 002_add_news_references.sql    # article_source, article_url, article_id
+│       ├── 003_add_committee_debate.sql   # legacy committee_debate JSONB column
 │       ├── 004_add_agent_config.sql       # agent_config table + seed default row
-│       └── 005_agent_config_write_policy.sql  # anon UPDATE RLS policy
+│       ├── 005_agent_config_write_policy.sql  # anon UPDATE RLS policy
+│       ├── 006_fix_agent_config_rls.sql   # tighten Settings write policy
+│       ├── 007_add_model_to_trades.sql     # legacy synthesis model column
+│       └── 008_decision_trace_jsonb.sql    # decision_trace JSONB + legacy backfill
 │
 └── README.md
 ```

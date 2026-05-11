@@ -1,7 +1,7 @@
 "use client";
 
 import { articleSourceLabel, safeArticleUrl } from "@/lib/news";
-import { PersonaOpinion, Trade } from "@/lib/types";
+import { DecisionTrace, LLMOperationTrace, PersonaOpinion, Trade } from "@/lib/types";
 
 interface AgentMonologueProps { trade: Trade | null; }
 
@@ -24,6 +24,26 @@ const TOOLTIPS = {
   marketOrder:  "Executes immediately at the current market price. Chosen over limit orders because news-driven trades prioritise speed over price precision.",
   paperTrading: "Simulated trading with real market data but no real money. Used to validate strategy before ever risking live capital.",
 };
+
+function normaliseDecisionTrace(trade: Trade): DecisionTrace {
+  const rawTrace = trade.decision_trace;
+  if (Array.isArray(rawTrace)) {
+    return { committee_debate: rawTrace };
+  }
+
+  const trace: DecisionTrace = rawTrace ?? {};
+  return {
+    ...trace,
+    committee_debate: trace.committee_debate ?? trade.committee_debate ?? [],
+    portfolio_manager_decision: trace.portfolio_manager_decision ?? {
+      model: trade.model ?? null,
+      sentiment: trade.sentiment_score,
+      confidence: trade.confidence_score,
+      reasoning: trade.reasoning,
+      action: trade.trade_action,
+    },
+  };
+}
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 
@@ -116,6 +136,10 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
   const sentimentPct  = Math.min(100, Math.max(0, ((trade.sentiment_score + 1) / 2) * 100));
   const confidencePct = Math.round(trade.confidence_score * 100);
   const articleUrl    = safeArticleUrl(trade.article_url);
+  const decisionTrace = normaliseDecisionTrace(trade);
+  const committee     = decisionTrace.committee_debate ?? [];
+  const llmOperations = decisionTrace.llm_operations ?? [];
+  const portfolioModel = decisionTrace.portfolio_manager_decision?.model ?? trade.model;
 
   return (
     <div className="glass-panel flex h-full min-h-[360px] flex-col overflow-hidden rounded-2xl xl:min-h-0">
@@ -205,16 +229,16 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
         </div>
 
         {/* Committee Debate */}
-        {trade.committee_debate && trade.committee_debate.length > 0 && (
+        {committee.length > 0 && (
           <div className="rounded-xl border border-line bg-surface-2 p-4">
             <div className="mb-3 flex items-center justify-between">
               <SectionLabel label="Committee Debate" tooltip={TOOLTIPS.committee} />
               <span className="text-[10px] text-muted">
-                {summariseVote(trade.committee_debate)}
+                {summariseVote(committee)}
               </span>
             </div>
             <div className="space-y-3">
-              {trade.committee_debate.map((p) => (
+              {committee.map((p) => (
                 <PersonaCard key={p.name} persona={p} />
               ))}
             </div>
@@ -225,14 +249,32 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
         <div className="rounded-xl border border-line bg-surface-2 p-4">
           <div className="flex items-center justify-between">
             <SectionLabel label="Portfolio Manager Consensus" tooltip={TOOLTIPS.consensus} />
-            {trade.model && (
+            {portfolioModel && (
               <span className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-[9px] text-muted">
-                {trade.model.split('/').pop()} {/* E.g. "gpt-oss-120b" */}
+                {portfolioModel.split('/').pop()} {/* E.g. "gpt-oss-120b" */}
               </span>
             )}
           </div>
           <p className="mt-2 text-sm leading-relaxed text-secondary">{trade.reasoning}</p>
         </div>
+
+        {/* Raw Decision Core LLM operations */}
+        {llmOperations.length > 0 && (
+          <div className="rounded-xl border border-line bg-surface-2 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <SectionLabel label="LLM Operations" />
+              <span className="text-[10px] text-muted">{llmOperations.length} steps</span>
+            </div>
+            <div className="space-y-2">
+              {llmOperations.map((operation, index) => (
+                <TraceOperationCard
+                  key={`${operation.step}-${operation.recorded_at ?? index}`}
+                  operation={operation}
+                />
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* SIM signal notice — simulated signals never trigger Alpaca orders */}
         {trade.is_simulated && (
@@ -298,6 +340,54 @@ function summariseVote(committee: PersonaOpinion[]): string {
     .filter(([, n]) => n > 0)
     .map(([stance, n]) => `${n} ${stance.toLowerCase()}`)
     .join(" · ");
+}
+
+function stepTitle(step: string): string {
+  return step
+    .split("_")
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "Unable to render trace payload.";
+  }
+}
+
+function TraceOperationCard({ operation }: { operation: LLMOperationTrace }) {
+  const model = operation.model?.split("/").pop();
+  const failed = Boolean(operation.error);
+  const payload = {
+    messages: operation.messages ?? [],
+    input: operation.input ?? null,
+    output: operation.output ?? null,
+    error: operation.error ?? null,
+  };
+
+  return (
+    <details className="group rounded-lg border border-line bg-surface px-3 py-2.5">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-xs font-semibold text-primary">{stepTitle(operation.step)}</p>
+          <p className="mt-0.5 truncate font-mono text-[9px] text-muted">
+            {operation.response_schema ?? operation.kind}{model ? ` · ${model}` : ""}
+          </p>
+        </div>
+        <span className={[
+          "shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-bold",
+          failed ? "border-negative-border bg-negative-soft text-negative" : "border-positive-border bg-positive-soft text-positive",
+        ].join(" ")}>
+          {failed ? "ERROR" : "OK"}
+        </span>
+      </summary>
+      <pre className="modern-scroll mt-3 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-line bg-surface-3 p-3 text-[10px] leading-relaxed text-secondary">
+        {safeJson(payload)}
+      </pre>
+    </details>
+  );
 }
 
 function PersonaCard({ persona }: { persona: PersonaOpinion }) {

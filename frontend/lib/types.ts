@@ -1,6 +1,7 @@
 /**
  * Shared TypeScript types used across the frontend.
- * These mirror the Supabase `trades` table columns exactly.
+ * These mirror the Supabase `trades` table columns, with optional legacy fields
+ * kept so older development rows still render during the decision_trace rollout.
  */
 
 export interface PersonaOpinion {
@@ -10,6 +11,39 @@ export interface PersonaOpinion {
   view:       string;                               // one-sentence headline take (always visible on card)
   reasoning:  string;                               // full 2-3 sentence reasoning (shown below the take)
   model?:     string | null;                        // LLM model that powered this persona
+}
+
+export interface LLMOperationTrace {
+  step: string;
+  kind: "persona_analysis" | "portfolio_manager_synthesis" | string;
+  response_schema?: string;
+  messages?: Array<{ role: string; content: string }>;
+  input?: unknown;
+  output?: unknown;
+  model?: string | null;
+  error?: string | null;
+  recorded_at?: string;
+}
+
+export interface DecisionTrace {
+  schema_version?: number;
+  pipeline?: string;
+  recorded_at?: string;
+  legacy_migration?: boolean;
+  news?: unknown;
+  market_context?: unknown;
+  llm_operations?: LLMOperationTrace[];
+  committee_debate?: PersonaOpinion[];
+  portfolio_manager_decision?: {
+    model?: string | null;
+    sentiment?: number;
+    confidence?: number;
+    reasoning?: string;
+    action?: "BUY" | "SELL" | "HOLD";
+  } | null;
+  risk_gate?: unknown;
+  execution?: unknown;
+  error?: string | null;
 }
 
 export interface Trade {
@@ -27,8 +61,9 @@ export interface Trade {
   order_id: string | null;   // Alpaca order UUID — null if HOLD
   quantity: number;
   is_simulated: boolean;     // true when injected via the Simulate button
-  committee_debate: PersonaOpinion[] | null;  // three persona opinions; null for pre-migration rows
-  model?: string | null;     // LLM model that powered the synthesis
+  decision_trace?: DecisionTrace | PersonaOpinion[] | null; // generic Decision Core JSONB trace
+  committee_debate?: PersonaOpinion[] | null;              // legacy pre-008 rows
+  model?: string | null;                                   // legacy pre-008 synthesis model
 }
 
 export interface DashboardStats {

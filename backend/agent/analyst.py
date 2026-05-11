@@ -51,6 +51,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any, Optional, TypedDict
 
 from alpaca.data import StockHistoricalDataClient
@@ -62,6 +63,7 @@ from cache import HeadlineCache
 from llm import ModelRouter, create_llm_client, sanitize_llm_error
 from logger import SupabaseLogger
 from schemas import (
+    LLMOperationTrace,
     NewsMessage,
     PersonaAnalysis,
     PersonaOpinion,
@@ -85,6 +87,8 @@ class AgentState(TypedDict):
       - value_opinion    is set by value_analyst (after reading momentum_opinion)
       - risk_opinion     is set by risk_analyst  (after reading both above)
     The synthesizer reads all three, then sets analysis.
+    llm_operations accumulates the exact messages and structured output for
+    every LLM call so log_result can write one complete decision_trace JSONB.
     """
     news:              NewsMessage
     is_cached:         bool
@@ -95,9 +99,12 @@ class AgentState(TypedDict):
     momentum_model:    Optional[str]           # model that powered each persona
     value_model:       Optional[str]
     risk_model:        Optional[str]
+    llm_operations:    list[dict[str, Any]]    # raw prompts/responses per Decision Core LLM call
     analysis:          Optional[TradeAnalysis]  # assembled after synthesis
     should_trade:      bool
+    risk_gate:         Optional[dict[str, Any]]
     trade_order_id:    Optional[str]
+    execution:         Optional[dict[str, Any]]
     error:             Optional[str]
     is_simulated:      bool
 
@@ -142,6 +149,71 @@ def _to_persona_opinion(name: str, pa: PersonaAnalysis, model: Optional[str] = N
         reasoning=pa.analysis,
         model=model,
     )
+
+
+def _dump(value: Any) -> Any:
+    """Return a JSON-serializable snapshot for Pydantic models and plain values."""
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if isinstance(value, dict):
+        return {k: _dump(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_dump(v) for v in value]
+    return value
+
+
+def _messages_for_trace(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Store the exact chat messages sent to the LLM using plain strings."""
+    return [
+        {
+            "role": str(message.get("role", "")),
+            "content": str(message.get("content", "")),
+        }
+        for message in messages
+    ]
+
+
+def _llm_input_snapshot(
+    news: NewsMessage,
+    market_context: Optional[dict],
+    prior_outputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Structured inputs that complement the raw prompt text."""
+    return {
+        "news": news.model_dump(),
+        "market_context": market_context,
+        "prior_outputs": _dump(prior_outputs),
+    }
+
+
+def _llm_operation_trace(
+    *,
+    step: str,
+    kind: str,
+    response_schema: str,
+    messages: list[dict[str, str]],
+    input_payload: dict[str, Any],
+    output: Any = None,
+    model: Optional[str] = None,
+    error: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build one JSONB-ready trace entry for the Decision Core."""
+    return LLMOperationTrace(
+        step=step,
+        kind=kind,
+        response_schema=response_schema,
+        messages=_messages_for_trace(messages),
+        input=input_payload,
+        output=_dump(output) if output is not None else None,
+        model=model,
+        error=error,
+        recorded_at=datetime.now(timezone.utc).isoformat(),
+    ).model_dump()
+
+
+def _append_llm_operation(state: AgentState, operation: dict[str, Any]) -> list[dict[str, Any]]:
+    """Append an LLM trace entry while preserving earlier sequential steps."""
+    return [*state.get("llm_operations", []), operation]
 
 
 # ── Node Factories ───────────────────────────────────────────────────────────
@@ -232,25 +304,56 @@ def _make_momentum_analyst_node(router: ModelRouter, client: Any):
             f"{_summary_section(news)}\n\n"
             f"Analyze this headline's impact on {news.ticker} from your momentum trading perspective."
         )
+        messages = [
+            {"role": "system", "content": config.MOMENTUM_SYSTEM_PROMPT},
+            {"role": "user",   "content": prompt},
+        ]
+        input_payload = _llm_input_snapshot(
+            news,
+            state.get("market_context"),
+            prior_outputs={},
+        )
 
         try:
             result, model = router.call(
                 client,
                 PersonaAnalysis,
-                [
-                    {"role": "system",  "content": config.MOMENTUM_SYSTEM_PROMPT},
-                    {"role": "user",    "content": prompt},
-                ],
+                messages,
             )
             log.info(
                 "Momentum [%s] %s (conviction=%.2f) via %s",
                 news.ticker, result.stance, result.conviction, model,
             )
-            return {"momentum_opinion": result, "momentum_model": model}
+            operation = _llm_operation_trace(
+                step="momentum_analyst",
+                kind="persona_analysis",
+                response_schema="PersonaAnalysis",
+                messages=messages,
+                input_payload=input_payload,
+                output=result,
+                model=model,
+            )
+            return {
+                "momentum_opinion": result,
+                "momentum_model": model,
+                "llm_operations": _append_llm_operation(state, operation),
+            }
 
         except Exception as exc:
             log.error("Momentum analyst failed for [%s]: %s", news.ticker, exc)
-            return {"momentum_opinion": None, "momentum_model": None}
+            operation = _llm_operation_trace(
+                step="momentum_analyst",
+                kind="persona_analysis",
+                response_schema="PersonaAnalysis",
+                messages=messages,
+                input_payload=input_payload,
+                error=sanitize_llm_error(exc),
+            )
+            return {
+                "momentum_opinion": None,
+                "momentum_model": None,
+                "llm_operations": _append_llm_operation(state, operation),
+            }
 
     return momentum_analyst
 
@@ -280,25 +383,56 @@ def _make_value_analyst_node(router: ModelRouter, client: Any):
             f"As the Value Investor, respond to this headline and to the Momentum Trader's assessment. "
             f"Do the fundamentals confirm or contradict their directional call?"
         )
+        messages = [
+            {"role": "system", "content": config.VALUE_SYSTEM_PROMPT},
+            {"role": "user",   "content": prompt},
+        ]
+        input_payload = _llm_input_snapshot(
+            news,
+            state.get("market_context"),
+            prior_outputs={"momentum_analyst": m},
+        )
 
         try:
             result, model = router.call(
                 client,
                 PersonaAnalysis,
-                [
-                    {"role": "system", "content": config.VALUE_SYSTEM_PROMPT},
-                    {"role": "user",   "content": prompt},
-                ],
+                messages,
             )
             log.info(
                 "Value     [%s] %s (conviction=%.2f) via %s",
                 news.ticker, result.stance, result.conviction, model,
             )
-            return {"value_opinion": result, "value_model": model}
+            operation = _llm_operation_trace(
+                step="value_analyst",
+                kind="persona_analysis",
+                response_schema="PersonaAnalysis",
+                messages=messages,
+                input_payload=input_payload,
+                output=result,
+                model=model,
+            )
+            return {
+                "value_opinion": result,
+                "value_model": model,
+                "llm_operations": _append_llm_operation(state, operation),
+            }
 
         except Exception as exc:
             log.error("Value analyst failed for [%s]: %s", news.ticker, exc)
-            return {"value_opinion": None, "value_model": None}
+            operation = _llm_operation_trace(
+                step="value_analyst",
+                kind="persona_analysis",
+                response_schema="PersonaAnalysis",
+                messages=messages,
+                input_payload=input_payload,
+                error=sanitize_llm_error(exc),
+            )
+            return {
+                "value_opinion": None,
+                "value_model": None,
+                "llm_operations": _append_llm_operation(state, operation),
+            }
 
     return value_analyst
 
@@ -332,25 +466,59 @@ def _make_risk_analyst_node(router: ModelRouter, client: Any):
             f"As the Risk Manager, stress-test the above conclusions for {news.ticker}. "
             f"What tail risk, regulatory exposure, or macro factor are both analysts missing?"
         )
+        messages = [
+            {"role": "system", "content": config.RISK_SYSTEM_PROMPT},
+            {"role": "user",   "content": prompt},
+        ]
+        input_payload = _llm_input_snapshot(
+            news,
+            state.get("market_context"),
+            prior_outputs={
+                "momentum_analyst": m,
+                "value_analyst": v,
+            },
+        )
 
         try:
             result, model = router.call(
                 client,
                 PersonaAnalysis,
-                [
-                    {"role": "system", "content": config.RISK_SYSTEM_PROMPT},
-                    {"role": "user",   "content": prompt},
-                ],
+                messages,
             )
             log.info(
                 "Risk      [%s] %s (conviction=%.2f) via %s",
                 news.ticker, result.stance, result.conviction, model,
             )
-            return {"risk_opinion": result, "risk_model": model}
+            operation = _llm_operation_trace(
+                step="risk_analyst",
+                kind="persona_analysis",
+                response_schema="PersonaAnalysis",
+                messages=messages,
+                input_payload=input_payload,
+                output=result,
+                model=model,
+            )
+            return {
+                "risk_opinion": result,
+                "risk_model": model,
+                "llm_operations": _append_llm_operation(state, operation),
+            }
 
         except Exception as exc:
             log.error("Risk analyst failed for [%s]: %s", news.ticker, exc)
-            return {"risk_opinion": None, "risk_model": None}
+            operation = _llm_operation_trace(
+                step="risk_analyst",
+                kind="persona_analysis",
+                response_schema="PersonaAnalysis",
+                messages=messages,
+                input_payload=input_payload,
+                error=sanitize_llm_error(exc),
+            )
+            return {
+                "risk_opinion": None,
+                "risk_model": None,
+                "llm_operations": _append_llm_operation(state, operation),
+            }
 
     return risk_analyst
 
@@ -398,15 +566,26 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
             f"trade decision. Weight conviction scores — high-conviction dissenters matter. "
             f"Acknowledge the key tension if the committee was split."
         )
+        messages = [
+            {"role": "system", "content": config.SYNTHESIS_SYSTEM_PROMPT},
+            {"role": "user",   "content": prompt},
+        ]
+        input_payload = _llm_input_snapshot(
+            news,
+            state.get("market_context"),
+            prior_outputs={
+                "momentum_analyst": m,
+                "value_analyst": v,
+                "risk_analyst": r,
+                "debate_transcript": debate_transcript,
+            },
+        )
 
         try:
             synthesis, model = router.call(
                 client,
                 SynthesisResult,
-                [
-                    {"role": "system", "content": config.SYNTHESIS_SYSTEM_PROMPT},
-                    {"role": "user",   "content": prompt},
-                ],
+                messages,
             )
 
             # Assemble the final TradeAnalysis from all debate components.
@@ -449,11 +628,37 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
                     for p in analysis.committee
                 ),
             )
-            return {"analysis": analysis, "error": None}
+            operation = _llm_operation_trace(
+                step="portfolio_manager_synthesis",
+                kind="portfolio_manager_synthesis",
+                response_schema="SynthesisResult",
+                messages=messages,
+                input_payload=input_payload,
+                output=synthesis,
+                model=model,
+            )
+            return {
+                "analysis": analysis,
+                "error": None,
+                "llm_operations": _append_llm_operation(state, operation),
+            }
 
         except Exception as exc:
             log.error("Synthesizer failed for [%s]: %s", news.ticker, exc)
-            return {"analysis": None, "error": sanitize_llm_error(exc)}
+            clean_error = sanitize_llm_error(exc)
+            operation = _llm_operation_trace(
+                step="portfolio_manager_synthesis",
+                kind="portfolio_manager_synthesis",
+                response_schema="SynthesisResult",
+                messages=messages,
+                input_payload=input_payload,
+                error=clean_error,
+            )
+            return {
+                "analysis": None,
+                "error": clean_error,
+                "llm_operations": _append_llm_operation(state, operation),
+            }
 
     return synthesizer
 
@@ -468,7 +673,20 @@ def _make_assess_risk_node():
         result will be harder to clear this gate than a unanimous one.
         """
         if state.get("analysis") is None:
-            return {"should_trade": False}
+            return {
+                "should_trade": False,
+                "risk_gate": {
+                    "step": "assess_risk",
+                    "inputs": None,
+                    "thresholds": {
+                        "buy_sentiment": config.BUY_SENTIMENT_THRESHOLD,
+                        "sell_sentiment": config.SELL_SENTIMENT_THRESHOLD,
+                        "confidence": config.CONFIDENCE_THRESHOLD,
+                    },
+                    "should_trade": False,
+                    "reason": "No valid analysis available.",
+                },
+            }
 
         a = state["analysis"]
         is_strong_buy  = a.action == "BUY"  and a.sentiment >= config.BUY_SENTIMENT_THRESHOLD
@@ -476,6 +694,14 @@ def _make_assess_risk_node():
         is_confident   = a.confidence >= config.CONFIDENCE_THRESHOLD
 
         should_trade = (is_strong_buy or is_strong_sell) and is_confident
+        reason = "Signal passed configured sentiment and confidence gates."
+        if not should_trade:
+            if a.action == "HOLD":
+                reason = "Portfolio Manager chose HOLD."
+            elif not (is_strong_buy or is_strong_sell):
+                reason = "Directional sentiment did not clear the configured threshold."
+            elif not is_confident:
+                reason = "Confidence did not clear the configured threshold."
 
         # ── SIM safety: simulated signals never trigger Alpaca orders ──
         if state.get("is_simulated", False) and should_trade:
@@ -485,12 +711,36 @@ def _make_assess_risk_node():
                 a.action, a.sentiment, a.confidence,
             )
             should_trade = False
+            reason = "Simulated signals are never sent to Alpaca."
 
         log.info(
             "Risk gate: should_trade=%s  (action=%s  sentiment=%.2f  confidence=%.2f)",
             should_trade, a.action, a.sentiment, a.confidence,
         )
-        return {"should_trade": should_trade}
+        return {
+            "should_trade": should_trade,
+            "risk_gate": {
+                "step": "assess_risk",
+                "inputs": {
+                    "action": a.action,
+                    "sentiment": a.sentiment,
+                    "confidence": a.confidence,
+                    "is_simulated": state.get("is_simulated", False),
+                },
+                "thresholds": {
+                    "buy_sentiment": config.BUY_SENTIMENT_THRESHOLD,
+                    "sell_sentiment": config.SELL_SENTIMENT_THRESHOLD,
+                    "confidence": config.CONFIDENCE_THRESHOLD,
+                },
+                "checks": {
+                    "strong_buy": is_strong_buy,
+                    "strong_sell": is_strong_sell,
+                    "confident": is_confident,
+                },
+                "should_trade": should_trade,
+                "reason": reason,
+            },
+        }
 
     return assess_risk
 
@@ -512,19 +762,77 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
             client_order_id=client_order_id,
         )
         cache.mark_seen(news.headline)
-        return {"trade_order_id": order_id}
+        return {
+            "trade_order_id": order_id,
+            "execution": {
+                "step": "execute_trade",
+                "submitted": True,
+                "ticker": news.ticker,
+                "action": action,
+                "quantity": config.ORDER_QTY,
+                "client_order_id": client_order_id,
+                "order_id": order_id,
+            },
+        }
 
     return execute_trade
+
+
+def _build_decision_trace(state: AgentState) -> dict[str, Any]:
+    """
+    Assemble the single JSONB audit record for all Decision Core internals.
+
+    Top-level trade columns stay as dashboard/query summaries; this payload is
+    the complete expandable trace: source news, market context, every LLM call,
+    committee outputs, Portfolio Manager decision, risk gate, and execution.
+    """
+    news = state["news"]
+    analysis = state.get("analysis")
+    committee = [p.model_dump() for p in analysis.committee] if analysis else []
+
+    portfolio_manager_decision = None
+    if analysis is not None:
+        portfolio_manager_decision = {
+            "model": analysis.model,
+            "sentiment": analysis.sentiment,
+            "confidence": analysis.confidence,
+            "reasoning": analysis.reasoning,
+            "action": analysis.action,
+        }
+
+    execution = state.get("execution") or {
+        "step": "execute_trade",
+        "submitted": False,
+        "ticker": news.ticker,
+        "action": analysis.action if analysis else "HOLD",
+        "quantity": config.ORDER_QTY,
+        "order_id": state.get("trade_order_id"),
+        "reason": "No Alpaca order submitted.",
+    }
+
+    return {
+        "schema_version": 1,
+        "pipeline": "decision_core",
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "news": news.model_dump(),
+        "market_context": state.get("market_context"),
+        "llm_operations": state.get("llm_operations", []),
+        "committee_debate": committee,
+        "portfolio_manager_decision": portfolio_manager_decision,
+        "risk_gate": state.get("risk_gate"),
+        "execution": execution,
+        "error": state.get("error"),
+    }
 
 
 def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
     def log_result(state: AgentState) -> dict:
         """
-        Write the full debate record to Supabase — runs for every analyzed headline.
+        Write the full Decision Core trace to Supabase — runs for every analyzed headline.
 
-        committee_debate is stored as JSONB containing all three personas with
-        their conviction scores and full reasoning — the complete audit trail
-        of how the decision was reached.
+        decision_trace is stored as JSONB containing source inputs, exact LLM
+        prompts, structured outputs, the committee debate, the Portfolio Manager
+        decision, risk gate details, and order execution metadata.
 
         Even on total failure we write a HOLD row so the signal is visible in the
         UI (with reasoning explaining why analysis was skipped).
@@ -544,6 +852,7 @@ def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
                 article_source=news.source,
                 article_url=news.article_url,
                 article_id=news.article_id,
+                decision_trace=_build_decision_trace(state),
             )
             cache.mark_seen(news.headline)
             return {"error": err}
@@ -563,8 +872,7 @@ def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
             article_source=news.source,
             article_url=news.article_url,
             article_id=news.article_id,
-            committee_debate=[p.model_dump() for p in a.committee],
-            model=a.model,
+            decision_trace=_build_decision_trace(state),
         )
 
         if not state.get("trade_order_id"):

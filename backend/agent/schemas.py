@@ -9,8 +9,9 @@ Three layers of schema here:
   1. Wire format    — NewsMessage (Redis stream payload)
   2. LLM contracts  — PersonaAnalysis, SynthesisResult (instructor-enforced output
                       per individual LLM call in the multi-agent debate)
-  3. Storage format — PersonaOpinion, TradeAnalysis (assembled from the debate,
-                      written to Supabase, consumed by the frontend)
+  3. Storage format — LLMOperationTrace, PersonaOpinion, TradeAnalysis
+                      (assembled from the debate, written to Supabase,
+                      consumed by the frontend)
 
 Keeping LLM contracts and storage schemas separate lets us evolve the prompt
 engineering (PersonaAnalysis fields) independently from what the UI expects
@@ -19,7 +20,7 @@ engineering (PersonaAnalysis fields) independently from what the UI expects
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -109,14 +110,35 @@ class SynthesisResult(BaseModel):
 
 # ── Storage Format (Supabase + Frontend) ─────────────────────────────────────
 
+class LLMOperationTrace(BaseModel):
+    """
+    One raw Decision Core LLM operation as stored in decision_trace JSONB.
+
+    This intentionally captures both the exact chat messages sent to the model
+    and the structured output accepted from instructor, so future debugging can
+    reconstruct the end-to-end reasoning path without adding columns for every
+    new persona or decision step.
+    """
+
+    step:            str
+    kind:            Literal["persona_analysis", "portfolio_manager_synthesis"]
+    response_schema: str
+    messages:        list[dict[str, str]]
+    input:           dict[str, Any]
+    output:          Optional[dict[str, Any]] = None
+    model:           Optional[str] = None
+    error:           Optional[str] = None
+    recorded_at:     str
+
+
 class PersonaOpinion(BaseModel):
     """
-    One committee member's opinion as stored in Supabase (committee_debate JSONB)
+    One committee member's opinion as stored inside Supabase decision_trace JSONB
     and rendered in the AgentMonologue detail panel.
 
     Assembled from PersonaAnalysis after the LLM call — not produced directly
     by instructor. This decoupling means we can change prompt output fields
-    without changing the database schema or frontend types.
+    without changing the high-level UI contract.
     """
 
     name:       str  # "Momentum Trader" | "Value Investor" | "Risk Manager"

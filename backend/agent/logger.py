@@ -8,10 +8,9 @@ This is what powers the "Agent Monologue" on the dashboard:
 the recruiter can see the AI was actively reasoning even when it
 decided the signal wasn't strong enough to pull the trigger.
 
-committee_debate is stored as JSONB so the frontend can render
-the individual persona opinions without a schema change — the column
-can hold any JSON shape while the TypeScript type enforces structure
-on the read side.
+decision_trace is stored as JSONB so the frontend can render the committee
+while the database keeps the complete LLM audit trail — exact prompts,
+structured outputs, Portfolio Manager decision, risk gate, and execution.
 
 Implementation note:
   We use the SERVICE ROLE key (not the anon key) because:
@@ -57,15 +56,14 @@ class SupabaseLogger:
         article_source: Optional[str] = None,
         article_url: Optional[str] = None,
         article_id: Optional[str] = None,
-        committee_debate: Optional[list] = None,
-        model: Optional[str] = None,
+        decision_trace: Optional[dict] = None,
     ) -> None:
         """
         Insert one row into the trades table.
 
-        committee_debate is a list of dicts like:
-          [{"name": "Momentum Trader", "stance": "BULLISH", "view": "...", "model": "..."},  ...]
-        Supabase stores this as JSONB automatically.
+        decision_trace is a single JSONB document with all Decision Core raw
+        details. It is intentionally generic so future personas, tools, or
+        multi-step decision branches do not require new table columns.
 
         Supabase Realtime picks this up immediately and pushes it to any
         subscribed browser clients — no polling, no refresh needed.
@@ -87,10 +85,8 @@ class SupabaseLogger:
             record["article_url"] = article_url
         if article_id:
             record["article_id"] = article_id
-        if committee_debate:
-            record["committee_debate"] = committee_debate
-        if model:
-            record["model"] = model
+        if decision_trace:
+            record["decision_trace"] = decision_trace
 
         try:
             self._client.table("trades").insert(record).execute()
