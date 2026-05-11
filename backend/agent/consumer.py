@@ -69,8 +69,15 @@ class RedisStreamConsumer:
         """
         log.info("Redis stream consumer ready (stream=%s, group=%s)", config.STREAM_KEY, config.CONSUMER_GROUP)
 
+        last_heartbeat = 0.0
+
         while True:
             try:
+                now = time.time()
+                if now - last_heartbeat > 10:
+                    self._redis.set("agent:heartbeat", str(int(now)))
+                    last_heartbeat = now
+
                 # ">" = give me messages not yet delivered to any consumer in this group
                 results = self._redis.xreadgroup(
                     config.CONSUMER_GROUP,
