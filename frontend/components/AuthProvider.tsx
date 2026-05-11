@@ -65,7 +65,8 @@ function getAuthCallbackUrl(): string {
 // ── Helper: fetch super user status from the server ────────────
 async function fetchUserRole(): Promise<{ isSuperUser: boolean }> {
   try {
-    const res = await fetch("/api/auth/me", { credentials: "same-origin" });
+    const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+    const res = await fetch(`${basePath}/api/auth/me`, { credentials: "same-origin" });
     if (!res.ok) return { isSuperUser: false };
     const data = await res.json();
     return { isSuperUser: data.isSuperUser === true };
