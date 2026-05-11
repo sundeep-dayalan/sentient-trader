@@ -15,9 +15,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Pinned to @v2 instead of @master to prevent supply-chain attacks (F-007)
+      # Pinned to @v1 (repo archived) instead of @master to prevent supply-chain attacks (F-007)
       - name: Setup Flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@v2
+        uses: superfly/flyctl-actions/setup-flyctl@v1
 
       - name: Deploy Agent
         working-directory: backend/agent
