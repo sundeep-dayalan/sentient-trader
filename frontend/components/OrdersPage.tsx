@@ -191,6 +191,13 @@ export default function OrdersPage() {
   const loadOrders = useCallback(async () => {
     try {
       const response = await fetch(`${BASE_PATH}/api/orders?status=all&limit=100`);
+
+      // Auth-protected route: anonymous users get 401/403 — show empty state
+      if (response.status === 401 || response.status === 403) {
+        setLoading(false);
+        return;
+      }
+
       const json = await response.json() as OrdersResponse;
       setData(json);
       setSelectedId(current => current ?? json.orders[0]?.id ?? null);

@@ -68,6 +68,15 @@ export default function PnLChart() {
   const fetchPortfolio = useCallback(async () => {
     try {
       const res = await fetch(`${BASE_PATH}/api/portfolio?range=${period}`, { cache: "no-store" });
+
+      // Auth-protected route: anonymous users get 401/403 — show empty state
+      if (res.status === 401 || res.status === 403) {
+        setData([]);
+        setError(null);
+        setLoading(false);
+        return;
+      }
+
       const json = await res.json() as {
         history?: PortfolioPoint[];
         summary?: PortfolioSummary;

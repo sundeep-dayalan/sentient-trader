@@ -1,11 +1,40 @@
+/**
+ * GET /api/trades?before=<ISO-timestamp>
+ *
+ * Paginated trade history from Supabase.
+ *
+ * SECURITY:
+ * - Public (read-only trade history, no PII)
+ * - `before` cursor validated as ISO 8601 timestamp (F-009)
+ * - Generic error messages — no raw DB errors returned to caller
+ */
+
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase";
 import { Trade } from "@/lib/types";
 
 const PAGE_SIZE = 20;
 
+/**
+ * Validates that a string is a valid ISO 8601 timestamp.
+ * Returns true if valid, false otherwise.
+ */
+function isValidISOTimestamp(value: string): boolean {
+  const date = new Date(value);
+  // Check: (1) it parsed to a real date, (2) it round-trips back to a string
+  return !isNaN(date.getTime()) && date.toISOString().length > 0;
+}
+
 export async function GET(req: NextRequest) {
   const before = req.nextUrl.searchParams.get("before");
+
+  // Validate the cursor if provided (F-009)
+  if (before && !isValidISOTimestamp(before)) {
+    return NextResponse.json(
+      { error: "Invalid 'before' parameter. Must be a valid ISO 8601 timestamp." },
+      { status: 400 },
+    );
+  }
 
   const supabase = createClient();
 
@@ -23,7 +52,12 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await query;
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    // Return a generic error message — never expose raw DB errors (F-009)
+    console.error("Trades query error:", error.message);
+    return NextResponse.json(
+      { error: "Failed to fetch trades. Please try again." },
+      { status: 500 },
+    );
   }
 
   const rows = (data ?? []) as Trade[];

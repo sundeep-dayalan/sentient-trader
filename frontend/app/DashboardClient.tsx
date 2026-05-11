@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import AgentMonologue  from "@/components/AgentMonologue";
+import AuthGate        from "@/components/AuthGate";
 import CustomNewsForm  from "@/components/CustomNewsForm";
 import LiveTicker      from "@/components/LiveTicker";
 import OrdersPage      from "@/components/OrdersPage";
@@ -11,6 +12,7 @@ import SystemStatus    from "@/components/SystemStatus";
 import ThemeToggle     from "@/components/ThemeToggle";
 import PipelinePage    from "@/components/PipelinePage";
 import SettingsPage    from "@/components/SettingsPage";
+import { useAuth }     from "@/components/AuthProvider";
 import { BASE_PATH }   from "@/lib/config";
 import { createClient } from "@/lib/supabase";
 import { DashboardStats, Trade } from "@/lib/types";
@@ -463,7 +465,14 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   const [hasMore,       setHasMore]       = useState(initialTrades.length === PAGE_SIZE);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
+  const [authGateOpen,  setAuthGateOpen]  = useState(false);
+  const [authGateReason, setAuthGateReason] = useState<"auth_required" | "limit_reached">("auth_required");
+  const [userMenuOpen,  setUserMenuOpen]  = useState(false);
+  const [paperBannerDismissed, setPaperBannerDismissed] = useState(false);
   const [activeView,    setActiveView]    = useState<ViewName>("Dashboard");
+
+  // ── Auth state ────────────────────────────────────────────────
+  const { user, isAnonymous, isSuperUser, isLoading: authLoading, signOut } = useAuth();
   const [alpacaData,    setAlpacaData]    = useState<OrdersResponse>(EMPTY_ALPACA_DATA);
   const [alpacaLoading, setAlpacaLoading] = useState(true);
 
@@ -485,6 +494,14 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   const loadAlpacaSummary = useCallback(async () => {
     try {
       const response = await fetch(`${BASE_PATH}/api/orders?status=all&limit=8`);
+
+      // Auth-protected route: anonymous users get 401/403 — show empty data gracefully
+      if (response.status === 401 || response.status === 403) {
+        setAlpacaData(EMPTY_ALPACA_DATA);
+        setAlpacaLoading(false);
+        return;
+      }
+
       const json = await response.json() as OrdersResponse;
       setAlpacaData(json);
     } catch {
@@ -668,6 +685,97 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                 </button>
                 <SystemStatus />
                 <ThemeToggle />
+
+                {/* Auth: user menu or sign-in button */}
+                {!authLoading && user && !isAnonymous && (
+                  <div className="relative">
+                    <button
+                      onClick={() => setUserMenuOpen(prev => !prev)}
+                      className="flex items-center gap-2 rounded-xl border border-line bg-surface-2 px-2.5 py-1.5 transition hover:border-accent-border"
+                    >
+                      {/* Avatar: show profile picture if available, else initial */}
+                      {user.user_metadata?.avatar_url ? (
+                        <img
+                          src={user.user_metadata.avatar_url}
+                          alt=""
+                          className="h-6 w-6 rounded-full"
+                        />
+                      ) : (
+                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent-soft text-[10px] font-bold text-accent">
+                          {(user.email?.[0] ?? "U").toUpperCase()}
+                        </span>
+                      )}
+                      <span className="hidden text-xs font-medium text-secondary sm:inline">
+                        {user.user_metadata?.full_name ?? user.email?.split("@")[0] ?? "User"}
+                      </span>
+                      <svg className={`h-3 w-3 text-muted transition-transform ${userMenuOpen ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="m19 9-7 7-7-7" />
+                      </svg>
+                    </button>
+
+                    {/* Dropdown menu */}
+                    {userMenuOpen && (
+                      <>
+                        {/* Invisible overlay to close on click outside */}
+                        <div className="fixed inset-0 z-[99]" onClick={() => setUserMenuOpen(false)} />
+                        <div className="absolute right-0 top-full z-[100] mt-2 w-64 rounded-xl border border-line bg-surface shadow-card-md">
+                          {/* User info */}
+                          <div className="border-b border-line px-4 py-3">
+                            <div className="flex items-center gap-3">
+                              {user.user_metadata?.avatar_url ? (
+                                <img src={user.user_metadata.avatar_url} alt="" className="h-9 w-9 rounded-full" />
+                              ) : (
+                                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent-soft text-sm font-bold text-accent">
+                                  {(user.email?.[0] ?? "U").toUpperCase()}
+                                </span>
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-semibold text-primary">
+                                  {user.user_metadata?.full_name ?? user.email?.split("@")[0] ?? "User"}
+                                </p>
+                                <p className="truncate text-[11px] text-muted">{user.email}</p>
+                              </div>
+                            </div>
+                            {/* Provider + super user badge */}
+                            <div className="mt-2 flex items-center gap-1.5">
+                              <span className="rounded-md border border-line bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold text-muted">
+                                {user.app_metadata?.provider ?? "email"}
+                              </span>
+                              {isSuperUser && (
+                                <span className="rounded-md border border-accent-border bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent">
+                                  ADMIN
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          {/* Sign out */}
+                          <div className="p-2">
+                            <button
+                              onClick={() => { setUserMenuOpen(false); signOut(); }}
+                              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-secondary transition hover:bg-hover hover:text-negative"
+                            >
+                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
+                              </svg>
+                              Sign out
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+                {!authLoading && (isAnonymous || !user) && (
+                  <button
+                    onClick={() => { setAuthGateReason("auth_required"); setAuthGateOpen(true); }}
+                    className="flex h-9 items-center gap-1.5 rounded-xl border border-line bg-surface-2 px-3 text-xs font-semibold text-secondary transition hover:border-accent-border hover:text-accent"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0" />
+                    </svg>
+                    Sign in
+                  </button>
+                )}
               </div>
             </div>
           </header>
@@ -681,6 +789,27 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                 : "gap-4 xl:overflow-y-auto",
             ].join(" ")}
           >
+
+            {/* Paper trading disclaimer */}
+            {!paperBannerDismissed && (
+              <div className="mb-3 flex items-center gap-3 rounded-xl border border-warning-border bg-warning-soft px-4 py-2.5">
+                <svg className="h-4 w-4 shrink-0 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 0 1-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 0 1 4.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0 1 12 15a9.065 9.065 0 0 0-6.23.693L5 14.5m14.8.8 1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0 1 12 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
+                </svg>
+                <p className="flex-1 text-xs leading-relaxed text-warning">
+                  <strong>Paper Trading Mode</strong> — This dashboard uses Alpaca&apos;s paper trading API with simulated funds. No real money is involved.
+                </p>
+                <button
+                  onClick={() => setPaperBannerDismissed(true)}
+                  className="shrink-0 rounded-lg p-1 text-warning transition hover:bg-warning/10"
+                  aria-label="Dismiss"
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            )}
 
             {/* Page header strip */}
             {activeView !== "Dashboard" && (
@@ -776,6 +905,13 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
         </div>
       </div>
 
+      {/* ── Auth Gate modal ────────────────────────────────────────── */}
+      <AuthGate
+        isOpen={authGateOpen}
+        onClose={() => setAuthGateOpen(false)}
+        reason={authGateReason}
+      />
+
       {/* ── Simulate modal ────────────────────────────────────────── */}
       {isSimulatorOpen && (
         <div
@@ -805,7 +941,14 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                 </svg>
               </button>
             </div>
-            <CustomNewsForm variant="modal" />
+            <CustomNewsForm
+              variant="modal"
+              onAuthRequired={() => {
+                setIsSimulatorOpen(false);
+                setAuthGateReason("auth_required");
+                setAuthGateOpen(true);
+              }}
+            />
           </div>
         </div>
       )}

@@ -3,12 +3,20 @@
  * -----------------------
  * Cancels one or more Alpaca paper orders server-side.
  *
+ * SECURITY:
+ * - Requires authenticated (non-anonymous) user (F-003)
+ * - Caps orderIds array at 50 to prevent abuse
+ *
  * Body: { orderIds: string[] }
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { requireNonAnonymous } from "@/lib/auth-helpers";
 
 const ALPACA_BASE_URL = "https://paper-api.alpaca.markets";
+
+// Maximum number of orders that can be cancelled in one request
+const MAX_ORDER_IDS = 50;
 
 interface CancelResult {
   id: string;
@@ -50,6 +58,10 @@ async function cancelOrder(orderId: string): Promise<CancelResult> {
 }
 
 export async function POST(request: NextRequest) {
+  // ── Auth check: requires a real (non-anonymous) login ─────────
+  const authResult = await requireNonAnonymous();
+  if (authResult instanceof NextResponse) return authResult;
+
   try {
     const body = await request.json().catch(() => ({}));
     const orderIds: string[] = Array.isArray(body.orderIds)
@@ -59,6 +71,14 @@ export async function POST(request: NextRequest) {
     if (orderIds.length === 0) {
       return NextResponse.json(
         { results: [], error: "No order ids provided" },
+        { status: 400 }
+      );
+    }
+
+    // Cap the number of orders to prevent abuse
+    if (orderIds.length > MAX_ORDER_IDS) {
+      return NextResponse.json(
+        { results: [], error: `Too many order IDs. Maximum is ${MAX_ORDER_IDS}.` },
         { status: 400 }
       );
     }
