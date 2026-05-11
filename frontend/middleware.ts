@@ -13,17 +13,6 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 export async function middleware(request: NextRequest) {
-  // ── Intercept stray OAuth codes ────────────────────────────────
-  // If Supabase falls back to the Site URL (instead of /auth/callback),
-  // the ?code= param lands on the root page. Catch it here and forward
-  // to the callback route so it gets exchanged for a real session.
-  const code = request.nextUrl.searchParams.get("code");
-  if (code && !request.nextUrl.pathname.startsWith("/auth/callback")) {
-    const callbackUrl = request.nextUrl.clone();
-    callbackUrl.pathname = "/auth/callback";
-    return NextResponse.redirect(callbackUrl);
-  }
-
   // Start with a "pass-through" response — let the request continue
   let supabaseResponse = NextResponse.next({ request });
 

@@ -83,10 +83,36 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
   const isAnonymous = user?.is_anonymous === true;
   const isSuperUser_ = checkSuperUser(user);
 
-  // ── Initialize: check session or sign in anonymously ─────────
+  // ── Initialize: check session, exchange OAuth code, or sign in anonymously ──
   useEffect(() => {
     async function init() {
-      // Check for existing session
+      // ── Step 1: If there's a ?code= in the URL, exchange it for a session ──
+      // This handles the case where Supabase redirects to the root page
+      // (Site URL fallback) instead of /auth/callback. The PKCE code verifier
+      // is stored in cookies by createBrowserClient, so we can exchange here.
+      const url = new URL(window.location.href);
+      const code = url.searchParams.get("code");
+
+      if (code) {
+        // Clean the code from the URL immediately (don't expose it to the user)
+        url.searchParams.delete("code");
+        window.history.replaceState({}, "", url.pathname + url.search);
+
+        // Exchange the code for a real session
+        const { data: { session: oauthSession }, error: oauthError } =
+          await supabase.auth.exchangeCodeForSession(code);
+
+        if (!oauthError && oauthSession?.user) {
+          setSession(oauthSession);
+          setUser(oauthSession.user);
+          setIsLoading(false);
+          return;
+        }
+        // If exchange fails, fall through to normal init
+        console.error("OAuth code exchange failed:", oauthError?.message);
+      }
+
+      // ── Step 2: Check for existing session ──
       const { data: { session: existingSession } } = await supabase.auth.getSession();
 
       if (existingSession?.user) {
@@ -96,7 +122,7 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
         return;
       }
 
-      // No session → sign in anonymously (invisible to user)
+      // ── Step 3: No session → sign in anonymously (invisible to user) ──
       const { data, error } = await supabase.auth.signInAnonymously();
       if (!error && data.session) {
         setSession(data.session);
