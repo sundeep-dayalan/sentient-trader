@@ -66,6 +66,12 @@ function checkSuperUser(user: User | null): boolean {
   return allowedEmails.includes(user.email.toLowerCase());
 }
 
+// ── Helper: get auth callback URL ──────────────────────────────
+function getAuthCallbackUrl(): string {
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+  return `${window.location.origin}${basePath}/auth/callback`;
+}
+
 // ── Provider Component ─────────────────────────────────────────
 export default function AuthProvider({ children }: { children: React.ReactNode }) {
   const [supabase]   = useState(() => createBrowserClient());
@@ -119,7 +125,7 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
     await supabase.auth.signInWithOAuth({
       provider: "github",
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: getAuthCallbackUrl(),
       },
     });
   }, [supabase]);
@@ -129,7 +135,7 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: getAuthCallbackUrl(),
         queryParams: {
           access_type: "offline",
           prompt: "consent",
@@ -143,7 +149,7 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: getAuthCallbackUrl(),
       },
     });
 
