@@ -17,7 +17,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 export async function GET(request: NextRequest) {
-  const { searchParams, origin } = new URL(request.url);
+  const { searchParams } = new URL(request.url);
+
+  // Determine the real user-facing origin (handles reverse-proxy/CDN setups)
+  const forwardedHost = request.headers.get("x-forwarded-host");
+  const forwardedProto = request.headers.get("x-forwarded-proto") ?? "https";
+  const origin = forwardedHost
+    ? `${forwardedProto}://${forwardedHost}`
+    : new URL(request.url).origin;
+
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
 
   // The "code" is the temporary OAuth token from the provider
   const code = searchParams.get("code");
@@ -27,7 +36,7 @@ export async function GET(request: NextRequest) {
 
   if (code) {
     // Create a Supabase client that can set cookies on the response
-    const response = NextResponse.redirect(`${origin}${next}`);
+    const response = NextResponse.redirect(`${origin}${basePath}${next}`);
 
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -55,5 +64,5 @@ export async function GET(request: NextRequest) {
   }
 
   // If something went wrong, redirect to home with an error param
-  return NextResponse.redirect(`${origin}/?auth_error=callback_failed`);
+  return NextResponse.redirect(`${origin}${basePath}/?auth_error=callback_failed`);
 }
