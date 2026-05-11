@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+const isDev = process.env.NODE_ENV === "development";
+
 const nextConfig: NextConfig = {
   // Prefix all _next/ asset URLs with /sentient-trader so the portfolio proxy
   // rule /sentient-trader/* can forward them to sentienttrader.netlify.app.
@@ -22,7 +24,8 @@ const nextConfig: NextConfig = {
             key: "Content-Security-Policy",
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+              // ST-04 FIX: 'unsafe-eval' only in dev (HMR needs it), stripped in production.
+              `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
               "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.upstash.io",
               "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
               "img-src 'self' data: blob: https://lh3.googleusercontent.com https://avatars.githubusercontent.com",

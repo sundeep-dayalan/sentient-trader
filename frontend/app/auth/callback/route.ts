@@ -32,7 +32,12 @@ export async function GET(request: NextRequest) {
   const code = searchParams.get("code");
 
   // Optional: where to redirect after login (defaults to home page)
-  const next = searchParams.get("next") ?? "/";
+  // ST-02 FIX: Validate `next` is a safe relative path to prevent open redirects.
+  // Reject //, /\, and @ which browsers can interpret as absolute navigations.
+  let next = searchParams.get("next") ?? "/";
+  if (!next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\") || next.includes("@")) {
+    next = "/";
+  }
 
   if (code) {
     // Create a Supabase client that can set cookies on the response

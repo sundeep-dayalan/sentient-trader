@@ -13,6 +13,33 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 export async function middleware(request: NextRequest) {
+  // ── ST-03 FIX: CSRF protection ────────────────────────────────
+  // Verify Origin matches Host for state-changing requests.
+  // Browsers always send the Origin header on cross-site requests,
+  // so this reliably blocks CSRF without token management overhead.
+  const method = request.method.toUpperCase();
+  if (["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
+    const origin = request.headers.get("origin");
+    const host = request.headers.get("host");
+    if (origin && host) {
+      try {
+        const originHost = new URL(origin).host;
+        if (originHost !== host) {
+          return NextResponse.json(
+            { error: "Cross-origin request blocked" },
+            { status: 403 },
+          );
+        }
+      } catch {
+        // Malformed Origin header — block the request
+        return NextResponse.json(
+          { error: "Invalid origin header" },
+          { status: 403 },
+        );
+      }
+    }
+  }
+
   // Start with a "pass-through" response — let the request continue
   let supabaseResponse = NextResponse.next({ request });
 

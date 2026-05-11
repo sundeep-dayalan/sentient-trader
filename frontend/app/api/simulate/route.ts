@@ -32,6 +32,12 @@ const MAX_HEADLINE_LENGTH = 500;
 /** Maximum summary length (characters) */
 const MAX_SUMMARY_LENGTH = 2000;
 
+/** Maximum source name length (characters) — defense-in-depth */
+const MAX_SOURCE_LENGTH = 200;
+
+/** Maximum article URL length (characters) — defense-in-depth */
+const MAX_URL_LENGTH = 2048;
+
 /**
  * Basic blocklist for obvious prompt injection attempts.
  * Not a silver bullet, but raises the bar for casual attacks.
@@ -122,6 +128,22 @@ export async function POST(req: NextRequest) {
     if (summary && summary.length > MAX_SUMMARY_LENGTH) {
       return NextResponse.json(
         { error: `Summary must be ${MAX_SUMMARY_LENGTH} characters or fewer.` },
+        { status: 400 },
+      );
+    }
+
+    // Source: optional, max 200 chars (defense-in-depth: prevent oversized payloads in Redis)
+    if (source && source.length > MAX_SOURCE_LENGTH) {
+      return NextResponse.json(
+        { error: `Source must be ${MAX_SOURCE_LENGTH} characters or fewer.` },
+        { status: 400 },
+      );
+    }
+
+    // Article URL: optional, max 2048 chars
+    if (article_url && article_url.length > MAX_URL_LENGTH) {
+      return NextResponse.json(
+        { error: `Article URL must be ${MAX_URL_LENGTH} characters or fewer.` },
         { status: 400 },
       );
     }
