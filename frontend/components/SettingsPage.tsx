@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { BASE_PATH } from "@/lib/config";
+import { useAuth } from "@/components/AuthProvider";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -15,7 +16,7 @@ interface AgentConfig {
   execution:  { order_qty: number };
   model:      { cascade: ModelTier[]; override: string | null };
   prompts:    { momentum: string; value: string; risk: string; synthesis: string };
-  consumer:   { stream_key: string; batch_size: number; poll_interval: number; error_retry: number };
+  consumer:   { batch_size: number; poll_interval: number; error_retry: number };
 }
 
 // ── Tab registry — add future tabs here only ─────────────────────────────────
@@ -34,6 +35,7 @@ export default function SettingsPage() {
   const [config,    setConfig]    = useState<AgentConfig | null>(null);
   const [loading,   setLoading]   = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const { isSuperUser } = useAuth();
 
   useEffect(() => {
     fetch(`${BASE_PATH}/api/agent-config`)
@@ -78,7 +80,7 @@ export default function SettingsPage() {
           <div className="flex h-48 items-center justify-center text-sm text-negative">{fetchError}</div>
         )}
         {!loading && !fetchError && config && activeTab === "agent-config" && (
-          <AgentConfigTab config={config} onSave={setConfig} />
+          <AgentConfigTab config={config} onSave={setConfig} canEdit={isSuperUser} />
         )}
       </div>
     </div>
@@ -90,9 +92,11 @@ export default function SettingsPage() {
 function AgentConfigTab({
   config,
   onSave,
+  canEdit,
 }: {
   config: AgentConfig;
   onSave: (updated: AgentConfig) => void;
+  canEdit: boolean;
 }) {
   // Which section is open for editing
   const [editing, setEditing] = useState<string | null>(null);
@@ -147,9 +151,10 @@ function AgentConfigTab({
         isEditing={isEditing("thresholds")}
         saving={saving}
         saveError={saveErr}
-        onEdit={() => openEdit("thresholds")}
+        onEdit={canEdit ? () => openEdit("thresholds") : undefined}
         onCancel={cancelEdit}
         onSave={() => save("thresholds")}
+        readOnly={!canEdit}
       >
         {isEditing("thresholds") ? (
           <div className="space-y-4">
@@ -201,9 +206,10 @@ function AgentConfigTab({
         isEditing={isEditing("model")}
         saving={saving}
         saveError={saveErr}
-        onEdit={() => openEdit("model")}
+        onEdit={canEdit ? () => openEdit("model") : undefined}
         onCancel={cancelEdit}
         onSave={() => save("model")}
+        readOnly={!canEdit}
       >
         {/* Cascade is always read-only — order is set in code */}
         <div className="mb-4 space-y-2">
@@ -241,9 +247,10 @@ function AgentConfigTab({
         isEditing={isEditing("prompts")}
         saving={saving}
         saveError={saveErr}
-        onEdit={() => openEdit("prompts")}
+        onEdit={canEdit ? () => openEdit("prompts") : undefined}
         onCancel={cancelEdit}
         onSave={() => save("prompts")}
+        readOnly={!canEdit}
       >
         {isEditing("prompts") ? (
           <div className="space-y-4">
@@ -285,7 +292,6 @@ function AgentConfigTab({
         readOnly
       >
         <div className="divide-y divide-line rounded-xl border border-line">
-          <ReadRow label="Stream key"    value={config.consumer.stream_key}    mono />
           <ReadRow label="Batch size"    value={`${config.consumer.batch_size} messages`} />
           <ReadRow label="Poll interval" value={`${config.consumer.poll_interval}s`} />
           <ReadRow label="Error retry"   value={`${config.consumer.error_retry}s`} />

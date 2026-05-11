@@ -1,17 +1,14 @@
 /**
  * GET /api/portfolio?range=D|W|M|3M|6M|Y|5Y
  * --------------------------------
- * Fetches Alpaca paper portfolio history and returns it formatted for
- * Recharts consumption.
+ * Fetches Alpaca paper portfolio history for Recharts.
  *
- * This runs server-side so the ALPACA_SECRET_KEY never reaches the browser.
- * Alpaca's portfolio history API requires the secret key — it must stay
- * server-only (no NEXT_PUBLIC_ prefix).
+ * SECURITY:
+ * - Public read (paper trading data — safe to show)
+ * - Account number still stripped from response
+ * - Range param is already allowlisted (safe)
  *
  * Returns: { history: Array<{ timestamp: string, equity: number }> }
- *
- * On any error (market closed, bad key, network blip), returns an empty
- * history array so the chart degrades gracefully rather than crashing.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -82,7 +79,7 @@ export async function GET(request: NextRequest) {
       alpacaFetch("/v2/account"),
     ]);
 
-    // Alpaca returns parallel arrays: timestamps[] (Unix seconds) and equity[] (dollars).
+    // Alpaca returns parallel arrays: timestamps[] and equity[].
     // Recharts needs [{timestamp, equity}] objects, so we zip them here.
     const timestamps = Array.isArray(data.timestamp) ? data.timestamp as number[] : [];
     const equities = Array.isArray(data.equity) ? data.equity as Array<number | null> : [];
@@ -135,8 +132,8 @@ export async function GET(request: NextRequest) {
           baseValueAsOf: typeof data.base_value_asof === "string" ? data.base_value_asof : null,
         },
         account: {
+          // NOTE: account_number intentionally stripped (F-005)
           id: stringValue(account.id),
-          accountNumber: stringValue(account.account_number),
           status: stringValue(account.status),
           currency: stringValue(account.currency),
           createdAt: stringValue(account.created_at),

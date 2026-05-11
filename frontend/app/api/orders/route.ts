@@ -3,13 +3,18 @@
  * ----------------
  * Fetches Alpaca paper account, positions, and recent orders server-side.
  *
- * This keeps ALPACA_SECRET_KEY out of the browser while giving the Orders
- * page enough information to show execution state and account context.
+ * SECURITY:
+ * - Public read (paper trading data — safe to show)
+ * - Account number still stripped from response
+ * - Validates `status` param against allowlist (F-018)
  */
 
 import { NextRequest, NextResponse } from "next/server";
 
 const ALPACA_BASE_URL = "https://paper-api.alpaca.markets";
+
+// Allowed values for the status query param (F-018)
+const ALLOWED_STATUSES = ["open", "closed", "all"];
 
 async function alpacaFetch(path: string) {
   const apiKey = process.env.ALPACA_API_KEY;
@@ -34,13 +39,26 @@ async function alpacaFetch(path: string) {
   return response.json();
 }
 
+/**
+ * Remove sensitive fields from the Alpaca account object
+ * so they're never sent to the browser.
+ */
+function sanitizeAccount(account: Record<string, unknown>) {
+  // Create a copy without the sensitive fields
+  const { account_number, ...safe } = account;
+  return safe;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const limit = Math.min(
       Math.max(Number(request.nextUrl.searchParams.get("limit") ?? 100), 1),
       500
     );
-    const status = request.nextUrl.searchParams.get("status") ?? "all";
+
+    // Validate status against allowlist (F-018)
+    const rawStatus = request.nextUrl.searchParams.get("status") ?? "all";
+    const status = ALLOWED_STATUSES.includes(rawStatus) ? rawStatus : "all";
 
     const query = new URLSearchParams({
       status,
@@ -57,7 +75,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(
       {
-        account,
+        account: sanitizeAccount(account),
         positions,
         orders,
         fetchedAt: new Date().toISOString(),

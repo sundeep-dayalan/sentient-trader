@@ -1,21 +1,36 @@
+/**
+ * CustomNewsForm — Manually inject a headline into the AI pipeline.
+ *
+ * SECURITY INTEGRATION:
+ * - Calls /api/simulate which now enforces auth + rate limits
+ * - On 429 (rate limited): shows the specific error message
+ * - On 429 with needsAuth=true: triggers the AuthGate modal
+ * - On 401: triggers the AuthGate modal
+ */
+
 "use client";
 
 import { useState } from "react";
 import { BASE_PATH } from "@/lib/config";
+import { useAuth } from "@/components/AuthProvider";
 
 type State = "idle" | "loading" | "success" | "error";
 
 interface CustomNewsFormProps {
   variant?: "panel" | "modal";
+  /** Called when the user needs to sign in (triggers AuthGate) */
+  onAuthRequired?: () => void;
 }
 
-export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProps) {
+export default function CustomNewsForm({ variant = "panel", onAuthRequired }: CustomNewsFormProps) {
+  const { isAnonymous } = useAuth();
   const [ticker,     setTicker]     = useState("");
   const [headline,   setHeadline]   = useState("");
   const [summary,    setSummary]    = useState("");
   const [articleUrl, setArticleUrl] = useState("");
   const [state,      setState]      = useState<State>("idle");
   const [errMsg,     setErrMsg]     = useState("");
+  const [remaining,  setRemaining]  = useState<number | null>(null);
 
   const canSubmit = ticker.trim().length > 0 && headline.trim().length > 10 && state !== "loading";
 
@@ -37,11 +52,38 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
         }),
       });
 
+      // Handle rate limit response (429)
+      if (res.status === 429) {
+        const json = await res.json().catch(() => ({}));
+
+        // If the user needs to sign in, trigger the auth gate
+        if (json.needsAuth && onAuthRequired) {
+          onAuthRequired();
+          setState("idle");
+          return;
+        }
+
+        // Otherwise show the rate limit error
+        throw new Error(json.error ?? "Rate limit exceeded. Please try again later.");
+      }
+
+      // Handle auth required (401)
+      if (res.status === 401) {
+        if (onAuthRequired) {
+          onAuthRequired();
+          setState("idle");
+          return;
+        }
+        throw new Error("Please sign in to use this feature.");
+      }
+
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error ?? `HTTP ${res.status}`);
       }
 
+      const json = await res.json();
+      setRemaining(json.remaining ?? null);
       setState("success");
       setHeadline("");
       setSummary("");
@@ -50,7 +92,7 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
     } catch (e) {
       setErrMsg(e instanceof Error ? e.message : "Unknown error");
       setState("error");
-      setTimeout(() => setState("idle"), 4000);
+      setTimeout(() => setState("idle"), 6000);
     }
   }
 
@@ -69,6 +111,12 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
           <p className="text-[11px] text-muted">
             {variant === "modal" ? "Send a news article through the live AI pipeline." : "Manual headline test"}
           </p>
+          {/* Show remaining simulations */}
+          {remaining !== null && (
+            <p className="mt-0.5 text-[10px] font-medium text-accent">
+              {remaining} simulation{remaining !== 1 ? "s" : ""} remaining today
+            </p>
+          )}
         </div>
       </div>
 
@@ -97,6 +145,7 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
             onChange={e => setHeadline(e.target.value)}
             placeholder="Apple beats Q3 earnings by 18%, raises full-year guidance"
             rows={2}
+            maxLength={500}
             disabled={state === "loading"}
             className="w-full resize-none rounded-xl border border-line bg-surface-2 px-3.5 py-2.5 text-sm leading-relaxed text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
           />
@@ -113,8 +162,9 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
           <textarea
             value={summary}
             onChange={e => setSummary(e.target.value)}
-            placeholder="Apple reported Q3 revenue of $94.9B, up 5% year-over-year, beating analyst estimates of $84.5B. EPS came in at $1.40 vs $1.35 expected. The company raised full-year guidance citing strong iPhone 15 demand in emerging markets..."
+            placeholder="Apple reported Q3 revenue of $94.9B, up 5% year-over-year..."
             rows={4}
+            maxLength={2000}
             disabled={state === "loading"}
             className="w-full resize-none rounded-xl border border-line bg-surface-2 px-3.5 py-2.5 text-sm leading-relaxed text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
           />
@@ -162,13 +212,20 @@ export default function CustomNewsForm({ variant = "panel" }: CustomNewsFormProp
             <><svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>Injected</>
           )}
           {state === "error" && (
-            <><svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>{errMsg.slice(0, 32)}</>
+            <><svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>{errMsg.slice(0, 60)}</>
           )}
           {state === "idle" && (
             <><svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v14l11-7-11-7z" /></svg>Inject</>
           )}
         </button>
       </div>
+
+      {/* Anonymous user hint */}
+      {isAnonymous && state === "idle" && (
+        <p className="mt-2 text-center text-[10px] text-muted">
+          1 free simulation available · Sign in for more
+        </p>
+      )}
     </div>
   );
 }
