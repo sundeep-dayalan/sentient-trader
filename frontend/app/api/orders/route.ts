@@ -29,7 +29,7 @@ async function alpacaFetch(path: string) {
       "APCA-API-KEY-ID": apiKey,
       "APCA-API-SECRET-KEY": secretKey,
     },
-    next: { revalidate: 0 },
+    cache: "no-store",
   });
 
   if (!response.ok) {

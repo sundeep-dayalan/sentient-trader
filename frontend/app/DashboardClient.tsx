@@ -7,6 +7,7 @@ import CustomNewsForm  from "@/components/CustomNewsForm";
 import LiveTicker      from "@/components/LiveTicker";
 import OrdersPage      from "@/components/OrdersPage";
 import PnLChart        from "@/components/PnLChart";
+import PortfolioPage   from "@/components/PortfolioPage";
 import StatsBar        from "@/components/StatsBar";
 import SystemStatus    from "@/components/SystemStatus";
 import ThemeToggle     from "@/components/ThemeToggle";
@@ -33,15 +34,41 @@ interface AlpacaAccount {
   last_equity?: string;
   portfolio_value?: string;
   buying_power?: string;
+  daytrading_buying_power?: string;
+  regt_buying_power?: string;
+  non_marginable_buying_power?: string;
   cash?: string;
   long_market_value?: string;
   short_market_value?: string;
+  maintenance_margin?: string;
+  last_maintenance_margin?: string;
+  multiplier?: string;
+  daytrade_count?: number;
+  pattern_day_trader?: boolean;
+  trading_blocked?: boolean;
+  transfers_blocked?: boolean;
+  account_blocked?: boolean;
+  trade_suspended_by_user?: boolean;
+  shorting_enabled?: boolean;
 }
 
 interface AlpacaPosition {
   symbol?: string;
   qty?: string;
+  qty_available?: string;
+  side?: string;
+  asset_class?: string;
+  exchange?: string;
   market_value?: string;
+  cost_basis?: string;
+  avg_entry_price?: string;
+  current_price?: string;
+  lastday_price?: string;
+  change_today?: string;
+  unrealized_pl?: string;
+  unrealized_plpc?: string;
+  unrealized_intraday_pl?: string;
+  unrealized_intraday_plpc?: string;
 }
 
 interface AlpacaOrder {
@@ -114,6 +141,28 @@ function money(value?: string | number | null, maximumFractionDigits = 2) {
 function percent(value: number | null) {
   if (value === null || !Number.isFinite(value)) return "0.00%";
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function ratioPercent(value?: string | number | null) {
+  const number = numberValue(value);
+  return number === null ? "—" : percent(number * 100);
+}
+
+function compactMoney(value?: string | number | null) {
+  const number = numberValue(value);
+  if (number === null) return "—";
+  return number.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    notation: "compact",
+    maximumFractionDigits: 1,
+  });
+}
+
+function shareQuantity(value?: string | number | null) {
+  const number = numberValue(value);
+  if (number === null) return "—";
+  return `${number.toLocaleString("en-US", { maximumFractionDigits: 4 })} sh`;
 }
 
 function timeLabel(value?: string | null) {
@@ -316,12 +365,14 @@ function AlpacaBalanceCard({
   orders,
   loading,
   error,
+  fetchedAt,
 }: {
   account: AlpacaAccount | null;
   positions: AlpacaPosition[];
   orders: AlpacaOrder[];
   loading: boolean;
   error?: string;
+  fetchedAt?: string;
 }) {
   const accountValue = account?.portfolio_value ?? account?.equity;
   const equity = numberValue(accountValue);
@@ -331,22 +382,50 @@ function AlpacaBalanceCard({
   const isUp = dailyChange >= 0;
   const openOrders = orders.filter(order => orderBucket(order.status) === "open").length;
   const filledOrders = orders.filter(order => orderBucket(order.status) === "filled").length;
+  const topPositions = [...positions]
+    .sort((a, b) => Math.abs(numberValue(b.market_value) ?? 0) - Math.abs(numberValue(a.market_value) ?? 0))
+    .slice(0, 3);
+  const investedValue = positions.reduce((sum, position) => sum + Math.abs(numberValue(position.market_value) ?? 0), 0);
+  const allocationPct = equity && equity > 0 ? investedValue / equity * 100 : null;
+  const tradingBlocked = Boolean(account?.trading_blocked || account?.account_blocked || account?.trade_suspended_by_user);
+
+  const metrics = [
+    { label: "Buying power", value: money(account?.buying_power), sub: account?.multiplier ? `${account.multiplier}x margin` : "available" },
+    { label: "Cash", value: money(account?.cash), sub: account?.currency ?? "USD" },
+    { label: "Invested", value: compactMoney(investedValue), sub: allocationPct === null ? "allocation" : `${allocationPct.toFixed(1)}% of equity` },
+    { label: "Open orders", value: String(openOrders), sub: `${filledOrders} filled recent` },
+  ];
+
+  const statusPills = [
+    {
+      label: account?.status ?? "paper",
+      className: account?.status?.toLowerCase() === "active"
+        ? "border-positive-border bg-positive-soft text-positive"
+        : "border-line bg-surface-2 text-muted",
+    },
+    {
+      label: tradingBlocked ? "Trading blocked" : "Trading enabled",
+      className: tradingBlocked
+        ? "border-negative-border bg-negative-soft text-negative"
+        : "border-positive-border bg-positive-soft text-positive",
+    },
+  ];
 
   return (
-    <section className="rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-card)] p-6 shadow-[var(--dashboard-shadow)]">
+    <section className="rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-card)] p-5 shadow-[var(--dashboard-shadow)] 2xl:p-6">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-medium text-[var(--dashboard-subtle)]">Alpaca Balance</p>
-          <p className="mt-4 font-sans text-[30px] font-bold leading-none tracking-tight text-[var(--dashboard-text)]">
+          <p className="text-sm font-medium text-[var(--dashboard-subtle)]">Alpaca Live Equity</p>
+          <p className="mt-3 font-sans text-[30px] font-bold leading-none tracking-tight text-[var(--dashboard-text)]">
             {loading && !account ? "—" : money(accountValue)}
           </p>
+          <p className="mt-2 text-[11px] font-medium text-[var(--dashboard-muted)]">
+            Synced {fetchedAt ? timeLabel(fetchedAt) : "—"}
+          </p>
         </div>
-        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--dashboard-control)] text-[var(--dashboard-subtle)]">
-          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <circle cx="5" cy="12" r="1.8" />
-            <circle cx="12" cy="12" r="1.8" />
-            <circle cx="19" cy="12" r="1.8" />
-          </svg>
+        <span className="inline-flex shrink-0 items-center gap-2 rounded-full border border-positive-border bg-positive-soft px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-positive">
+          <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-positive" />
+          Live
         </span>
       </div>
 
@@ -355,12 +434,17 @@ function AlpacaBalanceCard({
         {money(Math.abs(dailyChange))} {percent(dailyChangePct)}
       </div>
 
-      <div className="mt-6 border-t border-[var(--dashboard-divider)] pt-5">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h3 className="text-xl font-semibold text-[var(--dashboard-text)]">Alpaca Insights</h3>
-          <span className="rounded-full bg-[var(--dashboard-control)] px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--dashboard-subtle)]">
-            {account?.status ?? "paper"}
+      <div className="mt-5 flex flex-wrap gap-2">
+        {statusPills.map(item => (
+          <span key={item.label} className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${item.className}`}>
+            {item.label}
           </span>
+        ))}
+      </div>
+
+      <div className="mt-5 border-t border-[var(--dashboard-divider)] pt-5">
+        <div className="mb-3">
+          <h3 className="text-base font-semibold text-[var(--dashboard-text)]">Account Snapshot</h3>
         </div>
 
         {error && (
@@ -370,34 +454,74 @@ function AlpacaBalanceCard({
         )}
 
         <div className="grid grid-cols-2 gap-2.5">
-          {[
-            { label: "Buying power", value: money(account?.buying_power) },
-            { label: "Cash", value: money(account?.cash) },
-            { label: "Open positions", value: String(positions.length) },
-            { label: "Open orders", value: String(openOrders) },
-            { label: "Filled orders", value: String(filledOrders) },
-          ].map(item => (
-            <div
-              key={item.label}
-              className="rounded-xl bg-[var(--dashboard-row)] px-4 py-3"
-            >
+          {metrics.map(item => (
+            <div key={item.label} className="rounded-xl bg-[var(--dashboard-row)] px-3 py-2.5">
               <span className="block text-xs font-medium text-[var(--dashboard-subtle)]">{item.label}</span>
               <span className="mt-1 block truncate font-mono text-[15px] font-semibold text-[var(--dashboard-text)]">
                 {loading && !account ? "—" : item.value}
               </span>
+              <span className="mt-1 block truncate text-[10px] text-[var(--dashboard-muted)]">{loading && !account ? "—" : item.sub}</span>
             </div>
           ))}
         </div>
       </div>
-    </section>
-  );
-}
 
-function EmptyAiTipsCard() {
-  return (
-    <section>
-      <h2 className="mb-5 text-[30px] font-bold leading-none text-[var(--dashboard-text)]">AI Tips</h2>
-      <div className="min-h-[190px] rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-card)] shadow-[var(--dashboard-shadow)]" />
+      <div className="mt-4 border-t border-[var(--dashboard-divider)] pt-4">
+        <div className="mb-2.5 flex items-center justify-between gap-3">
+          <h3 className="text-base font-semibold text-[var(--dashboard-text)]">Top Holdings</h3>
+          <span className="rounded-full bg-[var(--dashboard-control)] px-3 py-1 text-[11px] font-semibold text-[var(--dashboard-subtle)]">
+            Top 3
+          </span>
+        </div>
+
+        {loading && positions.length === 0 && (
+          <div className="flex min-h-[96px] items-center justify-center">
+            <EmptyDots />
+          </div>
+        )}
+
+        {!loading && topPositions.length === 0 && (
+          <div className="flex min-h-[96px] items-center justify-center rounded-xl border border-[var(--dashboard-border)] bg-[var(--dashboard-row)] px-4 text-center text-sm text-[var(--dashboard-muted)]">
+            No open Alpaca positions yet.
+          </div>
+        )}
+
+        <div className="space-y-0">
+          {topPositions.map(position => {
+            const marketValue = numberValue(position.market_value) ?? 0;
+            const pl = numberValue(position.unrealized_pl);
+            const isPositionUp = (pl ?? 0) >= 0;
+
+            return (
+              <div
+                key={position.symbol ?? position.asset_class ?? marketValue}
+                className="grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-3 border-t border-[var(--dashboard-divider)] py-3 first:border-t-0"
+              >
+                <div className={`flex h-9 w-9 items-center justify-center rounded-full border ${isPositionUp ? "border-positive-border bg-positive-soft text-positive" : "border-negative-border bg-negative-soft text-negative"}`}>
+                  <span className="font-mono text-xs font-bold">{position.symbol?.slice(0, 1) ?? "?"}</span>
+                </div>
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <p className="truncate text-sm font-semibold text-[var(--dashboard-text)]">{position.symbol ?? "Unknown"}</p>
+                    <span className="rounded-full border border-line bg-surface-2 px-2 py-0.5 text-[10px] font-bold uppercase text-muted">
+                      {position.side ?? "long"}
+                    </span>
+                  </div>
+                  <p className="mt-1 truncate text-xs text-[var(--dashboard-subtle)]">
+                    {shareQuantity(position.qty)} · {money(position.current_price)}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="font-mono text-sm font-semibold text-[var(--dashboard-text)]">{compactMoney(position.market_value)}</p>
+                  <p className={`mt-1 font-mono text-[11px] font-semibold ${isPositionUp ? "text-positive" : "text-negative"}`}>
+                    {ratioPercent(position.unrealized_plpc)}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </section>
   );
 }
@@ -493,7 +617,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
   const loadAlpacaSummary = useCallback(async () => {
     try {
-      const response = await fetch(`${BASE_PATH}/api/orders?status=all&limit=8`);
+      const response = await fetch(`${BASE_PATH}/api/orders?status=all&limit=25`, { cache: "no-store" });
 
       // Auth-protected route: anonymous users get 401/403 — show empty data gracefully
       if (response.status === 401 || response.status === 403) {
@@ -530,7 +654,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
   useEffect(() => {
     loadAlpacaSummary();
-    const interval = setInterval(loadAlpacaSummary, 30_000);
+    const interval = setInterval(loadAlpacaSummary, 15_000);
     return () => clearInterval(interval);
   }, [loadAlpacaSummary]);
 
@@ -549,6 +673,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     Dashboard: "Live AI trading activity overview",
     Signals:   "Real-time signal history and decision trace",
     Orders:    "Alpaca order execution and account context",
+    Portfolio: "Live equity, holdings, buying power, and Alpaca position detail",
     Settings:  "Agent configuration and tunable parameters",
   };
 
@@ -859,8 +984,8 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                       orders={alpacaData.orders}
                       loading={alpacaLoading}
                       error={alpacaData.error}
+                      fetchedAt={alpacaData.fetchedAt}
                     />
-                    <EmptyAiTipsCard />
                   </aside>
                 </div>
               </div>
@@ -884,13 +1009,24 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
             {activeView === "Orders" && <OrdersPage />}
 
+            {activeView === "Portfolio" && (
+              <PortfolioPage
+                account={alpacaData.account}
+                positions={alpacaData.positions}
+                orders={alpacaData.orders}
+                loading={alpacaLoading}
+                error={alpacaData.error}
+                fetchedAt={alpacaData.fetchedAt}
+              />
+            )}
+
             {activeView === "Settings" && <SettingsPage />}
 
             {activeView === "Pipeline" && (
               <PipelinePage stats={dashboardStats} trades={trades} newIds={newIds} />
             )}
 
-            {activeView !== "Dashboard" && activeView !== "Signals" && activeView !== "Orders" && activeView !== "Pipeline" && activeView !== "Settings" && (
+            {activeView !== "Dashboard" && activeView !== "Signals" && activeView !== "Orders" && activeView !== "Portfolio" && activeView !== "Pipeline" && activeView !== "Settings" && (
               <div className="glass-panel flex min-h-[520px] flex-1 items-center justify-center rounded-2xl p-10 text-center">
                 <div>
                   <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl bg-surface-2 text-muted">
