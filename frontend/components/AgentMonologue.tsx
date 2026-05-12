@@ -1,7 +1,7 @@
 "use client";
 
 import { articleSourceLabel, safeArticleUrl } from "@/lib/news";
-import { DecisionTrace, LLMOperationTrace, PersonaOpinion, Trade } from "@/lib/types";
+import { ArticleQuality, DecisionTrace, LLMOperationTrace, PersonaOpinion, RiskGateTrace, Trade } from "@/lib/types";
 
 interface AgentMonologueProps { trade: Trade | null; }
 
@@ -140,6 +140,8 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
   const committee     = decisionTrace.committee_debate ?? [];
   const llmOperations = decisionTrace.llm_operations ?? [];
   const portfolioModel = decisionTrace.portfolio_manager_decision?.model ?? trade.model;
+  const riskGate = asRiskGate(decisionTrace.risk_gate);
+  const articleQuality = riskGate?.article_quality ?? decisionTrace.article_quality;
 
   return (
     <div className="glass-panel flex h-full min-h-[360px] flex-col overflow-hidden rounded-2xl xl:min-h-0">
@@ -245,6 +247,14 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
           </div>
         )}
 
+        {(riskGate || articleQuality) && (
+          <DecisionQualityCard
+            riskGate={riskGate}
+            articleQuality={articleQuality}
+            pmConfidence={trade.confidence_score}
+          />
+        )}
+
         {/* Consensus */}
         <div className="rounded-xl border border-line bg-surface-2 p-4">
           <div className="flex items-center justify-between">
@@ -333,6 +343,88 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
+function asRiskGate(value: unknown): RiskGateTrace | null {
+  return value && typeof value === "object" ? value as RiskGateTrace : null;
+}
+
+function pct(value: number | undefined | null): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  return `${Math.round(value * 100)}%`;
+}
+
+function qualityColour(grade: string | undefined | null): string {
+  if (grade === "HIGH") return "border-positive-border bg-positive-soft text-positive";
+  if (grade === "MEDIUM") return "border-warning-border bg-warning-soft text-warning";
+  return "border-negative-border bg-negative-soft text-negative";
+}
+
+function DecisionQualityCard({
+  riskGate,
+  articleQuality,
+  pmConfidence,
+}: {
+  riskGate: RiskGateTrace | null;
+  articleQuality?: ArticleQuality;
+  pmConfidence: number;
+}) {
+  const quality = articleQuality ?? {};
+  const metrics = riskGate?.committee_metrics;
+  const blockers = riskGate?.blockers ?? riskGate?.execution_plan?.blocked_reasons ?? [];
+  const passed = riskGate?.should_trade === true;
+  const calibrated = riskGate?.inputs?.calibrated_confidence ?? metrics?.calibrated_confidence;
+
+  return (
+    <div className="rounded-xl border border-line bg-surface-2 p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <SectionLabel label="Decision Quality" />
+        {riskGate && (
+          <span className={[
+            "rounded-lg border px-2 py-1 text-[10px] font-bold",
+            passed ? "border-positive-border bg-positive-soft text-positive" : "border-warning-border bg-warning-soft text-warning",
+          ].join(" ")}>
+            {passed ? "EXECUTABLE" : "GATED"}
+          </span>
+        )}
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-3">
+        <MetricPill label="Source" value={`${quality.grade ?? "UNKNOWN"} ${typeof quality.score === "number" ? quality.score.toFixed(2) : ""}`} className={qualityColour(quality.grade)} />
+        <MetricPill label="PM confidence" value={pct(pmConfidence)} />
+        <MetricPill label="Calibrated" value={pct(calibrated)} />
+      </div>
+
+      {metrics?.cap_reasons && metrics.cap_reasons.length > 0 && (
+        <p className="mt-3 text-[11px] leading-relaxed text-muted">
+          Confidence capped by {metrics.cap_reasons.join(", ")}.
+        </p>
+      )}
+
+      {riskGate?.reason && (
+        <p className="mt-2 text-xs leading-relaxed text-secondary">{riskGate.reason}</p>
+      )}
+
+      {blockers.length > 0 && (
+        <div className="mt-3 space-y-1.5">
+          {blockers.slice(0, 4).map((blocker) => (
+            <div key={blocker} className="rounded-lg border border-line bg-surface px-3 py-2 text-[11px] leading-relaxed text-muted">
+              {blocker}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MetricPill({ label, value, className = "border-line bg-surface text-primary" }: { label: string; value: string; className?: string }) {
+  return (
+    <div className={`rounded-lg border px-3 py-2 ${className}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-wide opacity-70">{label}</p>
+      <p className="mt-0.5 font-mono text-sm font-bold">{value}</p>
+    </div>
+  );
+}
+
 function summariseVote(committee: PersonaOpinion[]): string {
   const counts: Record<string, number> = { BULLISH: 0, BEARISH: 0, NEUTRAL: 0 };
   committee.forEach((p) => counts[p.stance]++);
@@ -417,6 +509,14 @@ function PersonaCard({ persona }: { persona: PersonaOpinion }) {
         <StanceBadge stance={persona.stance} />
       </div>
 
+      {(persona.evidence_quality || persona.catalyst_strength || persona.time_horizon) && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {persona.evidence_quality && <TinyBadge label={`Evidence ${persona.evidence_quality}`} />}
+          {persona.catalyst_strength && <TinyBadge label={`Catalyst ${persona.catalyst_strength}`} />}
+          {persona.time_horizon && persona.time_horizon !== "UNKNOWN" && <TinyBadge label={persona.time_horizon} />}
+        </div>
+      )}
+
       {/* Conviction bar with tooltip */}
       <div className="mt-2.5 flex items-center gap-2">
         <div className="flex shrink-0 items-center gap-1 text-[10px] text-muted">
@@ -444,6 +544,14 @@ function PersonaCard({ persona }: { persona: PersonaOpinion }) {
         </p>
       )}
     </div>
+  );
+}
+
+function TinyBadge({ label }: { label: string }) {
+  return (
+    <span className="rounded border border-line bg-surface-3 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-muted">
+      {label}
+    </span>
   );
 }
 

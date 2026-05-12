@@ -39,7 +39,7 @@ async function getInitialStats(): Promise<DashboardStats | null> {
 
   const { data, error } = await supabase
     .from("trades")
-    .select("trade_action, order_id, sentiment_score");
+    .select("trade_action, order_id, sentiment_score, decision_trace");
 
   if (error) {
     console.error("Failed to fetch dashboard stats:", error.message);

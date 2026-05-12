@@ -60,6 +60,13 @@ from langgraph.graph import END, START, StateGraph
 
 import config
 from cache import HeadlineCache
+from decision_rules import (
+    build_execution_plan,
+    committee_metrics,
+    evaluate_article_quality,
+    guarded_system_prompt,
+    quality_prompt_block,
+)
 from llm import ModelRouter, create_llm_client, sanitize_llm_error
 from logger import SupabaseLogger
 from schemas import (
@@ -93,6 +100,7 @@ class AgentState(TypedDict):
     news:              NewsMessage
     is_cached:         bool
     market_context:    Optional[dict]          # {price, day_change_pct} from Alpaca
+    article_quality:   Optional[dict[str, Any]]
     momentum_opinion:  Optional[PersonaAnalysis]
     value_opinion:     Optional[PersonaAnalysis]
     risk_opinion:      Optional[PersonaAnalysis]
@@ -103,6 +111,7 @@ class AgentState(TypedDict):
     analysis:          Optional[TradeAnalysis]  # assembled after synthesis
     should_trade:      bool
     risk_gate:         Optional[dict[str, Any]]
+    execution_plan:    Optional[dict[str, Any]]
     trade_order_id:    Optional[str]
     execution:         Optional[dict[str, Any]]
     error:             Optional[str]
@@ -130,11 +139,53 @@ def _summary_section(news: "NewsMessage") -> str:
     return f"\n\nARTICLE SUMMARY:\n{news.summary.strip()}"
 
 
+def _trading_context_section(ctx: Optional[dict]) -> str:
+    """Summarize account/position context so personas stay position-aware."""
+    if not ctx:
+        return ""
+
+    account = ctx.get("account") or {}
+    position = ctx.get("position") or {}
+
+    lines: list[str] = []
+    if account:
+        buying_power = account.get("buying_power")
+        cash = account.get("cash")
+        status = account.get("status")
+        flags = []
+        if account.get("trading_blocked"):
+            flags.append("trading_blocked")
+        if account.get("shorting_enabled"):
+            flags.append("shorting_enabled")
+        lines.append(
+            "ACCOUNT: "
+            f"status={status or 'unknown'}, "
+            f"buying_power={buying_power if buying_power is not None else 'n/a'}, "
+            f"cash={cash if cash is not None else 'n/a'}, "
+            f"flags={','.join(flags) if flags else 'none'}"
+        )
+
+    if position:
+        qty = position.get("qty", 0)
+        side = position.get("side") or "flat"
+        market_value = position.get("market_value")
+        unrealized_pl = position.get("unrealized_pl")
+        lines.append(
+            "POSITION: "
+            f"{side} qty={qty}, "
+            f"market_value={market_value if market_value is not None else 'n/a'}, "
+            f"unrealized_pl={unrealized_pl if unrealized_pl is not None else 'n/a'}"
+        )
+
+    return f"\n\nTRADING CONTEXT:\n" + "\n".join(lines) if lines else ""
+
+
 def _opinion_block(label: str, opinion: PersonaAnalysis) -> str:
     """Format one persona's opinion for inclusion in downstream prompts."""
     return (
         f"{label} [{opinion.stance}, conviction={opinion.conviction:.2f}]:\n"
         f"  Take: \"{opinion.headline_take}\"\n"
+        f"  Evidence: {opinion.evidence_quality}, catalyst={opinion.catalyst_strength}, horizon={opinion.time_horizon}\n"
         f"  Reasoning: {opinion.analysis}"
     )
 
@@ -148,6 +199,11 @@ def _to_persona_opinion(name: str, pa: PersonaAnalysis, model: Optional[str] = N
         view=pa.headline_take,
         reasoning=pa.analysis,
         model=model,
+        catalyst_strength=pa.catalyst_strength,
+        evidence_quality=pa.evidence_quality,
+        time_horizon=pa.time_horizon,
+        key_evidence=pa.key_evidence,
+        missing_data=pa.missing_data,
     )
 
 
@@ -228,7 +284,7 @@ def _make_check_cache_node(cache: HeadlineCache):
     return check_cache
 
 
-def _make_fetch_context_node():
+def _make_fetch_context_node(trader: AlpacaTrader):
     """
     Pull live market data from Alpaca before the debate starts.
 
@@ -250,17 +306,39 @@ def _make_fetch_context_node():
         data_client = None
 
     def fetch_context(state: AgentState) -> dict:
-        if data_client is None:
-            return {"market_context": None}
+        news = state["news"]
+        article_quality = evaluate_article_quality(news)
 
-        ticker = state["news"].ticker
+        account_context = trader.get_account_context()
+        position_context = trader.get_position_context(news.ticker)
+
+        if data_client is None:
+            return {
+                "market_context": {
+                    "price": None,
+                    "day_change_pct": None,
+                    "account": account_context,
+                    "position": position_context,
+                },
+                "article_quality": article_quality.to_dict(),
+            }
+
+        ticker = news.ticker
         try:
             snap = data_client.get_stock_snapshot(
                 StockSnapshotRequest(symbol_or_symbols=ticker)
             ).get(ticker)
 
             if not snap:
-                return {"market_context": None}
+                return {
+                    "market_context": {
+                        "price": None,
+                        "day_change_pct": None,
+                        "account": account_context,
+                        "position": position_context,
+                    },
+                    "article_quality": article_quality.to_dict(),
+                }
 
             price = float(snap.latest_trade.price) if snap.latest_trade else None
 
@@ -273,6 +351,8 @@ def _make_fetch_context_node():
             ctx = {
                 "price":          round(price, 2) if price is not None else None,
                 "day_change_pct": day_change_pct,
+                "account":        account_context,
+                "position":       position_context,
             }
             log.info(
                 "Context [%s]: $%.2f  %s",
@@ -280,11 +360,19 @@ def _make_fetch_context_node():
                 ctx["price"] or 0,
                 f"({ctx['day_change_pct']:+.2f}%)" if ctx["day_change_pct"] is not None else "(change n/a)",
             )
-            return {"market_context": ctx}
+            return {"market_context": ctx, "article_quality": article_quality.to_dict()}
 
         except Exception as exc:
             log.warning("Could not fetch market context for %s: %s", ticker, exc)
-            return {"market_context": None}
+            return {
+                "market_context": {
+                    "price": None,
+                    "day_change_pct": None,
+                    "account": account_context,
+                    "position": position_context,
+                },
+                "article_quality": article_quality.to_dict(),
+            }
 
     return fetch_context
 
@@ -301,11 +389,13 @@ def _make_momentum_analyst_node(router: ModelRouter, client: Any):
         prompt = (
             f"{_market_line(news.ticker, state.get('market_context'))}\n"
             f"HEADLINE: \"{news.headline}\" — {news.source}"
-            f"{_summary_section(news)}\n\n"
+            f"{_summary_section(news)}"
+            f"{_trading_context_section(state.get('market_context'))}"
+            f"{quality_prompt_block(state.get('article_quality'))}\n\n"
             f"Analyze this headline's impact on {news.ticker} from your momentum trading perspective."
         )
         messages = [
-            {"role": "system", "content": config.MOMENTUM_SYSTEM_PROMPT},
+            {"role": "system", "content": guarded_system_prompt(config.MOMENTUM_SYSTEM_PROMPT, "momentum")},
             {"role": "user",   "content": prompt},
         ]
         input_payload = _llm_input_snapshot(
@@ -379,12 +469,14 @@ def _make_value_analyst_node(router: ModelRouter, client: Any):
             f"{_market_line(news.ticker, state.get('market_context'))}\n"
             f"HEADLINE: \"{news.headline}\" — {news.source}"
             f"{_summary_section(news)}"
+            f"{_trading_context_section(state.get('market_context'))}"
+            f"{quality_prompt_block(state.get('article_quality'))}"
             f"{prior_section}\n\n"
             f"As the Value Investor, respond to this headline and to the Momentum Trader's assessment. "
             f"Do the fundamentals confirm or contradict their directional call?"
         )
         messages = [
-            {"role": "system", "content": config.VALUE_SYSTEM_PROMPT},
+            {"role": "system", "content": guarded_system_prompt(config.VALUE_SYSTEM_PROMPT, "value")},
             {"role": "user",   "content": prompt},
         ]
         input_payload = _llm_input_snapshot(
@@ -462,12 +554,15 @@ def _make_risk_analyst_node(router: ModelRouter, client: Any):
             f"{_market_line(news.ticker, state.get('market_context'))}\n"
             f"HEADLINE: \"{news.headline}\" — {news.source}"
             f"{_summary_section(news)}"
+            f"{_trading_context_section(state.get('market_context'))}"
+            f"{quality_prompt_block(state.get('article_quality'))}"
             f"{debate_section}\n\n"
             f"As the Risk Manager, stress-test the above conclusions for {news.ticker}. "
-            f"What tail risk, regulatory exposure, or macro factor are both analysts missing?"
+            f"What concrete tail risk, regulatory exposure, or macro factor are both analysts missing? "
+            f"If the risk is generic rather than article-specific, say so and keep stance NEUTRAL."
         )
         messages = [
-            {"role": "system", "content": config.RISK_SYSTEM_PROMPT},
+            {"role": "system", "content": guarded_system_prompt(config.RISK_SYSTEM_PROMPT, "risk")},
             {"role": "user",   "content": prompt},
         ]
         input_payload = _llm_input_snapshot(
@@ -560,14 +655,17 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
         prompt = (
             f"{_market_line(news.ticker, state.get('market_context'))}\n"
             f"HEADLINE: \"{news.headline}\" — {news.source}"
-            f"{_summary_section(news)}\n\n"
+            f"{_summary_section(news)}"
+            f"{_trading_context_section(state.get('market_context'))}"
+            f"{quality_prompt_block(state.get('article_quality'))}\n\n"
             f"FULL COMMITTEE DEBATE:\n{debate_transcript}\n\n"
             f"As the Portfolio Manager for {news.ticker}, synthesize this debate into a final "
             f"trade decision. Weight conviction scores — high-conviction dissenters matter. "
-            f"Acknowledge the key tension if the committee was split."
+            f"Acknowledge the key tension if the committee was split. "
+            f"Recommend BUY/SELL only for concrete, source-backed catalysts; otherwise HOLD."
         )
         messages = [
-            {"role": "system", "content": config.SYNTHESIS_SYSTEM_PROMPT},
+            {"role": "system", "content": guarded_system_prompt(config.SYNTHESIS_SYSTEM_PROMPT, "synthesis")},
             {"role": "user",   "content": prompt},
         ]
         input_payload = _llm_input_snapshot(
@@ -600,6 +698,9 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
                     view="Analysis unavailable for this persona.",
                     reasoning="This persona's LLM call failed; opinion not included in synthesis.",
                     model=None,
+                    catalyst_strength="NONE",
+                    evidence_quality="LOW",
+                    time_horizon="UNKNOWN",
                 )
 
             analysis = TradeAnalysis(
@@ -613,6 +714,8 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
                 reasoning=synthesis.reasoning,
                 action=synthesis.action,
                 model=model,
+                thesis_quality=synthesis.thesis_quality,
+                primary_risk=synthesis.primary_risk,
             )
 
             log.info(
@@ -666,22 +769,28 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
 def _make_assess_risk_node():
     def assess_risk(state: AgentState) -> dict:
         """
-        Dual gate: requires both a strong directional signal AND high confidence.
-
-        The committee process naturally produces lower confidence on split
-        decisions (by design in the synthesizer prompt), so a 2-vs-1 debate
-        result will be harder to clear this gate than a unanimous one.
+        Execution gate: requires a good thesis, calibrated confidence, valid
+        account state, and a position-aware order plan.
         """
+        article_quality = state.get("article_quality") or evaluate_article_quality(state["news"]).to_dict()
+
         if state.get("analysis") is None:
             return {
                 "should_trade": False,
+                "execution_plan": build_execution_plan(
+                    action="HOLD",
+                    order_qty=config.ORDER_QTY,
+                    market_context=state.get("market_context"),
+                ),
                 "risk_gate": {
                     "step": "assess_risk",
                     "inputs": None,
+                    "article_quality": article_quality,
                     "thresholds": {
                         "buy_sentiment": config.BUY_SENTIMENT_THRESHOLD,
                         "sell_sentiment": config.SELL_SENTIMENT_THRESHOLD,
                         "confidence": config.CONFIDENCE_THRESHOLD,
+                        "effective_confidence": min(config.CONFIDENCE_THRESHOLD, 0.80),
                     },
                     "should_trade": False,
                     "reason": "No valid analysis available.",
@@ -689,19 +798,38 @@ def _make_assess_risk_node():
             }
 
         a = state["analysis"]
+        metrics = committee_metrics(a, article_quality, state.get("market_context"))
+        plan = build_execution_plan(
+            action=a.action,
+            order_qty=config.ORDER_QTY,
+            market_context=state.get("market_context"),
+        )
+
         is_strong_buy  = a.action == "BUY"  and a.sentiment >= config.BUY_SENTIMENT_THRESHOLD
         is_strong_sell = a.action == "SELL" and a.sentiment <= config.SELL_SENTIMENT_THRESHOLD
-        is_confident   = a.confidence >= config.CONFIDENCE_THRESHOLD
+        effective_confidence_threshold = min(config.CONFIDENCE_THRESHOLD, 0.80)
+        is_confident   = metrics["calibrated_confidence"] >= effective_confidence_threshold
+        quality_ok     = article_quality.get("score", 0.0) >= 0.48
+        plan_ok        = len(plan["blocked_reasons"]) == 0
 
-        should_trade = (is_strong_buy or is_strong_sell) and is_confident
-        reason = "Signal passed configured sentiment and confidence gates."
-        if not should_trade:
+        blockers: list[str] = []
+        if a.action == "HOLD":
+            blockers.append("Portfolio Manager chose HOLD.")
+        if a.action != "HOLD" and not (is_strong_buy or is_strong_sell):
+            blockers.append("Directional sentiment did not clear the configured threshold.")
+        if a.action != "HOLD" and not is_confident:
+            blockers.append("Calibrated confidence did not clear the effective execution threshold.")
+        if a.action != "HOLD" and not quality_ok:
+            blockers.append("Article quality is too weak/broad for execution.")
+        blockers.extend(plan["blocked_reasons"])
+
+        should_trade = (is_strong_buy or is_strong_sell) and is_confident and quality_ok and plan_ok
+        reason = "Signal passed thesis, source-quality, account, and execution-plan gates."
+        if blockers:
             if a.action == "HOLD":
                 reason = "Portfolio Manager chose HOLD."
-            elif not (is_strong_buy or is_strong_sell):
-                reason = "Directional sentiment did not clear the configured threshold."
-            elif not is_confident:
-                reason = "Confidence did not clear the configured threshold."
+            else:
+                reason = " ".join(dict.fromkeys(blockers))
 
         # ── SIM safety: simulated signals never trigger Alpaca orders ──
         if state.get("is_simulated", False) and should_trade:
@@ -712,32 +840,48 @@ def _make_assess_risk_node():
             )
             should_trade = False
             reason = "Simulated signals are never sent to Alpaca."
+            blockers.append(reason)
 
         log.info(
-            "Risk gate: should_trade=%s  (action=%s  sentiment=%.2f  confidence=%.2f)",
-            should_trade, a.action, a.sentiment, a.confidence,
+            "Risk gate: should_trade=%s  (action=%s  sentiment=%.2f  confidence=%.2f→%.2f  quality=%s %.2f)",
+            should_trade,
+            a.action,
+            a.sentiment,
+            a.confidence,
+            metrics["calibrated_confidence"],
+            article_quality.get("grade"),
+            article_quality.get("score", 0.0),
         )
         return {
             "should_trade": should_trade,
+            "execution_plan": plan,
             "risk_gate": {
                 "step": "assess_risk",
                 "inputs": {
                     "action": a.action,
                     "sentiment": a.sentiment,
                     "confidence": a.confidence,
+                    "calibrated_confidence": metrics["calibrated_confidence"],
                     "is_simulated": state.get("is_simulated", False),
                 },
+                "article_quality": article_quality,
+                "committee_metrics": metrics,
+                "execution_plan": plan,
                 "thresholds": {
                     "buy_sentiment": config.BUY_SENTIMENT_THRESHOLD,
                     "sell_sentiment": config.SELL_SENTIMENT_THRESHOLD,
                     "confidence": config.CONFIDENCE_THRESHOLD,
+                    "effective_confidence": effective_confidence_threshold,
                 },
                 "checks": {
                     "strong_buy": is_strong_buy,
                     "strong_sell": is_strong_sell,
                     "confident": is_confident,
+                    "quality_ok": quality_ok,
+                    "execution_plan_ok": plan_ok,
                 },
                 "should_trade": should_trade,
+                "blockers": list(dict.fromkeys(blockers)),
                 "reason": reason,
             },
         }
@@ -750,28 +894,35 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
         """Submit the order to Alpaca and mark the headline as seen in Redis."""
         news   = state["news"]
         action = state["analysis"].action
+        plan = state.get("execution_plan") or {}
+        quantity = int(plan.get("quantity") or config.ORDER_QTY)
 
         # Deterministic client_order_id prevents duplicate orders if the
         # worker crashes after placing the order but before xack (SEC-04).
         client_order_id = hashlib.sha256(news.headline.encode()).hexdigest()[:36]
 
-        order_id = trader.place_order(
+        result = trader.place_order(
             ticker=news.ticker,
             action=action,
-            quantity=config.ORDER_QTY,
+            quantity=quantity,
             client_order_id=client_order_id,
         )
-        cache.mark_seen(news.headline)
+        if result.submitted:
+            cache.mark_seen(news.headline)
+
         return {
-            "trade_order_id": order_id,
+            "trade_order_id": result.order_id,
             "execution": {
                 "step": "execute_trade",
-                "submitted": True,
+                "submitted": result.submitted,
                 "ticker": news.ticker,
                 "action": action,
-                "quantity": config.ORDER_QTY,
+                "quantity": quantity,
                 "client_order_id": client_order_id,
-                "order_id": order_id,
+                "order_id": result.order_id,
+                "status": result.status,
+                "error": result.error,
+                "execution_plan": plan,
             },
         }
 
@@ -798,24 +949,29 @@ def _build_decision_trace(state: AgentState) -> dict[str, Any]:
             "confidence": analysis.confidence,
             "reasoning": analysis.reasoning,
             "action": analysis.action,
+            "thesis_quality": analysis.thesis_quality,
+            "primary_risk": analysis.primary_risk,
         }
 
+    plan = state.get("execution_plan") or {}
     execution = state.get("execution") or {
         "step": "execute_trade",
         "submitted": False,
         "ticker": news.ticker,
         "action": analysis.action if analysis else "HOLD",
-        "quantity": config.ORDER_QTY,
+        "quantity": plan.get("quantity", config.ORDER_QTY),
         "order_id": state.get("trade_order_id"),
+        "execution_plan": plan,
         "reason": "No Alpaca order submitted.",
     }
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "pipeline": "decision_core",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "news": news.model_dump(),
         "market_context": state.get("market_context"),
+        "article_quality": state.get("article_quality"),
         "llm_operations": state.get("llm_operations", []),
         "committee_debate": committee,
         "portfolio_manager_decision": portfolio_manager_decision,
@@ -858,6 +1014,7 @@ def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
             return {"error": err}
 
         a = state["analysis"]
+        plan = state.get("execution_plan") or {}
 
         db.log_trade(
             ticker=news.ticker,
@@ -867,7 +1024,7 @@ def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
             reasoning=a.reasoning,
             trade_action=a.action,
             order_id=state.get("trade_order_id"),
-            quantity=config.ORDER_QTY,
+            quantity=int(plan.get("quantity") or config.ORDER_QTY),
             is_simulated=state.get("is_simulated", False),
             article_source=news.source,
             article_url=news.article_url,
@@ -912,7 +1069,7 @@ def build_agent_graph(
     graph = StateGraph(AgentState)
 
     graph.add_node("check_cache",       _make_check_cache_node(cache))
-    graph.add_node("fetch_context",     _make_fetch_context_node())
+    graph.add_node("fetch_context",     _make_fetch_context_node(trader))
     graph.add_node("momentum_analyst",  _make_momentum_analyst_node(router, llm_client))
     graph.add_node("value_analyst",     _make_value_analyst_node(router, llm_client))
     graph.add_node("risk_analyst",      _make_risk_analyst_node(router, llm_client))

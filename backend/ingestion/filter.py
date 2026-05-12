@@ -35,6 +35,14 @@ BOILERPLATE_PHRASES = [
     "dividend record date",
     "notice of annual",
     "shareholder meeting",
+    "here's how much",
+    "if you invested",
+    "stocks to watch",
+    "watchlist",
+    "on the radar",
+    "penny stocks",
+    "best stocks",
+    "options activity",
 ]
 
 # Words that signal a meaningful business event likely to move the stock price.

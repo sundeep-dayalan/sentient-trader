@@ -21,7 +21,7 @@ export async function GET() {
   // Add .limit(10000) to prevent unbounded full-table scans (F-008)
   const { data, error } = await supabase
     .from("trades")
-    .select("trade_action, order_id, sentiment_score")
+    .select("trade_action, order_id, sentiment_score, decision_trace")
     .limit(10000);
 
   if (error) {

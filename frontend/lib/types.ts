@@ -11,6 +11,55 @@ export interface PersonaOpinion {
   view:       string;                               // one-sentence headline take (always visible on card)
   reasoning:  string;                               // full 2-3 sentence reasoning (shown below the take)
   model?:     string | null;                        // LLM model that powered this persona
+  catalyst_strength?: string | null;
+  evidence_quality?:  string | null;
+  time_horizon?:      string | null;
+  key_evidence?:      string[];
+  missing_data?:      string[];
+}
+
+export interface ArticleQuality {
+  score?: number;
+  grade?: "HIGH" | "MEDIUM" | "LOW" | string;
+  category?: string;
+  reasons?: string[];
+  flags?: string[];
+  has_summary?: boolean;
+}
+
+export interface RiskGateTrace {
+  step?: string;
+  inputs?: {
+    action?: "BUY" | "SELL" | "HOLD";
+    sentiment?: number;
+    confidence?: number;
+    calibrated_confidence?: number;
+    is_simulated?: boolean;
+  } | null;
+  thresholds?: Record<string, number>;
+  checks?: Record<string, boolean>;
+  article_quality?: ArticleQuality;
+  committee_metrics?: {
+    agreement?: number;
+    calibrated_confidence?: number;
+    confidence_cap?: number;
+    thesis_quality?: string;
+    cap_reasons?: string[];
+    high_conviction_dissenters?: string[];
+  };
+  execution_plan?: {
+    action?: string;
+    side?: string | null;
+    quantity?: number;
+    position_intent?: string;
+    estimated_notional?: number | null;
+    buying_power?: number | null;
+    position_qty?: number;
+    blocked_reasons?: string[];
+  };
+  should_trade?: boolean;
+  blockers?: string[];
+  reason?: string;
 }
 
 export interface LLMOperationTrace {
@@ -32,6 +81,7 @@ export interface DecisionTrace {
   legacy_migration?: boolean;
   news?: unknown;
   market_context?: unknown;
+  article_quality?: ArticleQuality;
   llm_operations?: LLMOperationTrace[];
   committee_debate?: PersonaOpinion[];
   portfolio_manager_decision?: {
@@ -40,8 +90,10 @@ export interface DecisionTrace {
     confidence?: number;
     reasoning?: string;
     action?: "BUY" | "SELL" | "HOLD";
+    thesis_quality?: string | null;
+    primary_risk?: string | null;
   } | null;
-  risk_gate?: unknown;
+  risk_gate?: RiskGateTrace | unknown;
   execution?: unknown;
   error?: string | null;
 }

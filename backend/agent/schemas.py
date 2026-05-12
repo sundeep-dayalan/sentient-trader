@@ -71,6 +71,28 @@ class PersonaAnalysis(BaseModel):
     headline_take: str = Field(
         description="ONE sentence — the single sharpest insight this persona can offer",
     )
+    catalyst_strength: Literal["STRONG", "MODERATE", "WEAK", "NONE"] = Field(
+        default="WEAK",
+        description="How concrete and article-specific the catalyst is based only on supplied text",
+    )
+    evidence_quality: Literal["HIGH", "MEDIUM", "LOW"] = Field(
+        default="LOW",
+        description="Quality of the source evidence supplied to this persona",
+    )
+    time_horizon: Literal["INTRADAY", "SWING", "LONG_TERM", "UNKNOWN"] = Field(
+        default="UNKNOWN",
+        description="The trading horizon implied by the catalyst, if any",
+    )
+    key_evidence: list[str] = Field(
+        default_factory=list,
+        max_length=5,
+        description="Short bullets of concrete evidence actually present in the prompt",
+    )
+    missing_data: list[str] = Field(
+        default_factory=list,
+        max_length=5,
+        description="Facts needed for a stronger call but absent from the prompt",
+    )
 
 
 class SynthesisResult(BaseModel):
@@ -105,6 +127,14 @@ class SynthesisResult(BaseModel):
     )
     action: Literal["BUY", "SELL", "HOLD"] = Field(
         description="Final trade recommendation after weighing all three personas",
+    )
+    thesis_quality: Literal["EXECUTABLE", "WATCH", "WEAK"] = Field(
+        default="WATCH",
+        description="Whether the thesis is strong enough to consider for execution before deterministic risk checks",
+    )
+    primary_risk: str = Field(
+        default="No primary risk identified.",
+        description="The most important reason this decision could be wrong",
     )
 
 
@@ -147,6 +177,11 @@ class PersonaOpinion(BaseModel):
     view:       str    # = PersonaAnalysis.headline_take — the one-liner shown on the card
     reasoning:  str    # = PersonaAnalysis.analysis — full text shown on expand
     model:      Optional[str] = None  # LLM model that powered this persona (e.g. "qwen/qwen3-32b")
+    catalyst_strength: Optional[str] = None
+    evidence_quality:  Optional[str] = None
+    time_horizon:      Optional[str] = None
+    key_evidence:      list[str] = Field(default_factory=list)
+    missing_data:      list[str] = Field(default_factory=list)
 
 
 class TradeAnalysis(BaseModel):
@@ -169,3 +204,5 @@ class TradeAnalysis(BaseModel):
     reasoning:  str    # consensus one-liner
     action:     Literal["BUY", "SELL", "HOLD"]
     model:      Optional[str] = None  # LLM model that powered the synthesis
+    thesis_quality: Optional[str] = None
+    primary_risk:   Optional[str] = None

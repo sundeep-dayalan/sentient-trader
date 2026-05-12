@@ -15,6 +15,7 @@ import PipelinePage    from "@/components/PipelinePage";
 import SettingsPage    from "@/components/SettingsPage";
 import { useAuth }     from "@/components/AuthProvider";
 import { BASE_PATH }   from "@/lib/config";
+import { isRiskGated } from "@/lib/dashboardStats";
 import { createClient } from "@/lib/supabase";
 import { DashboardStats, Trade } from "@/lib/types";
 
@@ -535,7 +536,7 @@ function addTradeToStats(stats: DashboardStats, trade: Trade): DashboardStats {
     executed: stats.executed + (trade.order_id?.trim() ? 1 : 0),
     buyOrders: stats.buyOrders + (trade.trade_action === "BUY" ? 1 : 0),
     sellOrders: stats.sellOrders + (trade.trade_action === "SELL" ? 1 : 0),
-    riskGated: stats.riskGated + (trade.trade_action === "HOLD" ? 1 : 0),
+    riskGated: stats.riskGated + (isRiskGated(trade) ? 1 : 0),
     avgSentiment: sentimentTotal / analyzed,
   };
 }
