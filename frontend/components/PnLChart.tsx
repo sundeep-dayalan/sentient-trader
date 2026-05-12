@@ -56,14 +56,41 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
   );
 }
 
+type LiveDotProps = {
+  cx?: number | string;
+  cy?: number | string;
+  index?: number;
+};
+
+function LiveChartDot({ cx, cy, index, dataLength }: LiveDotProps & { dataLength: number }) {
+  const x = Number(cx);
+  const y = Number(cy);
+  const isLatestPoint = index === dataLength - 1;
+
+  if (!isLatestPoint || !Number.isFinite(x) || !Number.isFinite(y)) {
+    return <g />;
+  }
+
+  return (
+    <g aria-hidden="true">
+      <circle cx={x} cy={y} r={9} fill="var(--dashboard-chart-line)" opacity="0.28">
+        <animate attributeName="r" values="7;14;7" dur="1.8s" repeatCount="indefinite" />
+        <animate attributeName="opacity" values="0.3;0.04;0.3" dur="1.8s" repeatCount="indefinite" />
+      </circle>
+      <circle cx={x} cy={y} r={5.5} fill="var(--dashboard-chart)" stroke="var(--dashboard-chart-line)" strokeWidth={3} />
+      <circle cx={x} cy={y} r={2.25} fill="var(--dashboard-chart-line)" />
+    </g>
+  );
+}
+
 export default function PnLChart() {
   const [data, setData] = useState<PortfolioPoint[]>([]);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [account, setAccount] = useState<PortfolioAccountSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [period, setPeriod] = useState<PeriodKey>("W");
-  const [chartType, setChartType] = useState<ChartType>("line");
+  const [period, setPeriod] = useState<PeriodKey>("D");
+  const [chartType, setChartType] = useState<ChartType>("area");
 
   const fetchPortfolio = useCallback(async () => {
     try {
@@ -136,6 +163,7 @@ export default function PnLChart() {
   );
   const grid = <CartesianGrid strokeDasharray="7 7" stroke="var(--dashboard-chart-grid)" vertical={false} />;
   const tooltip = <Tooltip content={<ChartTooltip />} />;
+  const liveDot = (props: LiveDotProps) => <LiveChartDot {...props} dataLength={data.length} />;
 
   return (
     <section className="relative min-h-[360px] overflow-hidden rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-chart)] p-5 shadow-[var(--dashboard-shadow)] md:min-h-[400px]">
@@ -249,7 +277,7 @@ export default function PnLChart() {
                     dataKey="equity"
                     stroke="var(--dashboard-chart-line)"
                     strokeWidth={4}
-                    dot={false}
+                    dot={liveDot}
                     activeDot={{ r: 7, fill: "var(--dashboard-chart)", stroke: "var(--dashboard-chart-line)", strokeWidth: 4 }}
                     isAnimationActive={false}
                   />
@@ -288,7 +316,7 @@ export default function PnLChart() {
                     strokeWidth={4}
                     fill="url(#paper-portfolio-fill)"
                     fillOpacity={1}
-                    dot={false}
+                    dot={liveDot}
                     activeDot={{ r: 7, fill: "var(--dashboard-chart)", stroke: "var(--dashboard-chart-line)", strokeWidth: 4 }}
                     isAnimationActive={false}
                   />

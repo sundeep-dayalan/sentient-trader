@@ -28,7 +28,7 @@ const RANGE_CONFIG = {
 type RangeKey = keyof typeof RANGE_CONFIG;
 
 function rangeKey(value: string | null): RangeKey {
-  return value && value in RANGE_CONFIG ? value as RangeKey : "W";
+  return value && value in RANGE_CONFIG ? value as RangeKey : "D";
 }
 
 function numberValue(value: unknown) {
