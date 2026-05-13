@@ -185,12 +185,51 @@ def _opinion_block(label: str, opinion: PersonaAnalysis) -> str:
     return (
         f"{label} [{opinion.stance}, conviction={opinion.conviction:.2f}]:\n"
         f"  Take: \"{opinion.headline_take}\"\n"
-        f"  Evidence: {opinion.evidence_quality}, catalyst={opinion.catalyst_strength}, horizon={opinion.time_horizon}\n"
         f"  Reasoning: {opinion.analysis}"
     )
 
 
-def _to_persona_opinion(name: str, pa: PersonaAnalysis, model: Optional[str] = None) -> PersonaOpinion:
+def _quality_metadata(quality: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """Derive storage-only quality fields without burdening the LLM schema."""
+    q = quality or {}
+    grade = str(q.get("grade") or "LOW")
+    category = str(q.get("category") or "")
+    score = q.get("score") if isinstance(q.get("score"), (int, float)) else 0.0
+    reasons = [str(reason) for reason in (q.get("reasons") or [])[:3]]
+    flags = set(str(flag) for flag in (q.get("flags") or []))
+
+    if grade == "HIGH" or "hard" in category:
+        catalyst = "STRONG"
+    elif grade == "MEDIUM" or "soft" in category:
+        catalyst = "MODERATE"
+    elif score <= 0.05:
+        catalyst = "NONE"
+    else:
+        catalyst = "WEAK"
+
+    missing_data: list[str] = []
+    if "missing_or_thin_summary" in flags:
+        missing_data.append("Full Alpaca article summary or transcript details.")
+    if "weak_or_broad_article" in flags:
+        missing_data.append("Ticker-specific catalyst rather than broad/watchlist context.")
+    if not missing_data:
+        missing_data.append("Independent financial context beyond the supplied Alpaca headline/summary.")
+
+    return {
+        "catalyst_strength": catalyst,
+        "evidence_quality": grade,
+        "time_horizon": "INTRADAY" if catalyst in {"STRONG", "MODERATE"} else "UNKNOWN",
+        "key_evidence": reasons,
+        "missing_data": missing_data,
+    }
+
+
+def _to_persona_opinion(
+    name: str,
+    pa: PersonaAnalysis,
+    model: Optional[str] = None,
+    quality: Optional[dict[str, Any]] = None,
+) -> PersonaOpinion:
     """Convert a raw LLM output (PersonaAnalysis) to the storage type (PersonaOpinion)."""
     return PersonaOpinion(
         name=name,
@@ -199,11 +238,7 @@ def _to_persona_opinion(name: str, pa: PersonaAnalysis, model: Optional[str] = N
         view=pa.headline_take,
         reasoning=pa.analysis,
         model=model,
-        catalyst_strength=pa.catalyst_strength,
-        evidence_quality=pa.evidence_quality,
-        time_horizon=pa.time_horizon,
-        key_evidence=pa.key_evidence,
-        missing_data=pa.missing_data,
+        **_quality_metadata(quality),
     )
 
 
@@ -375,6 +410,80 @@ def _make_fetch_context_node(trader: AlpacaTrader):
             }
 
     return fetch_context
+
+
+def _make_pre_screen_node():
+    """
+    Deterministically hold low-quality articles before spending LLM quota.
+
+    Weak transcript/watchlist/radar headlines were the biggest source of noisy
+    LLM failures. The quality gate is deterministic, auditable, and still
+    writes a full HOLD trace through assess_risk/log_result.
+    """
+    def pre_screen(state: AgentState) -> dict:
+        news = state["news"]
+        quality = state.get("article_quality") or evaluate_article_quality(news).to_dict()
+        score = quality.get("score", 0.0)
+
+        if isinstance(score, (int, float)) and score >= 0.48:
+            return {}
+
+        metadata = _quality_metadata(quality)
+        grade = quality.get("grade", "LOW")
+        category = quality.get("category", "low-quality article")
+        reasons = quality.get("reasons") or ["No concrete article-specific trading catalyst detected."]
+        reason_text = " ".join(str(reason) for reason in reasons)
+
+        committee = [
+            PersonaOpinion(
+                name="Momentum Trader",
+                stance="NEUTRAL",
+                conviction=0.20,
+                view="Source quality is too weak for a momentum trade.",
+                reasoning=f"The article is graded {grade} ({category}). {reason_text}",
+                model="deterministic-pre-screen",
+                **metadata,
+            ),
+            PersonaOpinion(
+                name="Value Investor",
+                stance="NEUTRAL",
+                conviction=0.20,
+                view="No source-backed fundamentals justify a valuation call.",
+                reasoning="The supplied article lacks enough ticker-specific financial evidence for a fundamental thesis.",
+                model="deterministic-pre-screen",
+                **metadata,
+            ),
+            PersonaOpinion(
+                name="Risk Manager",
+                stance="NEUTRAL",
+                conviction=0.25,
+                view="Low-quality input is a data-risk issue, not a trade signal.",
+                reasoning="The safest action is to avoid an LLM-amplified call when the source lacks a concrete catalyst.",
+                model="deterministic-pre-screen",
+                **metadata,
+            ),
+        ]
+
+        analysis = TradeAnalysis(
+            committee=committee,
+            sentiment=0.0,
+            confidence=min(0.35, float(score) if isinstance(score, (int, float)) else 0.0),
+            reasoning=f"Pre-screened as HOLD: {grade} source quality with no executable catalyst. {reason_text}",
+            action="HOLD",
+            model="deterministic-pre-screen",
+            thesis_quality="WEAK",
+            primary_risk="The article may omit material facts, so the system refused to infer a trade from thin evidence.",
+        )
+
+        log.info(
+            "Pre-screen [%s]: HOLD low-quality article grade=%s score=%.2f",
+            news.ticker,
+            grade,
+            float(score) if isinstance(score, (int, float)) else 0.0,
+        )
+        return {"analysis": analysis, "article_quality": quality}
+
+    return pre_screen
 
 
 def _make_momentum_analyst_node(router: ModelRouter, client: Any):
@@ -688,9 +797,11 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
 
             # Assemble the final TradeAnalysis from all debate components.
             # Substitute a neutral placeholder for any persona whose call failed.
+            quality = state.get("article_quality")
+
             def safe_opinion(name: str, pa: Optional[PersonaAnalysis], mdl: Optional[str] = None) -> PersonaOpinion:
                 if pa is not None:
-                    return _to_persona_opinion(name, pa, model=mdl)
+                    return _to_persona_opinion(name, pa, model=mdl, quality=quality)
                 return PersonaOpinion(
                     name=name,
                     stance="NEUTRAL",
@@ -698,9 +809,7 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
                     view="Analysis unavailable for this persona.",
                     reasoning="This persona's LLM call failed; opinion not included in synthesis.",
                     model=None,
-                    catalyst_strength="NONE",
-                    evidence_quality="LOW",
-                    time_horizon="UNKNOWN",
+                    **_quality_metadata(quality),
                 )
 
             analysis = TradeAnalysis(
@@ -714,8 +823,6 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
                 reasoning=synthesis.reasoning,
                 action=synthesis.action,
                 model=model,
-                thesis_quality=synthesis.thesis_quality,
-                primary_risk=synthesis.primary_risk,
             )
 
             log.info(
@@ -1046,6 +1153,10 @@ def _route_after_cache_check(state: AgentState) -> str:
     return "skip" if state["is_cached"] else "fetch_context"
 
 
+def _route_after_pre_screen(state: AgentState) -> str:
+    return "assess_risk" if state.get("analysis") is not None else "momentum_analyst"
+
+
 def _route_after_risk_assessment(state: AgentState) -> str:
     return "execute_trade" if state["should_trade"] else "log_result"
 
@@ -1070,6 +1181,7 @@ def build_agent_graph(
 
     graph.add_node("check_cache",       _make_check_cache_node(cache))
     graph.add_node("fetch_context",     _make_fetch_context_node(trader))
+    graph.add_node("pre_screen",        _make_pre_screen_node())
     graph.add_node("momentum_analyst",  _make_momentum_analyst_node(router, llm_client))
     graph.add_node("value_analyst",     _make_value_analyst_node(router, llm_client))
     graph.add_node("risk_analyst",      _make_risk_analyst_node(router, llm_client))
@@ -1087,7 +1199,12 @@ def build_agent_graph(
     )
 
     # Sequential debate chain — order is deliberate
-    graph.add_edge("fetch_context",    "momentum_analyst")
+    graph.add_edge("fetch_context",    "pre_screen")
+    graph.add_conditional_edges(
+        "pre_screen",
+        _route_after_pre_screen,
+        {"assess_risk": "assess_risk", "momentum_analyst": "momentum_analyst"},
+    )
     graph.add_edge("momentum_analyst", "value_analyst")
     graph.add_edge("value_analyst",    "risk_analyst")
     graph.add_edge("risk_analyst",     "synthesizer")

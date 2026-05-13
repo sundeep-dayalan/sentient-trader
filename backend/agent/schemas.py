@@ -51,16 +51,6 @@ def _coerce_choice(value: object, allowed: set[str], default: str) -> str:
     return default
 
 
-def _coerce_string_list(value: object) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value.strip()] if value.strip() else []
-    if isinstance(value, list):
-        return [str(item).strip() for item in value[:5] if str(item).strip()]
-    return []
-
-
 def _coerce_unit_float(value: object, default: float = 0.0) -> float:
     try:
         if isinstance(value, str):
@@ -131,27 +121,6 @@ class PersonaAnalysis(BaseModel):
     headline_take: str = Field(
         description="ONE sentence — the single sharpest insight this persona can offer",
     )
-    catalyst_strength: Literal["STRONG", "MODERATE", "WEAK", "NONE"] = Field(
-        default="WEAK",
-        description="How concrete and article-specific the catalyst is based only on supplied text",
-    )
-    evidence_quality: Literal["HIGH", "MEDIUM", "LOW"] = Field(
-        default="LOW",
-        description="Quality of the source evidence supplied to this persona",
-    )
-    time_horizon: Literal["INTRADAY", "SWING", "LONG_TERM", "UNKNOWN"] = Field(
-        default="UNKNOWN",
-        description="The trading horizon implied by the catalyst, if any",
-    )
-    key_evidence: list[str] = Field(
-        default_factory=list,
-        description="Short bullets of concrete evidence actually present in the prompt",
-    )
-    missing_data: list[str] = Field(
-        default_factory=list,
-        description="Facts needed for a stronger call but absent from the prompt",
-    )
-
     @field_validator("stance", mode="before")
     @classmethod
     def _normalize_stance(cls, value: object) -> str:
@@ -161,26 +130,6 @@ class PersonaAnalysis(BaseModel):
     @classmethod
     def _normalize_conviction(cls, value: object) -> float:
         return _coerce_unit_float(value, default=0.0)
-
-    @field_validator("catalyst_strength", mode="before")
-    @classmethod
-    def _normalize_catalyst_strength(cls, value: object) -> str:
-        return _coerce_choice(value, {"STRONG", "MODERATE", "WEAK", "NONE"}, "WEAK")
-
-    @field_validator("evidence_quality", mode="before")
-    @classmethod
-    def _normalize_evidence_quality(cls, value: object) -> str:
-        return _coerce_choice(value, {"HIGH", "MEDIUM", "LOW"}, "LOW")
-
-    @field_validator("time_horizon", mode="before")
-    @classmethod
-    def _normalize_time_horizon(cls, value: object) -> str:
-        return _coerce_choice(value, {"INTRADAY", "SWING", "LONG_TERM", "UNKNOWN"}, "UNKNOWN")
-
-    @field_validator("key_evidence", "missing_data", mode="before")
-    @classmethod
-    def _normalize_lists(cls, value: object) -> list[str]:
-        return _coerce_string_list(value)
 
 
 class SynthesisResult(BaseModel):
@@ -216,15 +165,6 @@ class SynthesisResult(BaseModel):
     action: Literal["BUY", "SELL", "HOLD"] = Field(
         description="Final trade recommendation after weighing all three personas",
     )
-    thesis_quality: Literal["EXECUTABLE", "WATCH", "WEAK"] = Field(
-        default="WATCH",
-        description="Whether the thesis is strong enough to consider for execution before deterministic risk checks",
-    )
-    primary_risk: str = Field(
-        default="No primary risk identified.",
-        description="The most important reason this decision could be wrong",
-    )
-
     @field_validator("action", mode="before")
     @classmethod
     def _normalize_action(cls, value: object) -> str:
@@ -239,11 +179,6 @@ class SynthesisResult(BaseModel):
     @classmethod
     def _normalize_confidence(cls, value: object) -> float:
         return _coerce_unit_float(value, default=0.0)
-
-    @field_validator("thesis_quality", mode="before")
-    @classmethod
-    def _normalize_thesis_quality(cls, value: object) -> str:
-        return _coerce_choice(value, {"EXECUTABLE", "WATCH", "WEAK"}, "WATCH")
 
 
 # ── Storage Format (Supabase + Frontend) ─────────────────────────────────────
