@@ -73,6 +73,8 @@ def sanitize_llm_error(exc: Exception) -> str:
         return "AI model request timed out — the system will retry on the next signal."
     if "connection" in raw or "network" in raw:
         return "Network error reaching AI model — the system will retry on the next signal."
+    if any(term in raw for term in ("validation", "failed to parse", "instructor", "max retries", "json")):
+        return "AI response failed structured validation — the system will retry on the next signal."
     # Generic fallback — still don't expose raw exception text
     return "AI analysis temporarily unavailable — the system will retry on the next signal."
 
@@ -202,16 +204,18 @@ class ModelRouter:
                     "All Groq model tiers exhausted."
                 )
 
+        last_structured_error: Exception | None = None
+
         for model in available:
             try:
-                # max_retries=0 for the cascade call: we don't want instructor
-                # to retry the SAME rate-limited model internally.  The
-                # ModelRouter cascade across models IS the retry strategy.
+                # Keep one instructor repair attempt for malformed JSON/schema
+                # responses, then cascade to another model if validation still
+                # fails. Rate-limit errors are still cooled down below.
                 result = client.chat.completions.create(
                     model=model,
                     response_model=response_model,
                     messages=messages,
-                    max_retries=0,
+                    max_retries=max_retries,
                 )
                 log.debug("ModelRouter: %s succeeded", model)
                 return result, model
@@ -230,8 +234,20 @@ class ModelRouter:
                 )
 
                 if not is_rate_limit:
-                    # Schema validation, network errors, etc. — not a model
-                    # choice problem, don't try next tier.
+                    is_structured_output_error = any(
+                        term in exc_str
+                        for term in ("validation", "failed to parse", "instructor", "max retries", "json")
+                    )
+                    if is_structured_output_error:
+                        log.warning(
+                            "ModelRouter: structured output failed on %s — trying next tier",
+                            model,
+                        )
+                        last_structured_error = exc
+                        continue
+
+                    # Network/auth/provider errors are not a model-choice
+                    # problem; preserve the original exception.
                     raise
 
                 retry_after = _parse_retry_after(exc)
@@ -243,6 +259,7 @@ class ModelRouter:
                 )
                 continue
 
-        raise RuntimeError(
-            "All available Groq tiers rate-limited."
-        )
+        if last_structured_error is not None:
+            raise last_structured_error
+
+        raise RuntimeError("All available Groq tiers rate-limited.")

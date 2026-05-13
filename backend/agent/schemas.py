@@ -22,7 +22,67 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def _coerce_choice(value: object, allowed: set[str], default: str) -> str:
+    if isinstance(value, str):
+        normalized = value.strip().upper().replace("-", "_").replace(" ", "_")
+        synonyms = {
+            "SOFT": "MODERATE",
+            "MED": "MEDIUM",
+            "MEDIUM_QUALITY": "MEDIUM",
+            "LOW_QUALITY": "LOW",
+            "HIGH_QUALITY": "HIGH",
+            "LONG": "LONG_TERM",
+            "LONGTERM": "LONG_TERM",
+            "NO_TRADE": "HOLD",
+            "WAIT": "HOLD",
+            "PASS": "HOLD",
+            "NON_EXECUTABLE": "WEAK",
+            "NOT_EXECUTABLE": "WEAK",
+        }
+        normalized = synonyms.get(normalized, normalized)
+        if normalized in allowed:
+            return normalized
+        for choice in allowed:
+            if choice in normalized:
+                return choice
+    return default
+
+
+def _coerce_string_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value[:5] if str(item).strip()]
+    return []
+
+
+def _coerce_unit_float(value: object, default: float = 0.0) -> float:
+    try:
+        if isinstance(value, str):
+            value = value.strip().rstrip("%")
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    if parsed > 1 and parsed <= 100:
+        parsed = parsed / 100
+    return max(0.0, min(1.0, parsed))
+
+
+def _coerce_sentiment(value: object) -> float:
+    try:
+        if isinstance(value, str):
+            value = value.strip().rstrip("%")
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    if abs(parsed) > 1 and abs(parsed) <= 100:
+        parsed = parsed / 100
+    return max(-1.0, min(1.0, parsed))
 
 
 # ── Wire Format ──────────────────────────────────────────────────────────────
@@ -85,14 +145,42 @@ class PersonaAnalysis(BaseModel):
     )
     key_evidence: list[str] = Field(
         default_factory=list,
-        max_length=5,
         description="Short bullets of concrete evidence actually present in the prompt",
     )
     missing_data: list[str] = Field(
         default_factory=list,
-        max_length=5,
         description="Facts needed for a stronger call but absent from the prompt",
     )
+
+    @field_validator("stance", mode="before")
+    @classmethod
+    def _normalize_stance(cls, value: object) -> str:
+        return _coerce_choice(value, {"BULLISH", "BEARISH", "NEUTRAL"}, "NEUTRAL")
+
+    @field_validator("conviction", mode="before")
+    @classmethod
+    def _normalize_conviction(cls, value: object) -> float:
+        return _coerce_unit_float(value, default=0.0)
+
+    @field_validator("catalyst_strength", mode="before")
+    @classmethod
+    def _normalize_catalyst_strength(cls, value: object) -> str:
+        return _coerce_choice(value, {"STRONG", "MODERATE", "WEAK", "NONE"}, "WEAK")
+
+    @field_validator("evidence_quality", mode="before")
+    @classmethod
+    def _normalize_evidence_quality(cls, value: object) -> str:
+        return _coerce_choice(value, {"HIGH", "MEDIUM", "LOW"}, "LOW")
+
+    @field_validator("time_horizon", mode="before")
+    @classmethod
+    def _normalize_time_horizon(cls, value: object) -> str:
+        return _coerce_choice(value, {"INTRADAY", "SWING", "LONG_TERM", "UNKNOWN"}, "UNKNOWN")
+
+    @field_validator("key_evidence", "missing_data", mode="before")
+    @classmethod
+    def _normalize_lists(cls, value: object) -> list[str]:
+        return _coerce_string_list(value)
 
 
 class SynthesisResult(BaseModel):
@@ -136,6 +224,26 @@ class SynthesisResult(BaseModel):
         default="No primary risk identified.",
         description="The most important reason this decision could be wrong",
     )
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _normalize_action(cls, value: object) -> str:
+        return _coerce_choice(value, {"BUY", "SELL", "HOLD"}, "HOLD")
+
+    @field_validator("sentiment", mode="before")
+    @classmethod
+    def _normalize_sentiment(cls, value: object) -> float:
+        return _coerce_sentiment(value)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _normalize_confidence(cls, value: object) -> float:
+        return _coerce_unit_float(value, default=0.0)
+
+    @field_validator("thesis_quality", mode="before")
+    @classmethod
+    def _normalize_thesis_quality(cls, value: object) -> str:
+        return _coerce_choice(value, {"EXECUTABLE", "WATCH", "WEAK"}, "WATCH")
 
 
 # ── Storage Format (Supabase + Frontend) ─────────────────────────────────────
