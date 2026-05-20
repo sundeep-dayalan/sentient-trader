@@ -21,6 +21,7 @@ Field format from upstash-redis 1.7.0:
   Fields are a flat alternating list, not a dict — we convert with zip(even, odd).
 """
 
+import json
 import logging
 import os
 import time
@@ -52,7 +53,35 @@ class RedisStreamConsumer:
             url=os.environ["UPSTASH_REDIS_URL"],
             token=os.environ["UPSTASH_REDIS_TOKEN"],
         )
+        self._last_state_phase: str | None = None
+        self._write_agent_state("starting", "initializing Redis stream consumer")
         self._ensure_consumer_group()
+
+    def _write_agent_state(self, phase: str, detail: str | None = None) -> None:
+        now = int(time.time())
+        try:
+            self._redis.set("agent:heartbeat", str(now))
+            if phase != self._last_state_phase or detail:
+                self._redis.set(
+                    "agent:state",
+                    json.dumps({
+                        "phase": phase,
+                        "detail": detail,
+                        "updated_at": now,
+                    }),
+                )
+                self._last_state_phase = phase
+        except Exception as exc:
+            log.warning("Could not write agent heartbeat/state: %s", exc)
+
+    def _sleep_with_heartbeat(self, seconds: float, phase: str, detail: str | None = None) -> None:
+        deadline = time.time() + seconds
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return
+            self._write_agent_state(phase, detail)
+            time.sleep(min(30, remaining))
 
     def _ensure_consumer_group(self) -> None:
         """
@@ -75,7 +104,11 @@ class RedisStreamConsumer:
                         "sleeping %.0fs before retry",
                         config.REDIS_QUOTA_RETRY,
                     )
-                    time.sleep(config.REDIS_QUOTA_RETRY)
+                    self._sleep_with_heartbeat(
+                        config.REDIS_QUOTA_RETRY,
+                        "redis_quota_backoff",
+                        "waiting for Upstash request quota to recover",
+                    )
                     continue
                 raise
 
@@ -85,6 +118,7 @@ class RedisStreamConsumer:
         on_message: called with a parsed NewsMessage for each new entry.
         """
         log.info("Redis stream consumer ready (stream=%s, group=%s)", config.STREAM_KEY, config.CONSUMER_GROUP)
+        self._write_agent_state("polling", "Redis stream consumer is polling for news")
 
         last_heartbeat = 0.0
 
@@ -92,7 +126,7 @@ class RedisStreamConsumer:
             try:
                 now = time.time()
                 if now - last_heartbeat > 10:
-                    self._redis.set("agent:heartbeat", str(int(now)))
+                    self._write_agent_state("polling")
                     last_heartbeat = now
 
                 # ">" = give me messages not yet delivered to any consumer in this group
@@ -118,7 +152,11 @@ class RedisStreamConsumer:
             except Exception as e:
                 retry = config.REDIS_QUOTA_RETRY if _is_upstash_quota_error(e) else config.ERROR_RETRY
                 log.error("Stream poll error: %s — retrying in %.0fs", e, retry)
-                time.sleep(retry)
+                self._sleep_with_heartbeat(
+                    retry,
+                    "stream_backoff",
+                    str(e)[:200],
+                )
 
     def _process_entry(
         self,

@@ -60,7 +60,7 @@ CONSUMER_NAME  = "agent-worker-1"
 BATCH_SIZE     = 10
 POLL_INTERVAL  = 1.0
 ERROR_RETRY    = 5.0
-REDIS_QUOTA_RETRY = int(os.environ.get("REDIS_QUOTA_RETRY", "3600"))
+REDIS_QUOTA_RETRY = int(os.environ.get("REDIS_QUOTA_RETRY", "60"))
 
 # ── Agent parameters — populated by reload_from_supabase() at startup ────────
 

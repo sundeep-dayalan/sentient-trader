@@ -4,14 +4,17 @@ import { useEffect, useState, useRef } from "react";
 import { BASE_PATH } from "@/lib/config";
 
 type S = "ok" | "stale" | "error" | "unknown" | "loading";
+type ServiceKey = "alpaca" | "supabase" | "groq" | "redis" | "agent";
 
 interface StatusData {
   alpaca: S; supabase: S; groq: S; redis: S; agent: S;
   lastTradeAt: string | null;
   lastHeartbeatAt: string | null;
+  checkedAt: string | null;
+  details?: Partial<Record<ServiceKey, string>>;
 }
 
-const SERVICES: { key: keyof Omit<StatusData, "lastTradeAt" | "lastHeartbeatAt">; label: string }[] = [
+const SERVICES: { key: ServiceKey; label: string }[] = [
   { key: "alpaca",   label: "Alpaca"   },
   { key: "supabase", label: "Supabase" },
   { key: "groq",     label: "Groq"     },
@@ -40,6 +43,7 @@ function relTime(iso: string): string {
 const INIT: StatusData = {
   alpaca: "loading", supabase: "loading", groq: "loading",
   redis:  "loading", agent:    "loading", lastTradeAt: null, lastHeartbeatAt: null,
+  checkedAt: null,
 };
 
 export default function SystemStatus() {
@@ -74,7 +78,7 @@ export default function SystemStatus() {
   }, []);
 
   const hasError = SERVICES.some(s => status[s.key] === "error");
-  const hasWarning = SERVICES.some(s => status[s.key] === "stale" || status[s.key] === "unknown");
+  const hasWarning = SERVICES.some(s => status[s.key] === "stale");
   const isLoading = SERVICES.some(s => status[s.key] === "loading");
 
   const mainColor = hasError ? "bg-negative" : hasWarning ? "bg-warning" : isLoading ? "bg-muted animate-pulse" : "bg-positive";
@@ -104,11 +108,24 @@ export default function SystemStatus() {
               <div key={key} className="flex items-center justify-between gap-3">
                 <span className="text-xs text-secondary">{label}</span>
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] uppercase tracking-wider text-muted opacity-80">{status[key]}</span>
+                  <span
+                    className="text-[10px] uppercase tracking-wider text-muted opacity-80"
+                    title={status.details?.[key]}
+                  >
+                    {status[key]}
+                  </span>
                   <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor(status[key])}`} />
                 </div>
               </div>
             ))}
+            {status.checkedAt && (
+              <div className="mt-1 border-t border-line pt-3 flex justify-between items-center">
+                <span className="text-[10px] text-muted uppercase tracking-wider">Checked</span>
+                <span className="text-xs text-secondary">
+                  {relTime(status.checkedAt)}
+                </span>
+              </div>
+            )}
             {status.lastHeartbeatAt && (
               <div className="mt-1 border-t border-line pt-3 flex justify-between items-center">
                 <span className="text-[10px] text-muted uppercase tracking-wider">Last Agent</span>
