@@ -31,6 +31,18 @@ GROQ_MODEL_PINNED_ORDER: list[str] = [
     if model.strip()
 ]
 
+# Used only when Groq's /models discovery is unavailable. Normal operation is
+# auto-ranked from the live endpoint; this keeps the agent functional if model
+# discovery is temporarily forbidden/down.
+GROQ_MODEL_DISCOVERY_FALLBACK: list[str] = [
+    "openai/gpt-oss-120b",
+    "qwen/qwen3-32b",
+    "llama-3.3-70b-versatile",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "openai/gpt-oss-20b",
+    "llama-3.1-8b-instant",
+]
+
 # Backward-compatible alias used by older imports/tests. Empty means "auto-rank".
 MODEL_CASCADE: list[str] = GROQ_MODEL_PINNED_ORDER
 
@@ -48,6 +60,7 @@ CONSUMER_NAME  = "agent-worker-1"
 BATCH_SIZE     = 10
 POLL_INTERVAL  = 1.0
 ERROR_RETRY    = 5.0
+REDIS_QUOTA_RETRY = int(os.environ.get("REDIS_QUOTA_RETRY", "3600"))
 
 # ── Agent parameters — populated by reload_from_supabase() at startup ────────
 

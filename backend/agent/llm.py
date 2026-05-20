@@ -187,14 +187,15 @@ def _fetch_groq_models_payload() -> dict[str, Any] | None:
     """Fetch Groq's active model list. Failure is non-fatal; static config remains usable."""
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        log.warning("ModelRouter: GROQ_API_KEY missing; using configured model cascade without discovery")
+        log.warning("ModelRouter: GROQ_API_KEY missing; using fallback model cascade without discovery")
         return None
 
     req = urlrequest.Request(
         config.GROQ_MODELS_URL,
         headers={
             "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "sentient-trader-agent/1.0",
         },
     )
 
@@ -202,7 +203,7 @@ def _fetch_groq_models_payload() -> dict[str, Any] | None:
         with urlrequest.urlopen(req, timeout=config.GROQ_MODEL_DISCOVERY_TIMEOUT) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except (OSError, TimeoutError, json.JSONDecodeError, urlerror.URLError) as exc:
-        log.warning("ModelRouter: could not fetch Groq model list (%s); using configured cascade", exc)
+        log.warning("ModelRouter: could not fetch Groq model list (%s); using fallback cascade", exc)
         return None
 
 
@@ -211,7 +212,8 @@ def _resolve_model_tiers(pinned_models: list[str]) -> list[str]:
     payload = _fetch_groq_models_payload()
     pinned_unique = list(dict.fromkeys(pinned_models))
     if payload is None:
-        return pinned_unique
+        fallback = [model for model in config.GROQ_MODEL_DISCOVERY_FALLBACK if model not in pinned_unique]
+        return [*pinned_unique, *fallback]
 
     auto_ranked = _select_policy_ranked_models(payload)
     if pinned_unique:
@@ -226,8 +228,9 @@ def _resolve_model_tiers(pinned_models: list[str]) -> list[str]:
         log.info("ModelRouter: active Groq cascade: %s", " → ".join(selected))
         return selected
 
-    log.error("ModelRouter: no active Groq text-analysis models found")
-    return pinned_unique
+    log.error("ModelRouter: no active Groq text-analysis models found; using fallback cascade")
+    fallback = [model for model in config.GROQ_MODEL_DISCOVERY_FALLBACK if model not in pinned_unique]
+    return [*pinned_unique, *fallback]
 
 
 # ── Client Factory ───────────────────────────────────────────────────────────

@@ -34,6 +34,13 @@ from schemas import NewsMessage
 log = logging.getLogger("agent.consumer")
 
 
+def _is_upstash_quota_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "max requests limit exceeded" in message or (
+        "usage:" in message and "limit:" in message
+    )
+
+
 class RedisStreamConsumer:
     """
     Persistent Redis Stream consumer with auto-group creation and ACK logic.
@@ -53,13 +60,23 @@ class RedisStreamConsumer:
         "$" means only deliver messages added AFTER this call — we don't want
         to replay old news on restart. mkstream creates the stream if absent.
         """
-        try:
-            self._redis.xgroup_create(config.STREAM_KEY, config.CONSUMER_GROUP, "$", mkstream=True)
-            log.info("Consumer group '%s' created on stream '%s'", config.CONSUMER_GROUP, config.STREAM_KEY)
-        except Exception as e:
-            if "BUSYGROUP" in str(e):
-                log.info("Consumer group '%s' already exists — resuming", config.CONSUMER_GROUP)
-            else:
+        while True:
+            try:
+                self._redis.xgroup_create(config.STREAM_KEY, config.CONSUMER_GROUP, "$", mkstream=True)
+                log.info("Consumer group '%s' created on stream '%s'", config.CONSUMER_GROUP, config.STREAM_KEY)
+                return
+            except Exception as e:
+                if "BUSYGROUP" in str(e):
+                    log.info("Consumer group '%s' already exists — resuming", config.CONSUMER_GROUP)
+                    return
+                if _is_upstash_quota_error(e):
+                    log.error(
+                        "Upstash Redis request quota exhausted while ensuring consumer group — "
+                        "sleeping %.0fs before retry",
+                        config.REDIS_QUOTA_RETRY,
+                    )
+                    time.sleep(config.REDIS_QUOTA_RETRY)
+                    continue
                 raise
 
     def start(self, on_message: Callable[[NewsMessage], None]) -> None:
@@ -99,8 +116,9 @@ class RedisStreamConsumer:
                 log.info("Consumer shutting down...")
                 break
             except Exception as e:
-                log.error("Stream poll error: %s — retrying in %.0fs", e, config.ERROR_RETRY)
-                time.sleep(config.ERROR_RETRY)
+                retry = config.REDIS_QUOTA_RETRY if _is_upstash_quota_error(e) else config.ERROR_RETRY
+                log.error("Stream poll error: %s — retrying in %.0fs", e, retry)
+                time.sleep(retry)
 
     def _process_entry(
         self,
