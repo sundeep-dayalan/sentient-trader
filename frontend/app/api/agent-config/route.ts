@@ -13,6 +13,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { requireSuperUser } from "@/lib/auth-helpers";
+import { SUPABASE_CLIENT_OPTIONS } from "@/lib/supabase-schema";
 
 interface ModelTier {
   id:      string;
@@ -127,6 +128,7 @@ function supabase() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    SUPABASE_CLIENT_OPTIONS,
   );
 }
 

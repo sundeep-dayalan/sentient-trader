@@ -25,6 +25,7 @@ from typing import Optional
 from uuid import uuid4
 
 from supabase import Client, create_client
+from supabase.client import ClientOptions
 
 log = logging.getLogger("agent.logger")
 
@@ -40,6 +41,9 @@ class SupabaseLogger:
         self._client: Client = create_client(
             supabase_url=os.environ["SUPABASE_URL"],
             supabase_key=os.environ["SUPABASE_SERVICE_ROLE_KEY"],
+            options=ClientOptions(
+                schema=os.environ.get("SUPABASE_DB_SCHEMA", "public"),
+            ),
         )
         log.info("Supabase logger connected")
 

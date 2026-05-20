@@ -82,9 +82,13 @@ def reload_from_supabase() -> None:
     global MOMENTUM_SYSTEM_PROMPT, VALUE_SYSTEM_PROMPT, RISK_SYSTEM_PROMPT, SYNTHESIS_SYSTEM_PROMPT
 
     from supabase import create_client
+    from supabase.client import ClientOptions
     client = create_client(
         supabase_url=os.environ["SUPABASE_URL"],
         supabase_key=os.environ["SUPABASE_SERVICE_ROLE_KEY"],
+        options=ClientOptions(
+            schema=os.environ.get("SUPABASE_DB_SCHEMA", "public"),
+        ),
     )
     result = (
         client.table("agent_config")

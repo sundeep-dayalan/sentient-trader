@@ -11,9 +11,10 @@
  */
 
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { SUPABASE_CLIENT_OPTIONS } from "@/lib/supabase-schema";
 
 export function createClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-  return createSupabaseClient(url, key);
+  return createSupabaseClient(url, key, SUPABASE_CLIENT_OPTIONS);
 }

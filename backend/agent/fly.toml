@@ -17,6 +17,7 @@ primary_region = "iad"
 [env]
   PYTHONUNBUFFERED = "1"
   REDIS_STREAM_KEY = "market-news"
+  SUPABASE_DB_SCHEMA = "sentient_trader"
 
 [[vm]]
   size   = "shared-cpu-1x"

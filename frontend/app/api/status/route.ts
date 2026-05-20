@@ -51,6 +51,11 @@ function parseAgentState(raw: string | null): AgentState | null {
   }
 }
 
+function statusErrorDetail(prefix: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return `${prefix}: ${message.slice(0, 240)}`;
+}
+
 async function checkSupabaseAndPipeline(): Promise<{
   supabase: ServiceStatus;
   groq:     ServiceStatus;
@@ -82,9 +87,9 @@ async function checkSupabaseAndPipeline(): Promise<{
       lastTradeAt = data?.created_at ?? null;
       details.supabase = "Trades table reachable.";
     }
-  } catch {
+  } catch (error) {
     supabaseStatus = "error";
-    details.supabase = "Could not query Supabase trades table.";
+    details.supabase = statusErrorDetail("Could not query Supabase trades table", error);
   }
 
   let redisStatus: ServiceStatus = "error";
@@ -134,11 +139,11 @@ async function checkSupabaseAndPipeline(): Promise<{
       agentStatus = "error";
       details.agent = "No agent heartbeat found in Redis.";
     }
-  } catch {
+  } catch (error) {
     redisStatus = "error";
     agentStatus = "unknown";
     groqStatus = "unknown";
-    details.redis = "Could not read Redis heartbeat.";
+    details.redis = statusErrorDetail("Could not read Redis heartbeat", error);
     details.agent = "Agent status depends on Redis heartbeat, which could not be read.";
     details.groq = "Groq status depends on backend agent state, which could not be read from Redis.";
   }

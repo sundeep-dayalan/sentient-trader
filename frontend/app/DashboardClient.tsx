@@ -17,6 +17,7 @@ import { useAuth }     from "@/components/AuthProvider";
 import { BASE_PATH }   from "@/lib/config";
 import { isRiskGated } from "@/lib/dashboardStats";
 import { createClient } from "@/lib/supabase";
+import { SUPABASE_DB_SCHEMA } from "@/lib/supabase-schema";
 import { DashboardStats, Trade } from "@/lib/types";
 
 const PAGE_SIZE = 20;
@@ -745,7 +746,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     const supabase = createClient();
     const channel = supabase
       .channel("trades-realtime")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "trades" }, payload => {
+      .on("postgres_changes", { event: "INSERT", schema: SUPABASE_DB_SCHEMA, table: "trades" }, payload => {
         ingestFreshTrades([payload.new as Trade]);
       })
       .subscribe();

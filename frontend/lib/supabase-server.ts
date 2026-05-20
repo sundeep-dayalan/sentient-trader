@@ -13,6 +13,7 @@
 
 import { createServerClient as createSSRServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { SUPABASE_DB_SCHEMA } from "@/lib/supabase-schema";
 
 /**
  * Creates a Supabase client that can read the current user's session
@@ -25,6 +26,9 @@ export async function createServerClient() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      db: {
+        schema: SUPABASE_DB_SCHEMA,
+      },
       cookies: {
         getAll() {
           return cookieStore.getAll();
