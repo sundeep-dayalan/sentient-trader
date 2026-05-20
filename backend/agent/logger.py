@@ -1,16 +1,16 @@
 """
 Supabase Logger
 ================
-Writes every trade decision to the `trades` table.
+Writes every trade decision to Supabase.
 
 We log EVERYTHING — executed trades AND HOLD decisions.
 This is what powers the "Agent Monologue" on the dashboard:
 the recruiter can see the AI was actively reasoning even when it
 decided the signal wasn't strong enough to pull the trigger.
 
-decision_trace is stored as JSONB so the frontend can render the committee
-while the database keeps the complete LLM audit trail — exact prompts,
-structured outputs, Portfolio Manager decision, risk gate, and execution.
+The live `trades` row stays slim for Realtime. The full decision_trace JSONB
+lives in `trade_decision_traces`, preserving the complete LLM audit trail
+without broadcasting it to every dashboard client.
 
 Implementation note:
   We use the SERVICE ROLE key (not the anon key) because:
@@ -22,6 +22,7 @@ Implementation note:
 import logging
 import os
 from typing import Optional
+from uuid import uuid4
 
 from supabase import Client, create_client
 
@@ -31,8 +32,8 @@ log = logging.getLogger("agent.logger")
 class SupabaseLogger:
     """
     Thin wrapper around supabase-py for writing trade records.
-    The `trades` table must have Realtime enabled in Supabase for the
-    frontend live feed to update instantly.
+    The dashboard reads lightweight feed rows and only fetches the full trace
+    when a user opens a specific signal.
     """
 
     def __init__(self) -> None:
@@ -65,31 +66,99 @@ class SupabaseLogger:
         details. It is intentionally generic so future personas, tools, or
         multi-step decision branches do not require new table columns.
 
-        Supabase Realtime picks this up immediately and pushes it to any
-        subscribed browser clients — no polling, no refresh needed.
+        The insert uses `returning="minimal"` so the large decision_trace JSONB
+        is not streamed back to the agent after every write.
         """
-        record = {
+        trade_id = str(uuid4())
+        slim_record = {
+            "id":               trade_id,
             "ticker":           ticker,
             "headline":         headline,
             "sentiment_score":  round(sentiment_score, 4),
             "confidence_score": round(confidence_score, 4),
-            "reasoning":        reasoning,
             "trade_action":     trade_action,
             "order_id":         order_id,
             "quantity":         quantity,
             "is_simulated":     is_simulated,
         }
-        if article_source:
-            record["article_source"] = article_source
         if article_url:
-            record["article_url"] = article_url
+            slim_record["article_url"] = article_url
+
+        legacy_record = {
+            **slim_record,
+            "reasoning": reasoning,
+        }
+        if article_source:
+            legacy_record["article_source"] = article_source
         if article_id:
-            record["article_id"] = article_id
-        if decision_trace:
-            record["decision_trace"] = decision_trace
+            legacy_record["article_id"] = article_id
 
         try:
-            self._client.table("trades").insert(record).execute()
+            try:
+                self._client.table("trades").insert(slim_record, returning="minimal").execute()
+            except Exception as slim_insert_error:
+                # Compatibility fallback for deployments where migration 010 has
+                # not been applied yet and `trades.reasoning` is still NOT NULL.
+                self._client.table("trades").insert(legacy_record, returning="minimal").execute()
+                log.warning(
+                    "Inserted legacy trade row after slim insert failed: %s",
+                    slim_insert_error,
+                )
+
+            if decision_trace:
+                trace_record = {
+                    "trade_id":       trade_id,
+                    "decision_trace": decision_trace,
+                    "reasoning":      reasoning,
+                }
+                if article_source:
+                    trace_record["article_source"] = article_source
+                if article_id:
+                    trace_record["article_id"] = article_id
+                try:
+                    self._client.table("trade_decision_traces").insert(
+                        trace_record,
+                        returning="minimal",
+                    ).execute()
+                except Exception as detailed_trace_error:
+                    base_trace_record = {
+                        "trade_id":       trade_id,
+                        "decision_trace": decision_trace,
+                    }
+                    try:
+                        self._client.table("trade_decision_traces").insert(
+                            base_trace_record,
+                            returning="minimal",
+                        ).execute()
+                        log.warning(
+                            "Stored base trace after detailed trace insert failed: %s",
+                            detailed_trace_error,
+                        )
+                        continue_trace_fallback = False
+                    except Exception as trace_error:
+                        continue_trace_fallback = True
+
+                    if not continue_trace_fallback:
+                        log.info("Logged to Supabase: [%s] %s", trade_action, ticker)
+                        return
+
+                    # Backward-compatible fallback for deployments where the
+                    # trace split migration has not been applied yet.
+                    try:
+                        self._client.table("trades").update(
+                            {"decision_trace": decision_trace},
+                            returning="minimal",
+                        ).eq("id", trade_id).execute()
+                        log.warning(
+                            "Stored decision trace on legacy trades column after trace table insert failed: %s",
+                            trace_error,
+                        )
+                    except Exception as fallback_error:
+                        log.error(
+                            "Trade row was logged but decision trace storage failed: %s; fallback failed: %s",
+                            trace_error,
+                            fallback_error,
+                        )
             log.info("Logged to Supabase: [%s] %s", trade_action, ticker)
         except Exception as e:
             # Don't crash the pipeline if Supabase is momentarily unavailable.

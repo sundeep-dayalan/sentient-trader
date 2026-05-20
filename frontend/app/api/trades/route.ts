@@ -1,16 +1,19 @@
 /**
  * GET /api/trades?before=<ISO-timestamp>
+ * GET /api/trades?after=<ISO-timestamp>
  *
- * Paginated trade history from Supabase.
+ * Lightweight trade history from Supabase. This intentionally excludes the
+ * large decision_trace JSONB payload used by the detail endpoint.
  *
  * SECURITY:
  * - Public (read-only trade history, no PII)
- * - `before` cursor validated as ISO 8601 timestamp (F-009)
+ * - `before`/`after` cursors validated as ISO 8601 timestamps (F-009)
  * - Generic error messages — no raw DB errors returned to caller
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase";
+import { TRADE_SUMMARY_SELECT } from "@/lib/trade-selects";
 import { Trade } from "@/lib/types";
 
 const PAGE_SIZE = 20;
@@ -27,11 +30,26 @@ function isValidISOTimestamp(value: string): boolean {
 
 export async function GET(req: NextRequest) {
   const before = req.nextUrl.searchParams.get("before");
+  const after = req.nextUrl.searchParams.get("after");
+
+  if (before && after) {
+    return NextResponse.json(
+      { error: "Use either 'before' or 'after', not both." },
+      { status: 400 },
+    );
+  }
 
   // Validate the cursor if provided (F-009)
   if (before && !isValidISOTimestamp(before)) {
     return NextResponse.json(
       { error: "Invalid 'before' parameter. Must be a valid ISO 8601 timestamp." },
+      { status: 400 },
+    );
+  }
+
+  if (after && !isValidISOTimestamp(after)) {
+    return NextResponse.json(
+      { error: "Invalid 'after' parameter. Must be a valid ISO 8601 timestamp." },
       { status: 400 },
     );
   }
@@ -42,12 +60,16 @@ export async function GET(req: NextRequest) {
   // without a separate COUNT query.
   let query = supabase
     .from("trades")
-    .select("*")
+    .select(TRADE_SUMMARY_SELECT)
     .order("created_at", { ascending: false })
     .limit(PAGE_SIZE + 1);
 
   if (before) {
     query = query.lt("created_at", before);
+  }
+
+  if (after) {
+    query = query.gt("created_at", after);
   }
 
   const { data, error } = await query;

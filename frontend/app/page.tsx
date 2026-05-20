@@ -5,12 +5,13 @@
  * from Supabase. This pre-populates the dashboard on first load so the
  * page doesn't flash empty while the client hydrates.
  *
- * After hydration, DashboardClient takes over and maintains the live
- * Supabase Realtime subscription for instant updates.
+ * After hydration, DashboardClient listens for Realtime inserts on the slim
+ * trades table and fetches full traces only when a signal is opened.
  */
 
 import { computeDashboardStats } from "@/lib/dashboardStats";
 import { createClient }    from "@/lib/supabase";
+import { TRADE_STATS_SELECT, TRADE_SUMMARY_SELECT } from "@/lib/trade-selects";
 import { DashboardStats, Trade } from "@/lib/types";
 import DashboardClient     from "./DashboardClient";
 
@@ -22,7 +23,7 @@ async function getInitialTrades(): Promise<Trade[]> {
 
   const { data, error } = await supabase
     .from("trades")
-    .select("*")
+    .select(TRADE_SUMMARY_SELECT)
     .order("created_at", { ascending: false })
     .limit(20);
 
@@ -39,7 +40,8 @@ async function getInitialStats(): Promise<DashboardStats | null> {
 
   const { data, error } = await supabase
     .from("trades")
-    .select("trade_action, order_id, sentiment_score, decision_trace");
+    .select(TRADE_STATS_SELECT)
+    .limit(10000);
 
   if (error) {
     console.error("Failed to fetch dashboard stats:", error.message);

@@ -104,11 +104,11 @@ export interface Trade {
   ticker: string;
   headline: string;
   article_url: string | null;
-  article_source: string | null;
-  article_id: string | null;
+  article_source?: string | null;
+  article_id?: string | null;
   sentiment_score: number;   // -1.0 to 1.0
   confidence_score: number;  // 0.0 to 1.0
-  reasoning: string;         // committee consensus summary (one-liner shown on trade cards)
+  reasoning?: string;        // loaded with full trace, not feed rows
   trade_action: "BUY" | "SELL" | "HOLD";
   order_id: string | null;   // Alpaca order UUID — null if HOLD
   quantity: number;

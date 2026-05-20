@@ -3,7 +3,11 @@
 import { articleSourceLabel, safeArticleUrl } from "@/lib/news";
 import { ArticleQuality, DecisionTrace, LLMOperationTrace, PersonaOpinion, RiskGateTrace, Trade } from "@/lib/types";
 
-interface AgentMonologueProps { trade: Trade | null; }
+interface AgentMonologueProps {
+  trade: Trade | null;
+  isLoadingTrace?: boolean;
+  traceError?: string | null;
+}
 
 const PERSONA_META: Record<string, { initial: string; colour: string }> = {
   "Momentum Trader": { initial: "M", colour: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
@@ -39,7 +43,7 @@ function normaliseDecisionTrace(trade: Trade): DecisionTrace {
       model: trade.model ?? null,
       sentiment: trade.sentiment_score,
       confidence: trade.confidence_score,
-      reasoning: trade.reasoning,
+      reasoning: trade.reasoning ?? "",
       action: trade.trade_action,
     },
   };
@@ -107,7 +111,7 @@ function StanceBadge({ stance }: { stance: string }) {
 
 // ── Root component ────────────────────────────────────────────────────────────
 
-export default function AgentMonologue({ trade }: AgentMonologueProps) {
+export default function AgentMonologue({ trade, isLoadingTrace = false, traceError = null }: AgentMonologueProps) {
   if (!trade) {
     return (
       <div className="glass-panel flex h-full min-h-[280px] items-center justify-center rounded-2xl p-10 xl:min-h-0">
@@ -140,6 +144,10 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
   const committee     = decisionTrace.committee_debate ?? [];
   const llmOperations = decisionTrace.llm_operations ?? [];
   const portfolioModel = decisionTrace.portfolio_manager_decision?.model ?? trade.model;
+  const consensusReasoning =
+    trade.reasoning ??
+    decisionTrace.portfolio_manager_decision?.reasoning ??
+    "";
   const riskGate = asRiskGate(decisionTrace.risk_gate);
   const articleQuality = riskGate?.article_quality ?? decisionTrace.article_quality;
 
@@ -231,6 +239,24 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
         </div>
 
         {/* Committee Debate */}
+        {(isLoadingTrace || traceError) && (
+          <div className={[
+            "rounded-xl border p-4",
+            traceError
+              ? "border-negative-border bg-negative-soft text-negative"
+              : "border-line bg-surface-2 text-muted",
+          ].join(" ")}>
+            <div className="flex items-center gap-2">
+              {isLoadingTrace && (
+                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-muted" />
+              )}
+              <p className="text-xs font-semibold">
+                {traceError ?? "Loading Decision Core trace..."}
+              </p>
+            </div>
+          </div>
+        )}
+
         {committee.length > 0 && (
           <div className="rounded-xl border border-line bg-surface-2 p-4">
             <div className="mb-3 flex items-center justify-between">
@@ -265,7 +291,7 @@ export default function AgentMonologue({ trade }: AgentMonologueProps) {
               </span>
             )}
           </div>
-          <p className="mt-2 text-sm leading-relaxed text-secondary">{trade.reasoning}</p>
+          <p className="mt-2 text-sm leading-relaxed text-secondary">{consensusReasoning}</p>
         </div>
 
         {/* Raw Decision Core LLM operations */}

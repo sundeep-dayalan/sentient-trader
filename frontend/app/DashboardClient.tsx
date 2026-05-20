@@ -192,6 +192,10 @@ function orderPrice(order: AlpacaOrder) {
   return "Market";
 }
 
+function hasTracePayload(trade: Trade): boolean {
+  return Object.prototype.hasOwnProperty.call(trade, "decision_trace");
+}
+
 function ChangeArrow({ up }: { up: boolean }) {
   return (
     <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
@@ -587,6 +591,8 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(initialStats);
   const [newIds,        setNewIds]        = useState<Set<string>>(new Set());
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(initialTrades[0] ?? null);
+  const [traceLoadingId, setTraceLoadingId] = useState<string | null>(null);
+  const [traceError,    setTraceError]    = useState<string | null>(null);
   const [hasMore,       setHasMore]       = useState(initialTrades.length === PAGE_SIZE);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
@@ -604,6 +610,10 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   const tailRef        = useRef<string | null>(
     initialTrades.length > 0 ? initialTrades[initialTrades.length - 1].created_at : null
   );
+  const latestSeenRef  = useRef<string | null>(initialTrades[0]?.created_at ?? null);
+  const knownTradeIdsRef = useRef<Set<string>>(new Set(initialTrades.map(trade => trade.id)));
+  const tradeDetailCacheRef = useRef<Map<string, Trade>>(new Map());
+  const pollingLatestRef = useRef(false);
   const hasMoreRef     = useRef(hasMore);
   const loadingMoreRef = useRef(false);
 
@@ -660,10 +670,8 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   }, [loadAlpacaSummary]);
 
   useEffect(() => {
-    loadDashboardStats();
-    const interval = setInterval(loadDashboardStats, 30_000);
-    return () => clearInterval(interval);
-  }, [loadDashboardStats]);
+    if (!dashboardStats) loadDashboardStats();
+  }, [dashboardStats, loadDashboardStats]);
 
   const latestTrade = trades[0] ?? null;
   const lastSignalTime = latestTrade
@@ -678,21 +686,128 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     Settings:  "Agent configuration and tunable parameters",
   };
 
-  // ── Supabase Realtime ─────────────────────────────────────────
+  const ingestFreshTrades = useCallback((freshTrades: Trade[]) => {
+    const uniqueTrades = freshTrades.filter(trade => !knownTradeIdsRef.current.has(trade.id));
+    if (uniqueTrades.length === 0) return;
+
+    uniqueTrades.forEach(trade => knownTradeIdsRef.current.add(trade.id));
+    latestSeenRef.current = uniqueTrades[0].created_at;
+    if (!tailRef.current) {
+      tailRef.current = uniqueTrades[uniqueTrades.length - 1].created_at;
+    }
+
+    setTrades(prev => [...uniqueTrades, ...prev]);
+    setSelectedTrade(current => current ?? uniqueTrades[0]);
+    setDashboardStats(current => uniqueTrades.reduce(
+      (nextStats, trade) => nextStats ? addTradeToStats(nextStats, trade) : nextStats,
+      current,
+    ));
+    setNewIds(prev => {
+      const next = new Set(prev);
+      uniqueTrades.forEach(trade => next.add(trade.id));
+      return next;
+    });
+
+    const ids = uniqueTrades.map(trade => trade.id);
+    setTimeout(() => {
+      setNewIds(prev => {
+        const next = new Set(prev);
+        ids.forEach(id => next.delete(id));
+        return next;
+      });
+    }, 900);
+  }, []);
+
+  // ── Lightweight trade reconciliation ──────────────────────────
+  const loadNewTrades = useCallback(async () => {
+    if (pollingLatestRef.current) return;
+    pollingLatestRef.current = true;
+
+    try {
+      const after = latestSeenRef.current;
+      const url = after
+        ? `${BASE_PATH}/api/trades?after=${encodeURIComponent(after)}`
+        : `${BASE_PATH}/api/trades`;
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) return;
+
+      const { trades: fresh } = await response.json() as { trades: Trade[] };
+      if (fresh.length > 0) {
+        ingestFreshTrades(fresh);
+      }
+    } finally {
+      pollingLatestRef.current = false;
+    }
+  }, [ingestFreshTrades]);
+
+  // ── Supabase Realtime on slim trade rows ──────────────────────
   useEffect(() => {
     const supabase = createClient();
-    const channel  = supabase
+    const channel = supabase
       .channel("trades-realtime")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "trades" }, payload => {
-        const t = payload.new as Trade;
-        setTrades(prev => [t, ...prev]);
-        setDashboardStats(current => current ? addTradeToStats(current, t) : current);
-        setNewIds(prev => new Set(prev).add(t.id));
-        setTimeout(() => setNewIds(prev => { const n = new Set(prev); n.delete(t.id); return n; }), 500);
+        ingestFreshTrades([payload.new as Trade]);
       })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+
+    const refreshIfVisible = () => {
+      if (document.visibilityState === "visible") loadNewTrades();
+    };
+
+    window.addEventListener("focus", loadNewTrades);
+    document.addEventListener("visibilitychange", refreshIfVisible);
+    return () => {
+      supabase.removeChannel(channel);
+      window.removeEventListener("focus", loadNewTrades);
+      document.removeEventListener("visibilitychange", refreshIfVisible);
+    };
+  }, [ingestFreshTrades, loadNewTrades]);
+
+  const handleTradeSelect = useCallback((trade: Trade) => {
+    setSelectedTrade(tradeDetailCacheRef.current.get(trade.id) ?? trade);
   }, []);
+
+  useEffect(() => {
+    if (activeView !== "Signals" || !selectedTrade) return;
+    if (hasTracePayload(selectedTrade)) {
+      setTraceLoadingId(null);
+      setTraceError(null);
+      return;
+    }
+
+    const cachedTrade = tradeDetailCacheRef.current.get(selectedTrade.id);
+    if (cachedTrade && hasTracePayload(cachedTrade)) {
+      setSelectedTrade(cachedTrade);
+      return;
+    }
+
+    const tradeId = selectedTrade.id;
+    const controller = new AbortController();
+    setTraceLoadingId(tradeId);
+    setTraceError(null);
+
+    fetch(`${BASE_PATH}/api/trades/${tradeId}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async response => {
+        if (!response.ok) throw new Error("Could not load the full decision trace.");
+        return response.json() as Promise<{ trade: Trade }>;
+      })
+      .then(({ trade }) => {
+        tradeDetailCacheRef.current.set(trade.id, trade);
+        setSelectedTrade(current => current?.id === trade.id ? { ...current, ...trade } : current);
+      })
+      .catch(error => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setTraceError(error instanceof Error ? error.message : "Could not load the full decision trace.");
+      })
+      .finally(() => {
+        setTraceLoadingId(current => current === tradeId ? null : current);
+      });
+
+    return () => controller.abort();
+  }, [activeView, selectedTrade]);
 
   // ── Pagination ────────────────────────────────────────────────
   const loadMore = useCallback(async () => {
@@ -704,8 +819,12 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
       if (!res.ok) return;
       const { trades: more, hasMore: next } = await res.json() as { trades: Trade[]; hasMore: boolean };
       if (more.length > 0) {
-        tailRef.current = more[more.length - 1].created_at;
-        setTrades(prev => [...prev, ...more]);
+        const uniqueMore = more.filter(trade => !knownTradeIdsRef.current.has(trade.id));
+        uniqueMore.forEach(trade => knownTradeIdsRef.current.add(trade.id));
+        tailRef.current = (uniqueMore[uniqueMore.length - 1] ?? more[more.length - 1]).created_at;
+        if (uniqueMore.length > 0) {
+          setTrades(prev => [...prev, ...uniqueMore]);
+        }
       }
       setHasMore(next);
       hasMoreRef.current = next;
@@ -998,13 +1117,17 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                 <LiveTicker
                   trades={trades}
                   newIds={newIds}
-                  onTradeSelect={setSelectedTrade}
+                  onTradeSelect={handleTradeSelect}
                   selectedId={selectedTrade?.id ?? null}
                   onLoadMore={loadMore}
                   isLoadingMore={isLoadingMore}
                   hasMore={hasMore}
                 />
-                <AgentMonologue trade={selectedTrade} />
+                <AgentMonologue
+                  trade={selectedTrade}
+                  isLoadingTrace={Boolean(selectedTrade && traceLoadingId === selectedTrade.id)}
+                  traceError={traceError}
+                />
               </div>
             )}
 

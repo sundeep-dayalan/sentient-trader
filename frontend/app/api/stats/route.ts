@@ -12,6 +12,7 @@
 import { NextResponse } from "next/server";
 import { computeDashboardStats } from "@/lib/dashboardStats";
 import { createClient } from "@/lib/supabase";
+import { TRADE_STATS_SELECT } from "@/lib/trade-selects";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,7 @@ export async function GET() {
   // Add .limit(10000) to prevent unbounded full-table scans (F-008)
   const { data, error } = await supabase
     .from("trades")
-    .select("trade_action, order_id, sentiment_score, decision_trace")
+    .select(TRADE_STATS_SELECT)
     .limit(10000);
 
   if (error) {

@@ -1,6 +1,8 @@
 import { DashboardStats, Trade } from "@/lib/types";
 
-export type TradeStatsRow = Pick<Trade, "trade_action" | "order_id" | "sentiment_score" | "decision_trace">;
+export type TradeStatsRow = Pick<Trade, "trade_action" | "order_id" | "sentiment_score"> & {
+  decision_trace?: Trade["decision_trace"];
+};
 
 export function isRiskGated(row: TradeStatsRow): boolean {
   const trace = row.decision_trace;
