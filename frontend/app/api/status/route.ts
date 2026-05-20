@@ -3,8 +3,9 @@
  * ---------------
  * Parallel health checks for all Sentient Trader integrations.
  *
- * Direct checks: Alpaca (paper API clock), Supabase (last trade query),
- * Groq (/models), Redis (heartbeat read), Agent (heartbeat freshness).
+ * Direct browser access is only to this route. External service checks happen
+ * server-side here, and LLM/provider health is reported by the backend agent
+ * rather than requiring Groq secrets in the frontend deployment.
  */
 
 import { NextResponse }  from "next/server";
@@ -19,6 +20,8 @@ interface AgentState {
   phase?: string;
   detail?: string | null;
   updated_at?: number;
+  groq?: ServiceStatus;
+  groq_detail?: string;
 }
 
 async function checkAlpaca(): Promise<{ status: ServiceStatus; detail: string }> {
@@ -39,32 +42,6 @@ async function checkAlpaca(): Promise<{ status: ServiceStatus; detail: string }>
   }
 }
 
-async function checkGroq(): Promise<{ status: ServiceStatus; detail: string }> {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
-    return {
-      status: "unknown",
-      detail: "GROQ_API_KEY is not configured in this frontend deployment.",
-    };
-  }
-
-  try {
-    const res = await fetch("https://api.groq.com/openai/v1/models", {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        Accept: "application/json",
-      },
-      next: { revalidate: 0 },
-    });
-    return {
-      status: res.ok ? "ok" : "error",
-      detail: res.ok ? "Groq models endpoint reachable." : `Groq returned HTTP ${res.status}.`,
-    };
-  } catch {
-    return { status: "error", detail: "Could not reach Groq models endpoint." };
-  }
-}
-
 function parseAgentState(raw: string | null): AgentState | null {
   if (!raw) return null;
   try {
@@ -76,6 +53,7 @@ function parseAgentState(raw: string | null): AgentState | null {
 
 async function checkSupabaseAndPipeline(): Promise<{
   supabase: ServiceStatus;
+  groq:     ServiceStatus;
   redis:    ServiceStatus;
   agent:    ServiceStatus;
   lastTradeAt: string | null;
@@ -111,6 +89,7 @@ async function checkSupabaseAndPipeline(): Promise<{
 
   let redisStatus: ServiceStatus = "error";
   let agentStatus: ServiceStatus = "unknown";
+  let groqStatus: ServiceStatus = "unknown";
   
   try {
     const redis = new Redis({
@@ -126,6 +105,9 @@ async function checkSupabaseAndPipeline(): Promise<{
     const agentState = parseAgentState(agentStateRaw);
     redisStatus = "ok";
     details.redis = "Redis reachable.";
+    groqStatus = agentState?.groq ?? "unknown";
+    details.groq = agentState?.groq_detail
+      ?? "Groq is not checked by the frontend. Backend agent has not published Groq provider status yet.";
     
     if (heartbeatStr) {
       const heartbeat = parseInt(heartbeatStr, 10);
@@ -155,12 +137,15 @@ async function checkSupabaseAndPipeline(): Promise<{
   } catch {
     redisStatus = "error";
     agentStatus = "unknown";
+    groqStatus = "unknown";
     details.redis = "Could not read Redis heartbeat.";
     details.agent = "Agent status depends on Redis heartbeat, which could not be read.";
+    details.groq = "Groq status depends on backend agent state, which could not be read from Redis.";
   }
 
   return {
     supabase:    supabaseStatus,
+    groq:        groqStatus,
     redis:       redisStatus,
     agent:       agentStatus,
     lastTradeAt,
@@ -170,22 +155,19 @@ async function checkSupabaseAndPipeline(): Promise<{
 }
 
 export async function GET() {
-  const [alpaca, groq, pipeline] = await Promise.all([
+  const [alpaca, pipeline] = await Promise.all([
     checkAlpaca(),
-    checkGroq(),
     checkSupabaseAndPipeline(),
   ]);
 
   return NextResponse.json(
     {
       alpaca: alpaca.status,
-      groq: groq.status,
       ...pipeline,
       checkedAt: new Date().toISOString(),
       details: {
         ...pipeline.details,
         alpaca: alpaca.detail,
-        groq: groq.detail,
       },
     },
     { headers: { "Cache-Control": "no-store" } }
