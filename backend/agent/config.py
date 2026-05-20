@@ -18,24 +18,29 @@ log = logging.getLogger("agent.config")
 
 # ── Infrastructure — deployment-level, not stored in Supabase ────────────────
 
-# Model cascade — ordered by reasoning quality (best first).
-# The ModelRouter tries each model in order, falling back on rate limits.
-# Add or remove models freely — the router handles any list length.
+# Model selection policy.
 #
-# Excluded models (incompatible with instructor structured output):
-#   groq/compound, groq/compound-mini  — agentic compound systems, not chat completion
-#   meta-llama/llama-prompt-guard-*    — prompt safety classifiers, not general LLMs
-#   openai/gpt-oss-safeguard-20b       — safety classifier, not general LLM
-#   whisper-*                          — audio transcription, not text generation
-#   allam-2-7b                         — Arabic-focused, poor English financial analysis
-MODEL_CASCADE: list[str] = [
-    "openai/gpt-oss-120b",                          #  9K req/day,  200K TPD — best reasoning
-    "qwen/qwen3-32b",                               #  9K req/day,  500K TPD — strong reasoning, huge TPD
-    "llama-3.3-70b-versatile",                       #  9K req/day,  100K TPD — proven workhorse
-    "meta-llama/llama-4-scout-17b-16e-instruct",     #  9K req/day,  500K TPD — Llama 4, good quality
-    "openai/gpt-oss-10b",                            #  9K req/day,  200K TPD — smaller but decent
-    "llama-3.1-8b-instant",                          # 14.4K req/day, 500K TPD — volume fallback
+# By default the ModelRouter discovers Groq's active models at startup and ranks
+# them with a local policy: active + text/chat-shaped + enough context, excluding
+# audio, guard, safeguard, TTS, and compound/agentic systems. If you need to force
+# a preference order, set GROQ_MODEL_PINNED_ORDER to a comma-separated list; those
+# models are tried first when active, and auto-ranked models fill in after them.
+GROQ_MODEL_PINNED_ORDER: list[str] = [
+    model.strip()
+    for model in os.environ.get("GROQ_MODEL_PINNED_ORDER", "").split(",")
+    if model.strip()
 ]
+
+# Backward-compatible alias used by older imports/tests. Empty means "auto-rank".
+MODEL_CASCADE: list[str] = GROQ_MODEL_PINNED_ORDER
+
+GROQ_MODELS_URL = os.environ.get(
+    "GROQ_MODELS_URL",
+    "https://api.groq.com/openai/v1/models",
+)
+GROQ_MODEL_DISCOVERY_TIMEOUT = float(os.environ.get("GROQ_MODEL_DISCOVERY_TIMEOUT", "5"))
+GROQ_MIN_CONTEXT_WINDOW = int(os.environ.get("GROQ_MIN_CONTEXT_WINDOW", "8192"))
+GROQ_MIN_COMPLETION_TOKENS = int(os.environ.get("GROQ_MIN_COMPLETION_TOKENS", "1024"))
 
 STREAM_KEY     = os.environ.get("REDIS_STREAM_KEY", "market-news")
 CONSUMER_GROUP = "sentient-agent-group"

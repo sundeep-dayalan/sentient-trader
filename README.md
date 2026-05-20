@@ -307,83 +307,71 @@ This is what gets stored in Supabase as the signal record. The top-level trade c
 
 ### ModelRouter — Quota-Aware Cascade
 
-Every LLM call goes through `ModelRouter.call()`, which tries three Groq model tiers in quality-descending order and falls back automatically on rate limits.
+Every LLM call goes through `ModelRouter.call()`, which discovers active Groq models from `/openai/v1/models` at startup and ranks candidates with a local policy. The endpoint changes over time, so the router does not require a hardcoded model list.
 
-**Tier order:**
+**Auto-ranking policy:**
 
-| Priority | Model | Daily limit | TPM |
-|---|---|---|---|
-| 1 | `openai/gpt-oss-120b` | 1K req/day | 8K |
-| 2 | `llama-3.3-70b-versatile` | 1K req/day | 12K |
-| 3 | `llama-3.1-8b-instant` | 14.4K req/day | 6K |
+| Step | Rule |
+|---|---|
+| 1 | Keep only `active: true` models with enough context and completion capacity |
+| 2 | Exclude non-analysis systems: audio/transcription, prompt guards, safeguards, TTS/speech, and Groq compound systems |
+| 3 | Score candidates by parameter size, context window, max completion tokens, instruction/reasoning signals, and known general-purpose families |
+| 4 | Sort by score and use that as the cascade |
+| 5 | If `GROQ_MODEL_PINNED_ORDER` is set, try those active models first, then append the auto-ranked remainder |
 
-**Groq enforces two distinct limit types, handled differently:**
+Groq's models endpoint does not expose per-day token quota or subjective quality, so runtime fallback still matters: a model that is active but quota-limited is cooled down and the router moves to the next candidate.
+
+**Groq limit/failure types handled by the router:**
 
 | Error type | Detection | Behaviour |
 |---|---|---|
-| Per-minute (RPM/TPM) | `429` without "per day"/"daily" in message | 60-second cooldown on that model, fall back **within the same call** |
-| Daily quota exhausted | `429` with "per day", "daily", "quota exceeded" in message | Blacklist model for the session (resets on process restart) |
+| Per-minute (RPM/TPM) | `429` without "per day"/"daily" in message | Cool down that model using Groq's retry-after value, then fall back within the same call |
+| Daily token quota (TPD) | `429` with "per day"/"daily"/"TPD" in message | Cool down that model using Groq's retry-after value, then fall back within the same call |
+| Missing model | `404 model_not_found` or equivalent text | Disable that model for the process and continue to the next configured tier |
 
 ```mermaid
 flowchart LR
-    CALL["LLM call\nrequested"] --> T1
+    START["Agent startup"] --> MODELS["Fetch Groq /models"]
+    MODELS --> FILTER["Filter text-analysis candidates"]
+    FILTER --> RANK["Score and auto-rank"]
+    RANK --> CALL["LLM call requested"]
+    CALL --> NEXT["Try next available model"]
+    NEXT --> OK{"Success?"}
+    OK -->|"yes"| RETURN["Return parsed response + model"]
+    OK -->|"429"| COOL["Set retry-after cooldown"]
+    OK -->|"404 model_not_found"| DISABLE["Disable model for process"]
+    COOL --> NEXT
+    DISABLE --> NEXT
+    NEXT -->|"none available"| WAIT["Wait for soonest cooldown up to 10m"]
+    WAIT --> NEXT
 
-    T1{"openai/\ngpt-oss-120b\ncooling down?"}
-    T1 -->|"No — try it"| R1{429?}
-    T1 -->|"Yes — skip"| T2
-
-    R1 -->|"daily quota"| BL1["🚫 Blacklist\nfor session"]
-    R1 -->|"per-minute"| CD1["⏱ 60s cooldown"]
-    R1 -->|"success ✓"| OK(["✅ Return result"])
-    BL1 --> T2
-    CD1 --> T2
-
-    T2{"llama-3.3-70b\n-versatile\ncooling down?"}
-    T2 -->|"No — try it"| R2{429?}
-    T2 -->|"Yes — skip"| T3
-
-    R2 -->|"daily quota"| BL2["🚫 Blacklist\nfor session"]
-    R2 -->|"per-minute"| CD2["⏱ 60s cooldown"]
-    R2 -->|"success ✓"| OK
-    BL2 --> T3
-    CD2 --> T3
-
-    T3{"llama-3.1-8b\n-instant\ncooling down?"}
-    T3 -->|"No — try it"| R3{429?}
-    T3 -->|"Yes — all exhausted"| FAIL(["⚠️ Write HOLD\nAnalysis skipped"])
-
-    R3 -->|"daily quota"| BL3["🚫 Blacklist\nfor session"]
-    R3 -->|"per-minute"| FAIL
-    R3 -->|"success ✓"| OK
-    BL3 --> FAIL
-
-    style OK fill:#22c55e,color:#fff
-    style FAIL fill:#ef4444,color:#fff
-    style BL1 fill:#7f1d1d,color:#fff
-    style BL2 fill:#7f1d1d,color:#fff
-    style BL3 fill:#7f1d1d,color:#fff
+    style RETURN fill:#22c55e,color:#fff
 ```
 
-**Key implementation detail — per-minute cooldown:**
+**Key implementation detail — dynamic availability + retry-after cooldown:**
 
 ```python
-self._rate_limited_until: dict[str, float] = {}
+self.tiers = _resolve_model_tiers(config.GROQ_MODEL_PINNED_ORDER)
+self._cooldown_until: dict[str, float] = {}
+self._disabled_models: set[str] = set()
 
 # In call():
 available = [
-    m for m in self.TIERS
-    if m not in self._blacklisted
-    and time.time() >= self._rate_limited_until.get(m, 0)
+    m for m in self.tiers
+    if m not in self._disabled_models
+    and time.time() >= self._cooldown_until.get(m, 0)
 ]
 
-# On per-minute 429:
-self._rate_limited_until[model] = time.time() + 60
+# On 429:
+self._cooldown_until[model] = time.time() + retry_after
 continue  # try next tier in the same call()
 ```
 
-Because the fallback happens inside the same `call()` invocation, if Call #3 (Risk Analyst) hits a per-minute limit on `llama-3.3-70b`, the risk analyst still gets a valid response from `llama-3.1-8b-instant` in that same call — no analysis step is lost. On Call #4 (Synthesizer) 60 seconds later, `llama-3.3-70b` may have recovered and re-enters the pool.
+Because the fallback happens inside the same `call()` invocation, if Call #3 (Risk Analyst) hits a token limit on the first-ranked candidate, the risk analyst can still get a valid response from the next available tier in that same call. Once Groq's retry-after window expires, the cooled-down model re-enters the pool.
 
 **Hard override:** If `MODEL_OVERRIDE` is set in agent_config (Supabase), the entire cascade is bypassed and every call goes to that specific model. Useful for local testing.
+
+**Operator preference:** Set `GROQ_MODEL_PINNED_ORDER=openai/gpt-oss-120b,qwen/qwen3-32b` only when you want to force a short preferred prefix. Leaving it empty keeps the router fully auto-ranked from Groq's active model list.
 
 ---
 

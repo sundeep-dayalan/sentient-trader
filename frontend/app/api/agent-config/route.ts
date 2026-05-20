@@ -22,11 +22,103 @@ interface ModelTier {
   quality: "high" | "mid" | "fallback";
 }
 
-const MODEL_CASCADE: ModelTier[] = [
-  { id: "openai/gpt-oss-120b",     label: "GPT-OSS 120B",         reqDay: "1K",    tpm: "8K",  quality: "high"     },
-  { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B",        reqDay: "1K",    tpm: "12K", quality: "mid"      },
-  { id: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant", reqDay: "14.4K", tpm: "6K",  quality: "fallback" },
+interface GroqModel {
+  id?: string;
+  active?: boolean;
+  owned_by?: string;
+  context_window?: number;
+  max_completion_tokens?: number;
+  created?: number;
+}
+
+const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
+const EXCLUDED_MODEL_TERMS = ["whisper", "prompt-guard", "safeguard", "guard", "orpheus", "tts", "speech", "audio", "compound"];
+const FAMILY_HINTS: Array<[string, number]> = [
+  ["gpt-oss", 260],
+  ["qwen", 240],
+  ["llama", 180],
+  ["mixtral", 150],
+  ["gemma", 140],
+  ["deepseek", 140],
 ];
+
+function modelSizeBillions(id: string): number {
+  const matches = Array.from(id.matchAll(/(\d+(?:\.\d+)?)\s*b(?:\b|-|_)/gi));
+  return Math.max(0, ...matches.map(match => Number(match[1])));
+}
+
+function scoreGroqModel(model: GroqModel): number {
+  const id = model.id?.toLowerCase() ?? "";
+  if (!model.id || !model.active) return 0;
+  if (EXCLUDED_MODEL_TERMS.some(term => id.includes(term))) return 0;
+  if ((model.context_window ?? 0) < 8192) return 0;
+  if ((model.max_completion_tokens ?? 0) < 1024) return 0;
+
+  let score = Math.min(modelSizeBillions(id), 160) * 4;
+  score += Math.min(model.context_window ?? 0, 131072) / 2048;
+  score += Math.min(model.max_completion_tokens ?? 0, 65536) / 4096;
+  score += FAMILY_HINTS.find(([term]) => id.includes(term))?.[1] ?? 0;
+  if (id.includes("instruct")) score += 45;
+  if (id.includes("versatile")) score += 45;
+  if (id.includes("reason")) score += 45;
+  if (id.includes("instant")) score -= 120;
+  if (id.includes("preview")) score -= 35;
+  return score;
+}
+
+function formatModelLabel(id: string): string {
+  return id
+    .split("/")
+    .pop()!
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map(part => part.toUpperCase() === part ? part : part[0].toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function fallbackAutoCascade(): ModelTier[] {
+  return [{
+    id: "auto-ranked-groq-models",
+    label: "Auto-ranked Groq models",
+    reqDay: "Discovered by backend agent",
+    tpm: "Live active model list",
+    quality: "high",
+  }];
+}
+
+async function getModelCascade(): Promise<ModelTier[]> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return fallbackAutoCascade();
+
+  try {
+    const response = await fetch(GROQ_MODELS_URL, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      cache: "no-store",
+    });
+    if (!response.ok) return fallbackAutoCascade();
+
+    const payload = await response.json() as { data?: GroqModel[] };
+    const ranked = (payload.data ?? [])
+      .map(model => ({ model, score: scoreGroqModel(model) }))
+      .filter(item => item.score > 0 && item.model.id)
+      .sort((a, b) => b.score - a.score || a.model.id!.localeCompare(b.model.id!))
+      .slice(0, 8);
+
+    if (ranked.length === 0) return fallbackAutoCascade();
+    return ranked.map(({ model }, index) => ({
+      id: model.id!,
+      label: formatModelLabel(model.id!),
+      reqDay: "Live Groq model",
+      tpm: `${Math.round((model.context_window ?? 0) / 1000)}K context`,
+      quality: index === 0 ? "high" : index < 5 ? "mid" : "fallback",
+    }));
+  } catch {
+    return fallbackAutoCascade();
+  }
+}
 
 // Max prompt length (characters) to prevent abuse
 const MAX_PROMPT_LENGTH = 5000;
@@ -54,6 +146,7 @@ export async function GET() {
   }
 
   const row = data.config as Record<string, unknown>;
+  const cascade = await getModelCascade();
 
   return NextResponse.json({
     thresholds: {
@@ -65,7 +158,7 @@ export async function GET() {
       order_qty: row.order_qty as number,
     },
     model: {
-      cascade:  MODEL_CASCADE,
+      cascade,
       override: (row.model_override as string | null) ?? null,
     },
     prompts: {

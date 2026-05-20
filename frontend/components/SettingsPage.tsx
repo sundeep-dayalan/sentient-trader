@@ -509,7 +509,7 @@ function ModelTierRow({ tier, index }: { tier: ModelTier; index: number }) {
           <span className="font-mono text-xs font-semibold text-primary">{tier.id}</span>
           <span className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${qualityColour}`}>{qualityLabel}</span>
         </div>
-        <p className="mt-0.5 text-[11px] text-muted">{tier.reqDay} req/day · {tier.tpm} TPM · 30 RPM</p>
+        <p className="mt-0.5 text-[11px] text-muted">{tier.reqDay} · {tier.tpm}</p>
       </div>
     </div>
   );
