@@ -3,10 +3,8 @@
  * ---------------
  * Parallel health checks for all Sentient Trader integrations.
  *
- * Direct checks: Alpaca (paper API clock), Supabase (last trade query)
- * Inferred checks: Groq, Redis, Agent — all inferred from last trade recency.
- *   If the agent is producing trades, the full pipeline (ingestion → Redis →
- *   LangGraph → Groq → Alpaca) must be working end-to-end.
+ * Direct checks: Alpaca (paper API clock), Supabase (last trade query),
+ * Groq (/models), Redis (heartbeat read), Agent (heartbeat freshness).
  */
 
 import { NextResponse }  from "next/server";
@@ -30,15 +28,34 @@ async function checkAlpaca(): Promise<ServiceStatus> {
   }
 }
 
+async function checkGroq(): Promise<ServiceStatus> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return "unknown";
+
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/models", {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: "application/json",
+      },
+      next: { revalidate: 0 },
+    });
+    return res.ok ? "ok" : "error";
+  } catch {
+    return "error";
+  }
+}
+
 async function checkSupabaseAndPipeline(): Promise<{
   supabase: ServiceStatus;
-  groq:     ServiceStatus;
   redis:    ServiceStatus;
   agent:    ServiceStatus;
   lastTradeAt: string | null;
+  lastHeartbeatAt: string | null;
 }> {
   let supabaseStatus: ServiceStatus = "error";
   let lastTradeAt: string | null = null;
+  let lastHeartbeatAt: string | null = null;
   
   try {
     const supabase = createClient();
@@ -73,7 +90,11 @@ async function checkSupabaseAndPipeline(): Promise<{
     redisStatus = "ok";
     
     if (heartbeatStr) {
-      const heartbeatAge = Date.now() / 1000 - parseInt(heartbeatStr, 10);
+      const heartbeat = parseInt(heartbeatStr, 10);
+      const heartbeatAge = Date.now() / 1000 - heartbeat;
+      lastHeartbeatAt = Number.isFinite(heartbeat)
+        ? new Date(heartbeat * 1000).toISOString()
+        : null;
       if (heartbeatAge < 30) {
         agentStatus = "ok";
       } else if (heartbeatAge < 120) {
@@ -90,35 +111,24 @@ async function checkSupabaseAndPipeline(): Promise<{
     agentStatus = "unknown";
   }
 
-  // Groq doesn't have a direct health endpoint here, so we infer it from the 
-  // last trade if the agent is running, or just assume ok if agent is ok
-  let groqStatus: ServiceStatus = "unknown";
-  if (agentStatus === "ok") {
-    groqStatus = "ok";
-  } else if (lastTradeAt) {
-    const ageH = (Date.now() - new Date(lastTradeAt).getTime()) / (1000 * 60 * 60);
-    groqStatus = ageH < 2 ? "ok" : ageH < 48 ? "stale" : "error";
-  } else {
-    groqStatus = "unknown";
-  }
-
   return {
     supabase:    supabaseStatus,
-    groq:        groqStatus,
     redis:       redisStatus,
     agent:       agentStatus,
     lastTradeAt,
+    lastHeartbeatAt,
   };
 }
 
 export async function GET() {
-  const [alpaca, pipeline] = await Promise.all([
+  const [alpaca, groq, pipeline] = await Promise.all([
     checkAlpaca(),
+    checkGroq(),
     checkSupabaseAndPipeline(),
   ]);
 
   return NextResponse.json(
-    { alpaca, ...pipeline },
+    { alpaca, groq, ...pipeline },
     { headers: { "Cache-Control": "no-store" } }
   );
 }

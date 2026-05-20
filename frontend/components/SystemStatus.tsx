@@ -8,9 +8,10 @@ type S = "ok" | "stale" | "error" | "unknown" | "loading";
 interface StatusData {
   alpaca: S; supabase: S; groq: S; redis: S; agent: S;
   lastTradeAt: string | null;
+  lastHeartbeatAt: string | null;
 }
 
-const SERVICES: { key: keyof Omit<StatusData, "lastTradeAt">; label: string }[] = [
+const SERVICES: { key: keyof Omit<StatusData, "lastTradeAt" | "lastHeartbeatAt">; label: string }[] = [
   { key: "alpaca",   label: "Alpaca"   },
   { key: "supabase", label: "Supabase" },
   { key: "groq",     label: "Groq"     },
@@ -38,7 +39,7 @@ function relTime(iso: string): string {
 
 const INIT: StatusData = {
   alpaca: "loading", supabase: "loading", groq: "loading",
-  redis:  "loading", agent:    "loading", lastTradeAt: null,
+  redis:  "loading", agent:    "loading", lastTradeAt: null, lastHeartbeatAt: null,
 };
 
 export default function SystemStatus() {
@@ -81,6 +82,7 @@ export default function SystemStatus() {
   const mainBg = hasError ? "bg-negative-soft" : hasWarning ? "bg-warning-soft" : isLoading ? "bg-surface-2" : "bg-positive-soft";
   const mainText = hasError ? "text-negative" : hasWarning ? "text-warning" : isLoading ? "text-muted" : "text-positive";
   const mainLabel = hasError ? "System Outage" : hasWarning ? "Degraded Performance" : isLoading ? "Checking Status..." : "All systems operational";
+  const heartbeatLabel = status.lastHeartbeatAt ? relTime(status.lastHeartbeatAt) : null;
 
   return (
     <div className="hidden lg:block relative" ref={dropdownRef}>
@@ -90,8 +92,8 @@ export default function SystemStatus() {
       >
         <span className={`h-1.5 w-1.5 rounded-full ${mainColor}`} />
         <span className={`text-xs font-semibold ${mainText} whitespace-nowrap`}>{mainLabel}</span>
-        {status.lastTradeAt && (
-          <span className={`text-[11px] ${mainText} opacity-70 whitespace-nowrap`}>· {relTime(status.lastTradeAt)}</span>
+        {heartbeatLabel && (
+          <span className={`text-[11px] ${mainText} opacity-70 whitespace-nowrap`}>· {heartbeatLabel}</span>
         )}
       </button>
 
@@ -107,6 +109,14 @@ export default function SystemStatus() {
                 </div>
               </div>
             ))}
+            {status.lastHeartbeatAt && (
+              <div className="mt-1 border-t border-line pt-3 flex justify-between items-center">
+                <span className="text-[10px] text-muted uppercase tracking-wider">Last Agent</span>
+                <span className="text-xs text-secondary">
+                  {relTime(status.lastHeartbeatAt)}
+                </span>
+              </div>
+            )}
             {status.lastTradeAt && (
               <div className="mt-1 border-t border-line pt-3 flex justify-between items-center">
                 <span className="text-[10px] text-muted uppercase tracking-wider">Last Trade</span>
