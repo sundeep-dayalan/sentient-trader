@@ -14,7 +14,7 @@ without broadcasting it to every dashboard client.
 
 Implementation note:
   We use the SERVICE ROLE key (not the anon key) because:
-  - This runs server-side on Fly.io — the key is never exposed
+  - This runs server-side — the key is never exposed
   - Service role bypasses Row Level Security for writes
   - The anon key would be blocked by our RLS policy (SELECT-only)
 """

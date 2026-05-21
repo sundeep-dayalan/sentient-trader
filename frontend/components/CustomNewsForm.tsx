@@ -2,16 +2,14 @@
  * CustomNewsForm — Manually inject a headline into the AI pipeline.
  *
  * SECURITY INTEGRATION:
- * - Calls /api/simulate which now enforces auth + rate limits
+ * - Calls FastAPI /simulate which now enforces auth + rate limits
  * - On 429 (rate limited): shows the specific error message
  * - On 429 with needsAuth=true: triggers the AuthGate modal
  * - On 401: triggers the AuthGate modal
  */
 
-"use client";
-
 import { useState } from "react";
-import { BASE_PATH } from "@/lib/config";
+import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/components/AuthProvider";
 
 type State = "idle" | "loading" | "success" | "error";
@@ -40,10 +38,9 @@ export default function CustomNewsForm({ variant = "panel", onAuthRequired }: Cu
     setErrMsg("");
 
     try {
-      const res = await fetch(`${BASE_PATH}/api/simulate`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({
+      const json = await apiFetch<{ remaining?: number }>("/simulate", {
+        method: "POST",
+        body: JSON.stringify({
           ticker:      ticker.trim().toUpperCase(),
           headline:    headline.trim(),
           source:      "simulation",
@@ -52,37 +49,6 @@ export default function CustomNewsForm({ variant = "panel", onAuthRequired }: Cu
         }),
       });
 
-      // Handle rate limit response (429)
-      if (res.status === 429) {
-        const json = await res.json().catch(() => ({}));
-
-        // If the user needs to sign in, trigger the auth gate
-        if (json.needsAuth && onAuthRequired) {
-          onAuthRequired();
-          setState("idle");
-          return;
-        }
-
-        // Otherwise show the rate limit error
-        throw new Error(json.error ?? "Rate limit exceeded. Please try again later.");
-      }
-
-      // Handle auth required (401)
-      if (res.status === 401) {
-        if (onAuthRequired) {
-          onAuthRequired();
-          setState("idle");
-          return;
-        }
-        throw new Error("Please sign in to use this feature.");
-      }
-
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.error ?? `HTTP ${res.status}`);
-      }
-
-      const json = await res.json();
       setRemaining(json.remaining ?? null);
       setState("success");
       setHeadline("");
@@ -90,7 +56,19 @@ export default function CustomNewsForm({ variant = "panel", onAuthRequired }: Cu
       setArticleUrl("");
       setTimeout(() => setState("idle"), 4000);
     } catch (e) {
-      setErrMsg(e instanceof Error ? e.message : "Unknown error");
+      if (e instanceof ApiError) {
+        const detail = e.payload && typeof e.payload === "object" && "detail" in e.payload
+          ? e.payload.detail as { needsAuth?: boolean; errorMessage?: string } | string
+          : null;
+        if ((e.status === 401 || (typeof detail === "object" && detail?.needsAuth)) && onAuthRequired) {
+          onAuthRequired();
+          setState("idle");
+          return;
+        }
+        setErrMsg(typeof detail === "object" ? detail?.errorMessage ?? e.message : e.message);
+      } else {
+        setErrMsg(e instanceof Error ? e.message : "Unknown error");
+      }
       setState("error");
       setTimeout(() => setState("idle"), 6000);
     }

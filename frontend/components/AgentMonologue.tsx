@@ -1,5 +1,3 @@
-"use client";
-
 import { articleSourceLabel, safeArticleUrl } from "@/lib/news";
 import { ArticleQuality, DecisionTrace, LLMOperationTrace, PersonaOpinion, RiskGateTrace, Trade } from "@/lib/types";
 

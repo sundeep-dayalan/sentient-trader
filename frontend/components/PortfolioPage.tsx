@@ -1,5 +1,3 @@
-"use client";
-
 import PnLChart from "@/components/PnLChart";
 
 interface AlpacaAccount {

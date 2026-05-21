@@ -3,8 +3,8 @@ Sentient Trader — Ingestion Service
 =====================================
 Entry point for the market news ingestion pipeline.
 
-This service runs forever on Fly.io as a background worker:
-  1. Opens a WebSocket connection to Alpaca's live news stream
+This service runs forever as a background worker:
+  1. Polls Alpaca's news REST API
   2. Filters incoming headlines for relevant stock tickers
   3. Publishes filtered news to a Redis Stream for downstream processing
 
@@ -13,7 +13,7 @@ If the agent goes down, this service keeps buffering news in Redis —
 no headlines are lost. This is the "severed pipeline" design.
 
 Run locally:  python main.py
-Deploy:       flyctl deploy  (from this directory)
+Deploy:       build and run the Dockerfile
 """
 
 import logging
@@ -23,11 +23,11 @@ from dotenv import load_dotenv
 
 from listener import NewsListener
 
-# Load .env file when running locally. On Fly.io, secrets are injected
-# directly into the environment so this is a no-op in production.
+# Load .env file when running locally. In production, secrets are injected
+# directly into the environment so this is a no-op.
 load_dotenv()
 
-# Structured logging so Fly.io's log aggregator can parse and search entries.
+# Structured logging so the host's log aggregator can parse and search entries.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
@@ -43,8 +43,8 @@ def main() -> None:
 
     listener = NewsListener()
 
-    # .run() blocks forever — the WebSocket connection stays open.
-    # Fly.io restarts this process automatically if it crashes.
+    # .run() blocks forever — the poll loop stays active.
+    # The host should restart this process automatically if it crashes.
     listener.run()
 
 

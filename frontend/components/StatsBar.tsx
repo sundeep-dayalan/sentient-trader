@@ -1,5 +1,3 @@
-"use client";
-
 import { computeDashboardStats } from "@/lib/dashboardStats";
 import { DashboardStats, Trade } from "@/lib/types";
 

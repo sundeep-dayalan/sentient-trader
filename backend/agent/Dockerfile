@@ -13,7 +13,7 @@ COPY *.py .
 RUN addgroup --system appuser && adduser --system --ingroup appuser appuser
 USER appuser
 
-# Health check so Fly.io can detect and restart unhealthy containers
+# Health check so the host can detect and restart unhealthy containers
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD python -c "import sys; sys.exit(0)" || exit 1
 

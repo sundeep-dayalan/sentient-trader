@@ -3,7 +3,7 @@
 An autonomous AI trading system that reads live financial news, debates market impact across three AI personas, and executes paper trades — end to end, with zero human input in the loop.
 
 ```
-Alpaca News API → Redis Stream → LangGraph Agent → Groq LLM Committee → Alpaca Orders → Supabase → Next.js Dashboard
+Alpaca News API → Valkey Stream → LangGraph Agent → Groq LLM Committee → Alpaca Orders → Supabase → FastAPI → React Dashboard
 ```
 
 ---
@@ -41,30 +41,34 @@ Sentient Trader monitors financial news 24/7, processes each article through a f
 
 ## System Overview
 
-Three independent processes, each with a distinct failure domain:
+Four deployable processes, each with a distinct failure domain:
 
 ```mermaid
 graph TD
     A["🗞️ Alpaca News REST API"]
-    B["📡 sentient-trader-ingestion\n(Fly.io worker)\n• 30s poll loop\n• Relevance filter\n• XADD to Redis"]
+    B["📡 sentient-trader-ingestion\n(Oracle Cloud worker)\n• 30s poll loop\n• Relevance filter\n• XADD to Redis"]
     C[("🔴 Valkey/Redis Stream\nmarket-news\npersistent · ordered · consumer groups")]
-    D["🤖 sentient-trader-agent\n(Fly.io worker)\n• XREADGROUP consumer\n• LangGraph pipeline\n• 4× Groq LLM calls\n• Alpaca paper trades"]
-    E[("🟢 Supabase\ntrades table\nRealtime enabled")]
-    F["🖥️ Next.js 14 Dashboard\n(Vercel)\n• Live signal feed\n• PnL chart\n• Signal Injector\n• Settings"]
+    D["🤖 sentient-trader-agent\n(Oracle Cloud worker)\n• XREADGROUP consumer\n• LangGraph pipeline\n• 4× Groq LLM calls\n• Alpaca paper trades"]
+    E[("🟢 Supabase Postgres\ntrades + agent_config")]
+    F["🖥️ React Dashboard\n(Netlify)\n• Live signal feed\n• PnL chart\n• Signal Injector\n• Settings"]
     G["📈 Alpaca\nPaper Trading API"]
+    H["🛡️ sentient-trader-api\n(Oracle Cloud)\n• Supabase service DB access\n• Alpaca portfolio/orders\n• Redis rate limits"]
 
     A -->|"poll every 30s"| B
     B -->|"XADD"| C
     C -->|"XREADGROUP\nat-least-once"| D
     D -->|"INSERT"| E
     D -->|"paper order"| G
-    E -->|"Realtime push\npostgres_changes"| F
+    F -->|"HTTPS JSON + Supabase JWT"| H
+    H -->|"read/write service role"| E
+    H -->|"portfolio/orders"| G
+    H -->|"heartbeat / XADD / rate limit"| C
 
     style C fill:#dc2626,color:#fff
     style E fill:#22c55e,color:#fff
 ```
 
-The three services share no in-process state. A Groq rate limit on the agent doesn't affect ingestion. A noisy news day doesn't slow the LLM. A frontend deploy doesn't touch either backend.
+The services share no in-process state. A Groq rate limit on the agent doesn't affect ingestion. A noisy news day doesn't slow the LLM. A frontend deploy doesn't touch the Oracle Cloud workers.
 
 ---
 
@@ -95,10 +99,10 @@ Every headline that enters the system follows this exact path:
 
 6.  agent/logger.py
       └─▶ INSERT into Supabase "trades" table
-            Supabase Realtime broadcasts the insert to all connected browser clients immediately
+            Full trace payload is stored server-side for the dashboard API
 
-7.  frontend — Supabase Realtime subscription
-      └─▶ New row appears in the live signal feed without any polling or page refresh
+7.  frontend — React dashboard
+      └─▶ Polls FastAPI for new trades and detail rows; the browser never talks to Valkey or server-side Supabase APIs directly
 ```
 
 ---
@@ -106,7 +110,7 @@ Every headline that enters the system follows this exact path:
 ## Service 1 — Ingestion
 
 **Location:** `backend/ingestion/`  
-**Host:** Fly.io (`sentient-trader-ingestion` app)  
+**Host:** Oracle Cloud worker
 **Entry point:** `main.py` → `NewsListener.run()`
 
 ### How polling works
@@ -141,21 +145,21 @@ The stream is capped at 1,000 entries via `XADD MAXLEN ~` (approximate trimming 
 
 ### Simulated signals
 
-The frontend's Signal Injector (`POST /api/simulate`) bypasses ingestion entirely — it publishes directly to the Redis Stream with `XADD` and sets `is_simulated=true`. The agent processes simulated messages identically to real ones. All four fields (ticker, headline, summary, article_url) can be provided, so simulation exercises the full summary-aware prompt path.
+The frontend's Signal Injector (`POST /simulate` on FastAPI) bypasses ingestion entirely — the Oracle backend API publishes to the Redis Stream with `XADD` and sets `is_simulated=true`. The agent processes simulated messages identically to real ones. All four fields (ticker, headline, summary, article_url) can be provided, so simulation exercises the full summary-aware prompt path.
 
 ---
 
 ## Service 2 — Agent
 
 **Location:** `backend/agent/`  
-**Host:** Fly.io (`sentient-trader-agent` app)  
+**Host:** Oracle Cloud worker
 **Entry point:** `main.py` → `config.reload_from_supabase()` → `build_agent_graph()` → `ConsumerLoop.run()`
 
 ### Startup sequence
 
 ```
 main.py
-  1. load_dotenv()                         # load Fly.io secrets
+  1. load_dotenv()                         # load local env when present
   2. logging.basicConfig(...)              # configure before any imports that log
   3. config.reload_from_supabase()         # fetch agent_config row — crash loudly on failure
   4. graph = build_agent_graph(...)        # compile LangGraph, init Groq client + ModelRouter
@@ -417,39 +421,38 @@ Cached (duplicate) headlines are the only case that produces no new row — they
 ## Service 3 — Frontend
 
 **Location:** `frontend/`  
-**Host:** Vercel  
-**Framework:** Next.js 14 App Router + Tailwind CSS
+**Host:** Netlify
+**Framework:** React + Vite + Tailwind CSS
 
-### Pages
+### Views
 
-| Route | What it shows |
+The React app is a static single-page application. Netlify serves `dist/`, and the SPA redirect sends every route back to `index.html`.
+
+| View | What it shows |
 |---|---|
 | `/` | Live signal feed, PnL chart, pipeline diagram, dashboard stats |
-| `/signals/[id]` | Full signal detail: all three persona opinions, conviction bars, article link, tooltips on every trading term |
-| `/settings` | Live-edit all agent config values (thresholds, system prompts, model override, order qty) |
+| Signal detail panel | Full signal detail: all three persona opinions, conviction bars, article link, tooltips on every trading term |
+| Settings panel | Live-edit all agent config values (thresholds, system prompts, model override, order qty) |
 
-### API Routes (Next.js server-side)
+### Backend API
 
 | Route | Method | Purpose |
 |---|---|---|
-| `/api/simulate` | POST | Injects a test headline into the Redis Stream |
-| `/api/agent-config` | GET | Reads current agent_config row from Supabase |
-| `/api/agent-config` | POST | Writes updated config to Supabase (anon key + RLS write policy) |
-| `/api/stats` | GET | Aggregated dashboard stats (total signals, trades, win rate) |
-| `/api/portfolio` | GET | Alpaca paper trading portfolio history (server-side, keeps secret key off client) |
+| `/auth/me` | GET | Validates the Supabase access token and returns dashboard role flags |
+| `/simulate` | POST | Authenticates the user, rate-limits with Valkey, and injects a test headline |
+| `/status` | GET | Combines Supabase, Alpaca, Redis, Groq, and agent heartbeat checks |
+| `/agent-config` | GET | Reads current agent_config row from Supabase |
+| `/agent-config` | POST | Super-user only; writes updated config with the Supabase service role |
+| `/stats` | GET | Aggregated dashboard stats |
+| `/portfolio` | GET | Alpaca paper trading portfolio history |
+| `/orders` | GET | Alpaca account, positions, and order list |
+| `/orders/cancel` | POST | Super-user only; cancels selected Alpaca orders |
+| `/trades` | GET | Paginated trade summaries and polling cursor support |
+| `/trades/{id}` | GET | Trade detail plus Decision Core trace |
 
 ### Live feed
 
-`LiveTicker.tsx` opens a Supabase Realtime subscription on the `trades` table:
-
-```typescript
-supabase
-  .channel("trades-feed")
-  .on("postgres_changes", { event: "INSERT", schema: "public", table: "trades" }, handler)
-  .subscribe()
-```
-
-New signals appear instantly when the agent writes to Supabase — no polling, no SSE, no websocket server to maintain. Supabase Realtime handles the fanout.
+`DashboardClient.tsx` polls FastAPI for new rows using the latest known `created_at` cursor. The browser only uses Supabase for auth; all DB reads, config writes, Alpaca calls, and Redis operations stay inside the Oracle Cloud backend.
 
 ### Signal detail view
 
@@ -469,7 +472,7 @@ New signals appear instantly when the agent writes to Supabase — no polling, n
 - **Article Summary** (optional) — gives personas richer context, same as a real Alpaca summary
 - **Article URL** (optional) — stored and linked in the signal detail view
 
-Submits to `/api/simulate` which publishes directly to Redis. The full pipeline fires within seconds and the new signal appears in the live feed.
+Submits to `/simulate` on FastAPI. The backend API rate-limits the user and publishes to Redis. The full pipeline fires within seconds and the new signal appears in the live feed.
 
 ---
 
@@ -479,14 +482,14 @@ Submits to `/api/simulate` which publishes directly to Redis. The full pipeline 
 |---|---|---|
 | Message bus | Valkey/Redis Stream `market-news` | Durable ordered queue between ingestion and agent (max 1,000 entries) |
 | Deduplication | Valkey/Redis (same instance) | SHA-256 headline hash with 5-min TTL — `HeadlineCache` |
-| Signal log | Supabase `trades` table | Every decision, full Decision Core trace as JSONB, Realtime-enabled |
+| Signal log | Supabase `trades` table | Every decision summary, linked to full Decision Core trace storage |
 | Config | Supabase `agent_config` table | Single row (id=1) — all trading parameters, editable via Settings UI |
 
 ### Supabase `trades` table schema
 
 | Column | Type | Notes |
 |---|---|---|
-| `id` | `bigserial` | Primary key |
+| `id` | `uuid` | Primary key |
 | `created_at` | `timestamptz` | Auto |
 | `ticker` | `text` | |
 | `headline` | `text` | |
@@ -529,23 +532,15 @@ RISK_SYSTEM_PROMPT:       str
 SYNTHESIS_SYSTEM_PROMPT:  str
 ```
 
-`reload_from_supabase()` fetches the row at startup and binds all values via `global`. If the row is missing or the connection fails, the process exits with a `RuntimeError` — by design, so failures are loud and visible in Fly logs immediately.
+`reload_from_supabase()` fetches the row at startup and binds all values via `global`. If the row is missing or the connection fails, the process exits with a `RuntimeError` — by design, so failures are loud and visible in worker logs immediately.
 
 ### Editing config without redeploying
 
-The Settings page in the dashboard writes to `agent_config` via `POST /api/agent-config`. The new values take effect on the next agent process restart (Fly.io `fly machine restart`). The agent does not hot-reload config at runtime — a restart is intentional so config changes are auditable in Fly's deployment history.
+The Settings page in the dashboard writes to `agent_config` via `POST /agent-config` on FastAPI. The new values take effect on the next agent process restart. The agent does not hot-reload config at runtime — a restart is intentional so config changes are auditable in deployment history.
 
-### Why anon key for Settings writes
+### Why FastAPI owns Settings writes
 
-The frontend API route uses `NEXT_PUBLIC_SUPABASE_ANON_KEY` (not the service role key). A Supabase migration adds a targeted RLS policy:
-
-```sql
-CREATE POLICY "Public update on agent_config"
-    ON agent_config FOR UPDATE TO anon
-    USING (true) WITH CHECK (true);
-```
-
-This avoids exposing the service role key in Vercel environment variables while still allowing the Settings page to write config.
+The React app sends the user's Supabase access token to FastAPI. FastAPI validates that token against Supabase Auth, checks `SUPER_USER_EMAILS`, and performs the update with the Supabase service role key inside Oracle Cloud. Netlify never receives the service role key, Alpaca secrets, or direct Valkey access.
 
 ---
 
@@ -557,9 +552,9 @@ This avoids exposing the service role key in Vercel environment variables while 
 | Agent pipeline | LangGraph 0.2 StateGraph | Explicit conditional routing, composable nodes, no hidden side-effects |
 | Message bus | Valkey/Redis Streams | At-least-once delivery, consumer groups, persistent backlog |
 | Market data | Alpaca News REST + Data API + Paper Trading API | Free tier; news, live prices, and paper orders in one platform |
-| Database | Supabase (Postgres + Realtime) | JSONB for Decision Core traces, Realtime subscriptions for zero-polling live feed |
-| Backend deploy | Two Fly.io workers (shared-cpu-1x, 256 MB) | Independent failure domains; ingestion and agent scale and fail separately |
-| Frontend | Next.js 14 App Router + Tailwind CSS | Server components for Alpaca portfolio API (key never exposed to browser) |
+| Database | Supabase Postgres | JSONB for Decision Core traces; all server-side reads and writes go through FastAPI or workers |
+| Backend deploy | Oracle Cloud API + workers | Keeps private Valkey access inside the Oracle subnet |
+| Frontend | React + Vite + Tailwind CSS | Static Netlify deploy; browser talks only to FastAPI and Supabase Auth |
 | Charts | Recharts | PnL equity curve and stats panels |
 
 ---
@@ -570,13 +565,19 @@ This avoids exposing the service role key in Vercel environment variables while 
 sentient-trader/
 │
 ├── backend/
+│   ├── api/
+│   │   ├── main.py          # FastAPI service for /status, /simulate, and Redis rate limits
+│   │   ├── redis_client.py  # Valkey/Redis client factory
+│   │   ├── requirements.txt
+│   │   └── Dockerfile
+│   │
 │   ├── ingestion/
 │   │   ├── main.py          # Entry point — starts NewsListener
 │   │   ├── listener.py      # 30s poll loop, cursor-based dedup, publishes to Redis
 │   │   ├── filter.py        # Ticker relevance filter (keyword matching)
 │   │   ├── producer.py      # RedisStreamProducer — XADD to Redis Stream
 │   │   ├── requirements.txt
-│   │   └── fly.toml         # Fly.io deploy config for ingestion service
+│   │   └── Dockerfile
 │   │
 │   └── agent/
 │       ├── main.py          # Entry point — reload config, build graph, start consumer
@@ -588,43 +589,42 @@ sentient-trader/
 │       ├── logger.py        # SupabaseLogger — inserts into trades table
 │       ├── schemas.py       # Pydantic models: NewsMessage, PersonaAnalysis, TradeAnalysis, etc.
 │       ├── requirements.txt
-│       └── fly.toml         # Fly.io deploy config for agent service
+│       └── Dockerfile
 │
 ├── frontend/
-│   ├── app/
-│   │   ├── page.tsx                     # Dashboard home
-│   │   ├── signals/[id]/page.tsx        # Signal detail view
-│   │   ├── settings/page.tsx            # Agent config editor
-│   │   └── api/
-│   │       ├── simulate/route.ts        # POST: inject headline into Redis Stream
-│   │       ├── agent-config/route.ts    # GET/POST: read/write Supabase agent_config
-│   │       ├── stats/route.ts           # GET: aggregated dashboard statistics
-│   │       └── portfolio/route.ts       # GET: Alpaca paper portfolio history
+│   ├── index.html                       # Vite HTML shell
+│   ├── main.tsx                         # React root + AuthProvider
+│   ├── DashboardClient.tsx              # Dashboard SPA state and polling
+│   ├── globals.css                      # Tailwind + theme variables
+│   ├── vite.config.ts
 │   │
 │   ├── components/
 │   │   ├── AgentMonologue.tsx    # Full signal detail: personas, conviction, tooltips
 │   │   ├── CustomNewsForm.tsx    # Signal Injector form (ticker/headline/summary/url)
-│   │   ├── LiveTicker.tsx        # Supabase Realtime feed of signals
 │   │   ├── PnLChart.tsx          # Recharts equity curve
 │   │   ├── PipelineViz.tsx       # React Flow interactive pipeline diagram
 │   │   └── TradeCard.tsx         # Individual signal card in the feed
 │   │
 │   ├── lib/
-│   │   ├── config.ts         # BASE_PATH and shared constants
-│   │   └── supabase.ts       # Supabase client factory
+│   │   ├── api.ts                # FastAPI client with Supabase bearer token forwarding
+│   │   ├── supabase-browser.ts   # Supabase browser auth client
+│   │   └── types.ts
 │   │
 │   └── package.json
 │
 ├── supabase/
 │   └── migrations/
-│       ├── 001_initial_schema.sql         # trades table + indexes + Realtime enable
+│       ├── 001_initial_schema.sql         # trades table + indexes + RLS
 │       ├── 002_add_news_references.sql    # article_source, article_url, article_id
 │       ├── 003_add_committee_debate.sql   # legacy committee_debate JSONB column
 │       ├── 004_add_agent_config.sql       # agent_config table + seed default row
 │       ├── 005_agent_config_write_policy.sql  # anon UPDATE RLS policy
 │       ├── 006_fix_agent_config_rls.sql   # tighten Settings write policy
 │       ├── 007_add_model_to_trades.sql     # legacy synthesis model column
-│       └── 008_decision_trace_jsonb.sql    # decision_trace JSONB + legacy backfill
+│       ├── 008_decision_trace_jsonb.sql    # decision_trace JSONB + legacy backfill
+│       ├── 009_split_decision_traces.sql   # move heavy trace payloads out of trades
+│       ├── 010_slim_trades_realtime_payload.sql
+│       └── 011_create_sentient_trader_schema.sql
 │
 └── README.md
 ```
@@ -663,7 +663,6 @@ export REDIS_DB=0
 export REDIS_STREAM_KEY=market-news          # default
 export ALPACA_API_KEY=...
 export ALPACA_SECRET_KEY=...
-export ALPACA_BASE_URL=https://paper-api.alpaca.markets
 export GROQ_API_KEY=...
 
 python main.py
@@ -686,22 +685,42 @@ export ALPACA_SECRET_KEY=...
 python main.py
 ```
 
-### 4. Frontend
+### 4. Backend API
+
+```bash
+cd backend/api
+pip install -r requirements.txt
+
+# Required env vars:
+export CORS_ORIGINS=http://localhost:3000
+export SUPABASE_URL=https://xxx.supabase.co
+export SUPABASE_ANON_KEY=...
+export SUPABASE_SERVICE_ROLE_KEY=...
+export SUPABASE_DB_SCHEMA=sentient_trader
+export SUPER_USER_EMAILS=you@example.com
+export REDIS_HOST=127.0.0.1
+export REDIS_PORT=6379
+export REDIS_DB=0
+export REDIS_STREAM_KEY=market-news
+export ALPACA_API_KEY=...
+export ALPACA_SECRET_KEY=...
+export ALPACA_BASE_URL=https://paper-api.alpaca.markets
+export GROQ_API_KEY=...
+
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+### 5. Frontend
 
 ```bash
 cd frontend
 npm install
 
 # .env.local:
-NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=...
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
-REDIS_DB=0
-REDIS_STREAM_KEY=market-news
-ALPACA_API_KEY=...
-ALPACA_SECRET_KEY=...
-ALPACA_BASE_URL=https://paper-api.alpaca.markets
+VITE_SUPABASE_URL=https://xxx.supabase.co
+VITE_SUPABASE_ANON_KEY=...
+VITE_SUPABASE_DB_SCHEMA=sentient_trader
+VITE_BACKEND_API_URL=http://127.0.0.1:8000
 
 npm run dev
 # open http://localhost:3000
@@ -715,40 +734,49 @@ Open the dashboard → Signal Injector panel → enter a ticker and headline →
 
 ## Deployment
 
-### Agent + Ingestion (Fly.io)
+### Oracle Cloud backend services
 
 ```bash
-# Deploy agent
-cd backend/agent
-fly deploy --app sentient-trader-agent
-
-# Set secrets (one-time)
-fly secrets set -a sentient-trader-agent \
-  SUPABASE_URL=... \
-  SUPABASE_SERVICE_ROLE_KEY=... \
+# All Oracle backend services need the private Redis settings:
   REDIS_HOST=127.0.0.1 \
   REDIS_PORT=6379 \
   REDIS_DB=0 \
+  REDIS_STREAM_KEY=market-news
+
+# backend/api additionally needs:
+  CORS_ORIGINS=https://your-netlify-site.netlify.app \
+  SUPABASE_URL=... \
+  SUPABASE_ANON_KEY=... \
+  SUPABASE_SERVICE_ROLE_KEY=... \
+  SUPABASE_DB_SCHEMA=sentient_trader \
+  SUPER_USER_EMAILS=you@example.com \
   ALPACA_API_KEY=... \
   ALPACA_SECRET_KEY=... \
   ALPACA_BASE_URL=https://paper-api.alpaca.markets \
   GROQ_API_KEY=...
 
-# Deploy ingestion
-cd backend/ingestion
-fly deploy --app sentient-trader-ingestion
+# backend/agent additionally needs:
+  SUPABASE_URL=...
+  SUPABASE_SERVICE_ROLE_KEY=...
+  ALPACA_API_KEY=...
+  ALPACA_SECRET_KEY=...
+  GROQ_API_KEY=...
+
+# backend/ingestion additionally needs:
+  ALPACA_API_KEY=...
+  ALPACA_SECRET_KEY=...
 ```
 
-### Frontend (Vercel)
+### Frontend (Netlify)
 
-Connect the repo to Vercel. Set environment variables in the Vercel dashboard (same values as `.env.local`). Vercel auto-deploys on push to `main`.
+Connect the repo to Netlify. Set environment variables in the Netlify dashboard (same values as `frontend/.env.local.example`). Netlify auto-deploys on push to `main`.
 
 ### Config changes (no redeploy needed)
 
 Update agent parameters via the Settings page in the dashboard. Then restart the agent machine to apply:
 
 ```bash
-fly machine restart -a sentient-trader-agent
+restart the agent worker in Oracle Cloud
 ```
 
 ---
@@ -763,7 +791,7 @@ Parallel gives three independent opinions — each persona talks in a vacuum. Se
 
 Redis Streams provide the queue semantics this pipeline needs: a persistent ordered log, consumer groups for at-least-once delivery, `XACK` for processing confirmation, and auto-ID generation. The same Valkey/Redis instance also handles headline deduplication.
 
-**Two separate Fly.io workers**
+**Separate backend workers**
 
 A single process would mean a Groq rate limit pauses news ingestion. Splitting the services means ingestion always stays current regardless of LLM quota. The Redis Stream buffer absorbs any processing delay.
 

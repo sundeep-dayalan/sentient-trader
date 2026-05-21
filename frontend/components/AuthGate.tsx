@@ -15,8 +15,6 @@
  *   reason   — why the modal appeared ("auth_required" or "limit_reached")
  */
 
-"use client";
-
 import { useState } from "react";
 import { useAuth } from "./AuthProvider";
 

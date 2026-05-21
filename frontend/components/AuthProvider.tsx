@@ -17,7 +17,7 @@
  *    to a real account automatically (Supabase handles this).
  *
  * SECURITY (SEC-02 FIX):
- * Super user status is determined server-side via GET /api/auth/me.
+ * Super user status is determined server-side via FastAPI /auth/me.
  * The admin email list is never exposed to the frontend bundle.
  *
  * Usage:
@@ -25,9 +25,8 @@
  *   const { user, isAnonymous, signInWithGithub } = useAuth()
  */
 
-"use client";
-
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { apiFetch } from "@/lib/api";
 import { createBrowserClient } from "@/lib/supabase-browser";
 import type { User, Session } from "@supabase/supabase-js";
 
@@ -58,17 +57,13 @@ export function useAuth(): AuthContextValue {
 
 // ── Helper: get auth callback URL ──────────────────────────────
 function getAuthCallbackUrl(): string {
-  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
-  return `${window.location.origin}${basePath}/auth/callback`;
+  return `${window.location.origin}/auth/callback`;
 }
 
 // ── Helper: fetch super user status from the server ────────────
 async function fetchUserRole(): Promise<{ isSuperUser: boolean }> {
   try {
-    const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
-    const res = await fetch(`${basePath}/api/auth/me`, { credentials: "same-origin" });
-    if (!res.ok) return { isSuperUser: false };
-    const data = await res.json();
+    const data = await apiFetch<{ isSuperUser: boolean }>("/auth/me");
     return { isSuperUser: data.isSuperUser === true };
   } catch {
     return { isSuperUser: false };
@@ -100,15 +95,15 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
     async function init() {
       // ── Step 1: If there's a ?code= in the URL, exchange it for a session ──
       // This handles the case where Supabase redirects to the root page
-      // (Site URL fallback) instead of /auth/callback. The PKCE code verifier
-      // is stored in cookies by createBrowserClient, so we can exchange here.
+      // (Site URL fallback) instead of /auth/callback. Supabase stores the
+      // PKCE verifier in browser storage, so we can exchange here.
       const url = new URL(window.location.href);
       const code = url.searchParams.get("code");
 
       if (code) {
         // Clean the code from the URL immediately (don't expose it to the user)
         url.searchParams.delete("code");
-        window.history.replaceState({}, "", url.pathname + url.search);
+        window.history.replaceState({}, "", "/");
 
         // Exchange the code for a real session
         const { data: { session: oauthSession }, error: oauthError } =
@@ -223,4 +218,3 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
     </AuthContext.Provider>
   );
 }
-

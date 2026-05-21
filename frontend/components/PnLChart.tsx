@@ -1,12 +1,10 @@
-"use client";
-
 import { useCallback, useEffect, useState } from "react";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Line, LineChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { PortfolioAccountSummary, PortfolioPoint, PortfolioSummary } from "@/lib/types";
-import { BASE_PATH } from "@/lib/config";
+import { ApiError, apiFetch } from "@/lib/api";
 
 type PeriodKey = "D" | "W" | "M" | "3M" | "6M" | "Y" | "5Y";
 type ChartType = "line" | "area" | "bar";
@@ -94,22 +92,12 @@ export default function PnLChart() {
 
   const fetchPortfolio = useCallback(async () => {
     try {
-      const res = await fetch(`${BASE_PATH}/api/portfolio?range=${period}`, { cache: "no-store" });
-
-      // Auth-protected route: anonymous users get 401/403 — show empty state
-      if (res.status === 401 || res.status === 403) {
-        setData([]);
-        setError(null);
-        setLoading(false);
-        return;
-      }
-
-      const json = await res.json() as {
+      const json = await apiFetch<{
         history?: PortfolioPoint[];
         summary?: PortfolioSummary;
         account?: PortfolioAccountSummary;
         error?: string;
-      };
+      }>(`/portfolio?range=${period}`);
       if (json.error) {
         throw new Error(json.error);
       }
@@ -117,8 +105,13 @@ export default function PnLChart() {
       setSummary(json.summary ?? null);
       setAccount(json.account ?? null);
       setError(null);
-    } catch {
-      setError("Could not load portfolio data");
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        setData([]);
+        setError(null);
+      } else {
+        setError("Could not load portfolio data");
+      }
     } finally {
       setLoading(false);
     }

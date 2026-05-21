@@ -1,7 +1,5 @@
-"use client";
-
 import { useEffect, useMemo, useState } from "react";
-import { BASE_PATH } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import { PortfolioPoint } from "@/lib/types";
 
 const fmtMoney = (v: number) => `$${v.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
@@ -30,8 +28,7 @@ export default function PortfolioMiniCard() {
   useEffect(() => {
     const fetch_ = async () => {
       try {
-        const res  = await fetch(`${BASE_PATH}/api/portfolio`);
-        const json = await res.json();
+        const json = await apiFetch<{ history?: PortfolioPoint[] }>("/portfolio");
         setData(json.history ?? []);
       } catch { setData([]); }
       finally  { setLoading(false); }

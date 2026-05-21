@@ -1,7 +1,5 @@
-"use client";
-
 import { useCallback, useEffect, useRef, useState } from "react";
-import AgentMonologue  from "@/components/AgentMonologue";
+import AgentMonologue from "@/components/AgentMonologue";
 import AuthGate        from "@/components/AuthGate";
 import CustomNewsForm  from "@/components/CustomNewsForm";
 import LiveTicker      from "@/components/LiveTicker";
@@ -14,10 +12,8 @@ import ThemeToggle     from "@/components/ThemeToggle";
 import PipelinePage    from "@/components/PipelinePage";
 import SettingsPage    from "@/components/SettingsPage";
 import { useAuth }     from "@/components/AuthProvider";
-import { BASE_PATH }   from "@/lib/config";
+import { ApiError, apiFetch } from "@/lib/api";
 import { isRiskGated } from "@/lib/dashboardStats";
-import { createClient } from "@/lib/supabase";
-import { SUPABASE_DB_SCHEMA } from "@/lib/supabase-schema";
 import { DashboardStats, Trade } from "@/lib/types";
 
 const PAGE_SIZE = 20;
@@ -629,18 +625,14 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
   const loadAlpacaSummary = useCallback(async () => {
     try {
-      const response = await fetch(`${BASE_PATH}/api/orders?status=all&limit=25`, { cache: "no-store" });
-
-      // Auth-protected route: anonymous users get 401/403 — show empty data gracefully
-      if (response.status === 401 || response.status === 403) {
+      const json = await apiFetch<OrdersResponse>("/orders?status=all&limit=25");
+      setAlpacaData(json);
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
         setAlpacaData(EMPTY_ALPACA_DATA);
         setAlpacaLoading(false);
         return;
       }
-
-      const json = await response.json() as OrdersResponse;
-      setAlpacaData(json);
-    } catch {
       setAlpacaData(current => ({
         ...current,
         error: "Could not load Alpaca summary",
@@ -652,10 +644,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
   const loadDashboardStats = useCallback(async () => {
     try {
-      const response = await fetch(`${BASE_PATH}/api/stats`, { cache: "no-store" });
-      if (!response.ok) return;
-
-      const json = await response.json() as { stats: DashboardStats | null };
+      const json = await apiFetch<{ stats: DashboardStats | null }>("/stats");
       if (json.stats) {
         setDashboardStats(json.stats);
       }
@@ -726,13 +715,8 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
     try {
       const after = latestSeenRef.current;
-      const url = after
-        ? `${BASE_PATH}/api/trades?after=${encodeURIComponent(after)}`
-        : `${BASE_PATH}/api/trades`;
-      const response = await fetch(url, { cache: "no-store" });
-      if (!response.ok) return;
-
-      const { trades: fresh } = await response.json() as { trades: Trade[] };
+      const url = after ? `/trades?after=${encodeURIComponent(after)}` : "/trades";
+      const { trades: fresh } = await apiFetch<{ trades: Trade[] }>(url);
       if (fresh.length > 0) {
         ingestFreshTrades(fresh);
       }
@@ -741,28 +725,22 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     }
   }, [ingestFreshTrades]);
 
-  // ── Supabase Realtime on slim trade rows ──────────────────────
+  // ── Poll FastAPI for slim trade rows ──────────────────────────
   useEffect(() => {
-    const supabase = createClient();
-    const channel = supabase
-      .channel("trades-realtime")
-      .on("postgres_changes", { event: "INSERT", schema: SUPABASE_DB_SCHEMA, table: "trades" }, payload => {
-        ingestFreshTrades([payload.new as Trade]);
-      })
-      .subscribe();
-
     const refreshIfVisible = () => {
       if (document.visibilityState === "visible") loadNewTrades();
     };
 
+    loadNewTrades();
+    const interval = setInterval(loadNewTrades, 10_000);
     window.addEventListener("focus", loadNewTrades);
     document.addEventListener("visibilitychange", refreshIfVisible);
     return () => {
-      supabase.removeChannel(channel);
+      clearInterval(interval);
       window.removeEventListener("focus", loadNewTrades);
       document.removeEventListener("visibilitychange", refreshIfVisible);
     };
-  }, [ingestFreshTrades, loadNewTrades]);
+  }, [loadNewTrades]);
 
   const handleTradeSelect = useCallback((trade: Trade) => {
     setSelectedTrade(tradeDetailCacheRef.current.get(trade.id) ?? trade);
@@ -787,14 +765,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     setTraceLoadingId(tradeId);
     setTraceError(null);
 
-    fetch(`${BASE_PATH}/api/trades/${tradeId}`, {
-      cache: "no-store",
-      signal: controller.signal,
-    })
-      .then(async response => {
-        if (!response.ok) throw new Error("Could not load the full decision trace.");
-        return response.json() as Promise<{ trade: Trade }>;
-      })
+    apiFetch<{ trade: Trade }>(`/trades/${tradeId}`, { signal: controller.signal })
       .then(({ trade }) => {
         tradeDetailCacheRef.current.set(trade.id, trade);
         setSelectedTrade(current => current?.id === trade.id ? { ...current, ...trade } : current);
@@ -816,9 +787,9 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     loadingMoreRef.current = true;
     setIsLoadingMore(true);
     try {
-      const res = await fetch(`${BASE_PATH}/api/trades?before=${encodeURIComponent(tailRef.current)}`);
-      if (!res.ok) return;
-      const { trades: more, hasMore: next } = await res.json() as { trades: Trade[]; hasMore: boolean };
+      const { trades: more, hasMore: next } = await apiFetch<{ trades: Trade[]; hasMore: boolean }>(
+        `/trades?before=${encodeURIComponent(tailRef.current)}`,
+      );
       if (more.length > 0) {
         const uniqueMore = more.filter(trade => !knownTradeIdsRef.current.has(trade.id));
         uniqueMore.forEach(trade => knownTradeIdsRef.current.add(trade.id));

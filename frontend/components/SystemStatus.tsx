@@ -1,7 +1,5 @@
-"use client";
-
 import { useEffect, useState, useRef } from "react";
-import { BASE_PATH } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 
 type S = "ok" | "stale" | "error" | "unknown" | "loading";
 type ServiceKey = "alpaca" | "supabase" | "groq" | "redis" | "agent";
@@ -55,8 +53,7 @@ export default function SystemStatus() {
   useEffect(() => {
     const load = async () => {
       try {
-        const r = await fetch(`${BASE_PATH}/api/status`);
-        setStatus(await r.json());
+        setStatus(await apiFetch<StatusData>("/status"));
       } catch {
         setStatus(s => ({ ...s, alpaca: "error", supabase: "error" }));
       }

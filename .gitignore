@@ -10,10 +10,11 @@ __pycache__/
 .venv/
 venv/
 
-# Node / Next.js
+# Node / frontend build outputs
 node_modules/
 .next/
 out/
+dist/
 *.tsbuildinfo
 
 # macOS
@@ -21,6 +22,3 @@ out/
 
 # Claude Code session data (contains permission tokens)
 .claude/
-
-# Fly.io generated files (contain no secrets but clutter the repo)
-# fly.toml is intentionally NOT ignored — it has no secrets

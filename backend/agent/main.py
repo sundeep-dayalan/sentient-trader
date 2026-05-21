@@ -3,7 +3,7 @@ Sentient Trader — Agent Service
 =================================
 Entry point for the AI trading agent.
 
-This service runs forever on Fly.io as a background worker:
+This service runs forever as a background worker:
   1. Consumes news messages from a Redis Stream
   2. Runs each headline through the LangGraph pipeline:
        check_cache → fetch_context → momentum_analyst → value_analyst
@@ -16,7 +16,7 @@ The full round-trip per headline is typically 300-600ms:
   - Supabase insert:    ~100ms
 
 Run locally:  python main.py
-Deploy:       flyctl deploy  (from this directory)
+Deploy:       build and run the Dockerfile
 """
 
 import logging

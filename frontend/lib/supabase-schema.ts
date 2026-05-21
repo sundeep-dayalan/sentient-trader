@@ -1,8 +1,14 @@
 export const SUPABASE_DB_SCHEMA =
-  process.env.NEXT_PUBLIC_SUPABASE_DB_SCHEMA || "public";
+  import.meta.env.VITE_SUPABASE_DB_SCHEMA || "public";
 
 export const SUPABASE_CLIENT_OPTIONS = {
   db: {
     schema: SUPABASE_DB_SCHEMA,
+  },
+  auth: {
+    flowType: "pkce",
+    detectSessionInUrl: true,
+    persistSession: true,
+    autoRefreshToken: true,
   },
 } as const;

@@ -1,8 +1,6 @@
-"use client";
-
 import { useState } from "react";
+import { apiFetch } from "@/lib/api";
 import { SIMULATION_SCENARIOS } from "@/lib/constants";
-import { BASE_PATH }            from "@/lib/config";
 
 interface SimulateButtonProps {
   onStart:    () => void;
@@ -20,10 +18,9 @@ export default function SimulateButton({ onStart, onComplete }: SimulateButtonPr
 
     for (let i = 0; i < SIMULATION_SCENARIOS.length; i++) {
       try {
-        await fetch(`${BASE_PATH}/api/simulate`, {
-          method:  "POST",
-          headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify(SIMULATION_SCENARIOS[i]),
+        await apiFetch("/simulate", {
+          method: "POST",
+          body: JSON.stringify(SIMULATION_SCENARIOS[i]),
         });
       } catch (e) {
         console.error("Simulate error:", e);

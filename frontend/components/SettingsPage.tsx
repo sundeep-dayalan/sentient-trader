@@ -1,7 +1,5 @@
-"use client";
-
 import { useEffect, useRef, useState } from "react";
-import { BASE_PATH } from "@/lib/config";
+import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/components/AuthProvider";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -38,8 +36,7 @@ export default function SettingsPage() {
   const { isSuperUser } = useAuth();
 
   useEffect(() => {
-    fetch(`${BASE_PATH}/api/agent-config`)
-      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() as Promise<AgentConfig>; })
+    apiFetch<AgentConfig>("/agent-config")
       .then(data  => { setConfig(data);    setLoading(false); })
       .catch(err  => { setFetchError(String(err)); setLoading(false); });
   }, []);
@@ -112,19 +109,14 @@ function AgentConfigTab({
     setSaving(true);
     setSaveErr(null);
     try {
-      const res = await fetch(`${BASE_PATH}/api/agent-config`, {
+      await apiFetch<{ ok: boolean }>("/agent-config", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(draft),
       });
-      if (!res.ok) {
-        const { error } = await res.json() as { error?: string };
-        throw new Error(error ?? `HTTP ${res.status}`);
-      }
       onSave(structuredClone(draft));
       setEditing(null);
     } catch (e) {
-      setSaveErr(String(e));
+      setSaveErr(e instanceof ApiError ? e.message : String(e));
     } finally {
       setSaving(false);
     }

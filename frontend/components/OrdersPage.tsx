@@ -1,7 +1,5 @@
-"use client";
-
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BASE_PATH } from "@/lib/config";
+import { ApiError, apiFetch } from "@/lib/api";
 
 type OrderBucket = "all" | "open" | "filled" | "canceled" | "rejected" | "other";
 
@@ -190,22 +188,18 @@ export default function OrdersPage() {
 
   const loadOrders = useCallback(async () => {
     try {
-      const response = await fetch(`${BASE_PATH}/api/orders?status=all&limit=100`);
-
-      // Auth-protected route: anonymous users get 401/403 — show empty state
-      if (response.status === 401 || response.status === 403) {
-        setLoading(false);
-        return;
-      }
-
-      const json = await response.json() as OrdersResponse;
+      const json = await apiFetch<OrdersResponse>("/orders?status=all&limit=100");
       setData(json);
       setSelectedId(current => current ?? json.orders[0]?.id ?? null);
       setSelectedCancelIds(current => {
         const liveCancelableIds = new Set(json.orders.filter(order => canCancel(order.status)).map(order => order.id));
         return new Set([...current].filter(id => liveCancelableIds.has(id)));
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        setLoading(false);
+        return;
+      }
       setData(current => ({ ...current, error: "Could not load Alpaca orders" }));
     } finally {
       setLoading(false);
@@ -273,19 +267,17 @@ export default function OrdersPage() {
     setCancelMessage(null);
 
     try {
-      const response = await fetch(`${BASE_PATH}/api/orders/cancel`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orderIds: selectedCancelOrders.map(order => order.id) }),
-      });
-      const result = await response.json() as {
+      const result = await apiFetch<{
         canceled?: number;
         failed?: number;
         error?: string;
-      };
+      }>("/orders/cancel", {
+        method: "POST",
+        body: JSON.stringify({ orderIds: selectedCancelOrders.map(order => order.id) }),
+      });
 
-      if (!response.ok || result.error) {
-        throw new Error(result.error ?? `HTTP ${response.status}`);
+      if (result.error) {
+        throw new Error(result.error);
       }
 
       setCancelMessage(`${result.canceled ?? 0} cancel request(s) accepted${result.failed ? `, ${result.failed} failed` : ""}.`);
