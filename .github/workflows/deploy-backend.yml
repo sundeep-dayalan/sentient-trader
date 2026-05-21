@@ -1,4 +1,4 @@
-name: Deploy Backend to Fly.io
+name: Deploy Backend to Coolify
 
 on:
   push:
@@ -6,40 +6,44 @@ on:
       - main
     paths:
       - 'backend/**'
+      - 'docker-compose.coolify.yml'
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch: {}
 
 jobs:
-  deploy-agent:
-    name: Deploy Agent
+  deploy-workers:
+    name: Deploy Workers
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Pinned to @v1 (repo archived) instead of @master to prevent supply-chain attacks (F-007)
-      - name: Setup Flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@v1
-
-      - name: Deploy Agent
-        working-directory: backend/agent
-        run: flyctl deploy --remote-only
+      - name: Validate Coolify compose file
+        run: docker compose -f docker-compose.coolify.yml config
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          REDIS_STREAM_KEY: market-news
+          SUPABASE_DB_SCHEMA: sentient_trader
+          SUPABASE_URL: https://example.invalid
+          SUPABASE_SERVICE_ROLE_KEY: dummy
+          UPSTASH_REDIS_URL: https://example.invalid
+          UPSTASH_REDIS_TOKEN: dummy
+          ALPACA_API_KEY: dummy
+          ALPACA_SECRET_KEY: dummy
+          GROQ_API_KEY: dummy
 
-  deploy-ingestion:
-    name: Deploy Ingestion
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      # Pinned to @v1 (repo archived) instead of @master to prevent supply-chain attacks (F-007)
-      - name: Setup Flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@v1
-
-      - name: Deploy Ingestion
-        working-directory: backend/ingestion
-        run: flyctl deploy --remote-only
+      - name: Check Coolify deployment secrets
+        run: |
+          test -n "$COOLIFY_WEBHOOK" || (echo "Missing repository secret: COOLIFY_WEBHOOK" && exit 1)
+          test -n "$COOLIFY_TOKEN" || (echo "Missing repository secret: COOLIFY_TOKEN" && exit 1)
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          COOLIFY_WEBHOOK: ${{ secrets.COOLIFY_WEBHOOK }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+
+      - name: Deploy to Coolify
+        run: |
+          curl --fail --show-error --silent \
+            --request GET "$COOLIFY_WEBHOOK" \
+            --header "Authorization: Bearer $COOLIFY_TOKEN"
+        env:
+          COOLIFY_WEBHOOK: ${{ secrets.COOLIFY_WEBHOOK }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}

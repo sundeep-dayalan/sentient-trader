@@ -1,0 +1,30 @@
+services:
+  ingestion:
+    build:
+      context: ./backend/ingestion
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PYTHONUNBUFFERED: "1"
+      REDIS_STREAM_KEY: "${REDIS_STREAM_KEY:-market-news}"
+      UPSTASH_REDIS_URL: "${UPSTASH_REDIS_URL:?set UPSTASH_REDIS_URL in Coolify}"
+      UPSTASH_REDIS_TOKEN: "${UPSTASH_REDIS_TOKEN:?set UPSTASH_REDIS_TOKEN in Coolify}"
+      ALPACA_API_KEY: "${ALPACA_API_KEY:?set ALPACA_API_KEY in Coolify}"
+      ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY:?set ALPACA_SECRET_KEY in Coolify}"
+
+  agent:
+    build:
+      context: ./backend/agent
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PYTHONUNBUFFERED: "1"
+      REDIS_STREAM_KEY: "${REDIS_STREAM_KEY:-market-news}"
+      SUPABASE_DB_SCHEMA: "${SUPABASE_DB_SCHEMA:-sentient_trader}"
+      SUPABASE_URL: "${SUPABASE_URL:?set SUPABASE_URL in Coolify}"
+      SUPABASE_SERVICE_ROLE_KEY: "${SUPABASE_SERVICE_ROLE_KEY:?set SUPABASE_SERVICE_ROLE_KEY in Coolify}"
+      UPSTASH_REDIS_URL: "${UPSTASH_REDIS_URL:?set UPSTASH_REDIS_URL in Coolify}"
+      UPSTASH_REDIS_TOKEN: "${UPSTASH_REDIS_TOKEN:?set UPSTASH_REDIS_TOKEN in Coolify}"
+      ALPACA_API_KEY: "${ALPACA_API_KEY:?set ALPACA_API_KEY in Coolify}"
+      ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY:?set ALPACA_SECRET_KEY in Coolify}"
+      GROQ_API_KEY: "${GROQ_API_KEY:?set GROQ_API_KEY in Coolify}"
