@@ -4,10 +4,11 @@ services:
       context: ./backend/api
       dockerfile: Dockerfile
     restart: unless-stopped
-    ports:
-      - "${BACKEND_API_PORT:-8000}:8000"
+    expose:
+      - "8000"
     environment:
       PYTHONUNBUFFERED: "1"
+      PORT: "${PORT:-8000}"
       CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000}"
       REDIS_STREAM_KEY: "${REDIS_STREAM_KEY:-market-news}"
       REDIS_HOST: "${REDIS_HOST:-127.0.0.1}"
