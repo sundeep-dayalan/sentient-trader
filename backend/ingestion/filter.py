@@ -1,7 +1,7 @@
 """
 News Relevance Filter
 ======================
-A lightweight pre-filter that runs BEFORE we spend Kafka quota on a message.
+A lightweight pre-filter that runs BEFORE we publish a message.
 
 The goal: drop obvious noise so the AI agent doesn't waste inference tokens
 on headlines that can't drive a trade decision.

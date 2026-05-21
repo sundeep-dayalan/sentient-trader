@@ -1,5 +1,5 @@
 /**
- * Rate Limiter — Upstash Redis
+ * Rate Limiter — Valkey / Redis
  *
  * Controls how many times each user can call expensive endpoints
  * like /api/simulate (which costs Groq API credits).
@@ -10,9 +10,9 @@
  *  Social auth     → 2 simulates per day
  *  Super user      → 60 per minute (standard abuse prevention only)
  *
- * Uses a "fixed window" strategy:
+ * Uses a fixed-window strategy:
  *  - The window resets once per day (24 hours) for normal users.
- *  - Super users get a rolling 1-minute window instead.
+ *  - Super users get a 1-minute abuse-prevention window instead.
  *
  * Usage:
  *   import { checkSimulateLimit } from "@/lib/rate-limit"
@@ -20,47 +20,7 @@
  *   if (!result.success) return NextResponse.json({ error: "..." }, { status: 429 })
  */
 
-import { Ratelimit } from "@upstash/ratelimit";
-import { Redis } from "@upstash/redis";
-
-// ── Create the Redis client ────────────────────────────────────
-// Uses the same Upstash Redis instance you already have.
-const redis = new Redis({
-  url:   process.env.UPSTASH_REDIS_URL!,
-  token: process.env.UPSTASH_REDIS_TOKEN!,
-});
-
-// ── Rate limiters for each tier ─────────────────────────────────
-
-/**
- * Anonymous users: 1 request per 24 hours.
- * After this, they see the "sign in to continue" modal.
- */
-const anonymousLimiter = new Ratelimit({
-  redis,
-  limiter: Ratelimit.fixedWindow(1, "24 h"),
-  prefix: "ratelimit:simulate:anon",
-});
-
-/**
- * Social-authed users: 2 requests per 24 hours.
- * After this, they see a "limit reached" message.
- */
-const socialLimiter = new Ratelimit({
-  redis,
-  limiter: Ratelimit.fixedWindow(2, "24 h"),
-  prefix: "ratelimit:simulate:social",
-});
-
-/**
- * Super users: 60 requests per minute.
- * This is just standard abuse prevention — effectively unlimited for normal use.
- */
-const superLimiter = new Ratelimit({
-  redis,
-  limiter: Ratelimit.fixedWindow(60, "1 m"),
-  prefix: "ratelimit:simulate:super",
-});
+import { getRedis } from "@/lib/redis";
 
 // ── Tier type ──────────────────────────────────────────────────
 export type UserTier = "anonymous" | "social" | "super";
@@ -77,6 +37,38 @@ export interface RateLimitResult {
   errorMessage?: string;
 }
 
+interface RateLimitConfig {
+  limit: number;
+  windowMs: number;
+  prefix: string;
+}
+
+const LIMITS: Record<UserTier, RateLimitConfig> = {
+  anonymous: {
+    limit: 1,
+    windowMs: 24 * 60 * 60 * 1000,
+    prefix: "ratelimit:simulate:anon",
+  },
+  social: {
+    limit: 2,
+    windowMs: 24 * 60 * 60 * 1000,
+    prefix: "ratelimit:simulate:social",
+  },
+  super: {
+    limit: 60,
+    windowMs: 60 * 1000,
+    prefix: "ratelimit:simulate:super",
+  },
+};
+
+const FIXED_WINDOW_SCRIPT = `
+local current = redis.call("INCR", KEYS[1])
+if current == 1 then
+  redis.call("PEXPIRE", KEYS[1], ARGV[1])
+end
+return current
+`;
+
 // ── Main function ──────────────────────────────────────────────
 /**
  * Check if a user is allowed to call /api/simulate.
@@ -89,20 +81,25 @@ export async function checkSimulateLimit(
   userId: string,
   tier: UserTier,
 ): Promise<RateLimitResult> {
-  // Pick the right limiter based on the user's tier
-  const limiter =
-    tier === "super"
-      ? superLimiter
-      : tier === "social"
-        ? socialLimiter
-        : anonymousLimiter;
+  const config = LIMITS[tier];
+  const now = Date.now();
+  const windowStart = Math.floor(now / config.windowMs) * config.windowMs;
+  const reset = windowStart + config.windowMs;
+  const ttlMs = Math.max(reset - now, 1);
+  const key = `${config.prefix}:${windowStart}:${userId}`;
+  const redis = await getRedis();
+  const rawCount = await redis.eval(FIXED_WINDOW_SCRIPT, {
+    keys: [key],
+    arguments: [String(ttlMs)],
+  });
+  const count = typeof rawCount === "number" ? rawCount : Number(rawCount);
+  const remaining = Math.max(config.limit - count, 0);
+  const success = count <= config.limit;
 
-  const result = await limiter.limit(userId);
-
-  if (!result.success) {
+  if (!success) {
     // Build a friendly error message based on the tier
-    const resetDate = new Date(result.reset);
-    const minutesUntilReset = Math.ceil((result.reset - Date.now()) / 60_000);
+    const resetDate = new Date(reset);
+    const minutesUntilReset = Math.ceil((reset - Date.now()) / 60_000);
 
     let errorMessage: string;
     if (tier === "anonymous") {
@@ -118,15 +115,15 @@ export async function checkSimulateLimit(
 
     return {
       success: false,
-      remaining: result.remaining,
-      reset: result.reset,
+      remaining,
+      reset,
       errorMessage,
     };
   }
 
   return {
     success: true,
-    remaining: result.remaining,
-    reset: result.reset,
+    remaining,
+    reset,
   };
 }

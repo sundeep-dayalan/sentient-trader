@@ -47,7 +47,7 @@ Three independent processes, each with a distinct failure domain:
 graph TD
     A["🗞️ Alpaca News REST API"]
     B["📡 sentient-trader-ingestion\n(Fly.io worker)\n• 30s poll loop\n• Relevance filter\n• XADD to Redis"]
-    C[("🔴 Upstash Redis Stream\nmarket-news\npersistent · ordered · consumer groups")]
+    C[("🔴 Valkey/Redis Stream\nmarket-news\npersistent · ordered · consumer groups")]
     D["🤖 sentient-trader-agent\n(Fly.io worker)\n• XREADGROUP consumer\n• LangGraph pipeline\n• 4× Groq LLM calls\n• Alpaca paper trades"]
     E[("🟢 Supabase\ntrades table\nRealtime enabled")]
     F["🖥️ Next.js 14 Dashboard\n(Vercel)\n• Live signal feed\n• PnL chart\n• Signal Injector\n• Settings"]
@@ -83,7 +83,7 @@ Every headline that enters the system follows this exact path:
 
 3.  ingestion/producer.py
       └─▶ XADD "market-news" * ticker headline source published_at [summary] [article_url] [article_id]
-            Upstash REST API call — no SDK socket, works behind NAT/Fly.io
+            Redis protocol connection to Valkey-compatible server
 
 4.  agent/consumer.py
       └─▶ XREADGROUP GROUP agent-group consumer-1 COUNT 1 BLOCK 5000 STREAMS market-news >
@@ -137,11 +137,11 @@ Each Redis stream entry contains:
 | `article_url` | Alpaca `url` | When available |
 | `article_id` | Alpaca `id` | When available |
 
-The stream is capped at 1,000 entries via `XADD MAXLEN ~` (approximate trimming for efficiency). This keeps storage bounded on Upstash's free tier.
+The stream is capped at 1,000 entries via `XADD MAXLEN ~` (approximate trimming for efficiency). This keeps storage bounded.
 
 ### Simulated signals
 
-The frontend's Signal Injector (`POST /api/simulate`) bypasses ingestion entirely — it calls the Upstash REST API directly with `XADD` and sets `is_simulated=true`. The agent processes simulated messages identically to real ones. All four fields (ticker, headline, summary, article_url) can be provided, so simulation exercises the full summary-aware prompt path.
+The frontend's Signal Injector (`POST /api/simulate`) bypasses ingestion entirely — it publishes directly to the Redis Stream with `XADD` and sets `is_simulated=true`. The agent processes simulated messages identically to real ones. All four fields (ticker, headline, summary, article_url) can be provided, so simulation exercises the full summary-aware prompt path.
 
 ---
 
@@ -432,7 +432,7 @@ Cached (duplicate) headlines are the only case that produces no new row — they
 
 | Route | Method | Purpose |
 |---|---|---|
-| `/api/simulate` | POST | Injects a test headline into Redis Stream via Upstash REST API |
+| `/api/simulate` | POST | Injects a test headline into the Redis Stream |
 | `/api/agent-config` | GET | Reads current agent_config row from Supabase |
 | `/api/agent-config` | POST | Writes updated config to Supabase (anon key + RLS write policy) |
 | `/api/stats` | GET | Aggregated dashboard stats (total signals, trades, win rate) |
@@ -469,7 +469,7 @@ New signals appear instantly when the agent writes to Supabase — no polling, n
 - **Article Summary** (optional) — gives personas richer context, same as a real Alpaca summary
 - **Article URL** (optional) — stored and linked in the signal detail view
 
-Submits to `/api/simulate` which calls Upstash directly. The full pipeline fires within seconds and the new signal appears in the live feed.
+Submits to `/api/simulate` which publishes directly to Redis. The full pipeline fires within seconds and the new signal appears in the live feed.
 
 ---
 
@@ -477,8 +477,8 @@ Submits to `/api/simulate` which calls Upstash directly. The full pipeline fires
 
 | Store | Technology | Used for |
 |---|---|---|
-| Message bus | Upstash Redis Stream `market-news` | Durable ordered queue between ingestion and agent (max 1,000 entries) |
-| Deduplication | Upstash Redis (same instance) | SHA-256 headline hash with 5-min TTL — `HeadlineCache` |
+| Message bus | Valkey/Redis Stream `market-news` | Durable ordered queue between ingestion and agent (max 1,000 entries) |
+| Deduplication | Valkey/Redis (same instance) | SHA-256 headline hash with 5-min TTL — `HeadlineCache` |
 | Signal log | Supabase `trades` table | Every decision, full Decision Core trace as JSONB, Realtime-enabled |
 | Config | Supabase `agent_config` table | Single row (id=1) — all trading parameters, editable via Settings UI |
 
@@ -555,7 +555,7 @@ This avoids exposing the service role key in Vercel environment variables while 
 |---|---|---|
 | AI reasoning | Groq API (`instructor` JSON mode) | Sub-second structured LLM output; `instructor` handles Pydantic validation + retries |
 | Agent pipeline | LangGraph 0.2 StateGraph | Explicit conditional routing, composable nodes, no hidden side-effects |
-| Message bus | Upstash Redis Streams | At-least-once delivery, consumer groups, persistent backlog — Kafka semantics without Kafka |
+| Message bus | Valkey/Redis Streams | At-least-once delivery, consumer groups, persistent backlog |
 | Market data | Alpaca News REST + Data API + Paper Trading API | Free tier; news, live prices, and paper orders in one platform |
 | Database | Supabase (Postgres + Realtime) | JSONB for Decision Core traces, Realtime subscriptions for zero-polling live feed |
 | Backend deploy | Two Fly.io workers (shared-cpu-1x, 256 MB) | Independent failure domains; ingestion and agent scale and fail separately |
@@ -574,7 +574,7 @@ sentient-trader/
 │   │   ├── main.py          # Entry point — starts NewsListener
 │   │   ├── listener.py      # 30s poll loop, cursor-based dedup, publishes to Redis
 │   │   ├── filter.py        # Ticker relevance filter (keyword matching)
-│   │   ├── producer.py      # RedisStreamProducer — XADD via upstash-redis
+│   │   ├── producer.py      # RedisStreamProducer — XADD to Redis Stream
 │   │   ├── requirements.txt
 │   │   └── fly.toml         # Fly.io deploy config for ingestion service
 │   │
@@ -637,10 +637,12 @@ sentient-trader/
 
 - Python 3.11+
 - Node.js 20+
-- Upstash Redis instance (free tier works)
+- Valkey or Redis instance available at `REDIS_HOST` / `REDIS_PORT`
 - Supabase project (free tier works)
 - Alpaca account (free paper trading)
 - Groq API key (free tier works)
+
+`127.0.0.1` works when Valkey is running on the same host/network namespace as the process. For Docker or hosted workers, set `REDIS_HOST` to the reachable service hostname or private network address.
 
 ### 1. Apply Supabase migrations
 
@@ -655,8 +657,9 @@ pip install -r requirements.txt
 # Required env vars:
 export SUPABASE_URL=https://xxx.supabase.co
 export SUPABASE_SERVICE_ROLE_KEY=...
-export UPSTASH_REDIS_URL=https://xxx.upstash.io
-export UPSTASH_REDIS_TOKEN=...
+export REDIS_HOST=127.0.0.1
+export REDIS_PORT=6379
+export REDIS_DB=0
 export REDIS_STREAM_KEY=market-news          # default
 export ALPACA_API_KEY=...
 export ALPACA_SECRET_KEY=...
@@ -673,8 +676,9 @@ cd backend/ingestion
 pip install -r requirements.txt
 
 # Required env vars (same Redis + Alpaca keys as above):
-export UPSTASH_REDIS_URL=...
-export UPSTASH_REDIS_TOKEN=...
+export REDIS_HOST=127.0.0.1
+export REDIS_PORT=6379
+export REDIS_DB=0
 export REDIS_STREAM_KEY=market-news
 export ALPACA_API_KEY=...
 export ALPACA_SECRET_KEY=...
@@ -691,8 +695,9 @@ npm install
 # .env.local:
 NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...
-UPSTASH_REDIS_URL=...
-UPSTASH_REDIS_TOKEN=...
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+REDIS_DB=0
 REDIS_STREAM_KEY=market-news
 ALPACA_API_KEY=...
 ALPACA_SECRET_KEY=...
@@ -721,8 +726,9 @@ fly deploy --app sentient-trader-agent
 fly secrets set -a sentient-trader-agent \
   SUPABASE_URL=... \
   SUPABASE_SERVICE_ROLE_KEY=... \
-  UPSTASH_REDIS_URL=... \
-  UPSTASH_REDIS_TOKEN=... \
+  REDIS_HOST=127.0.0.1 \
+  REDIS_PORT=6379 \
+  REDIS_DB=0 \
   ALPACA_API_KEY=... \
   ALPACA_SECRET_KEY=... \
   ALPACA_BASE_URL=https://paper-api.alpaca.markets \
@@ -753,9 +759,9 @@ fly machine restart -a sentient-trader-agent
 
 Parallel gives three independent opinions — each persona talks in a vacuum. Sequential gives a real argument: the value investor reads the momentum trader's actual take before responding, so disagreement is substantive rather than coincidental. The risk manager then stress-tests both. This is the core of why the committee produces nuanced analysis rather than averaged noise.
 
-**Redis Streams over Kafka**
+**Redis Streams as the message bus**
 
-Upstash deprecated their Kafka product. Redis Streams provide identical semantics for this use case: persistent ordered log, consumer groups for at-least-once delivery, `XACK` for processing confirmation, and auto-ID generation. The existing Redis instance was already in the stack for headline deduplication.
+Redis Streams provide the queue semantics this pipeline needs: a persistent ordered log, consumer groups for at-least-once delivery, `XACK` for processing confirmation, and auto-ID generation. The same Valkey/Redis instance also handles headline deduplication.
 
 **Two separate Fly.io workers**
 

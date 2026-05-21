@@ -287,7 +287,7 @@ function AgentConfigTab({
       {/* ── Stream Consumer (read-only) ── */}
       <Section
         title="Redis Stream Consumer"
-        description="Infrastructure settings for the Upstash Redis stream consumer. Change via environment variables."
+        description="Infrastructure settings for the Valkey/Redis stream consumer. Change via environment variables."
         isEditing={false}
         readOnly
       >

@@ -6,20 +6,18 @@
  *
  * SECURITY:
  * - Requires authentication (anonymous users get 1/day, social get 2/day)
- * - Rate limited via Upstash Redis
+ * - Rate limited via Redis
  * - Super users get unlimited (standard abuse prevention only)
  * - Input validation: ticker must be 1-6 uppercase letters, headline max 500 chars
  * - Basic prompt injection blocklist on headline
- *
- * Upstash Redis REST API for XADD:
- *   POST https://<endpoint>
- *   Authorization: Bearer <token>
- *   Body: ["XADD", "<stream>", "*", "field1", "val1", ...]
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { getUser, isAnonymous, isSuperUser } from "@/lib/auth-helpers";
 import { checkSimulateLimit, type UserTier } from "@/lib/rate-limit";
+import { getRedis } from "@/lib/redis";
+
+export const runtime = "nodejs";
 
 // ── Input validation helpers ────────────────────────────────────
 
@@ -37,6 +35,9 @@ const MAX_SOURCE_LENGTH = 200;
 
 /** Maximum article URL length (characters) — defense-in-depth */
 const MAX_URL_LENGTH = 2048;
+
+/** Keep the stream bounded like the ingestion service. */
+const STREAM_MAX_LEN = 1000;
 
 /**
  * Basic blocklist for obvious prompt injection attempts.
@@ -157,17 +158,12 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Step 5: Publish to Redis Stream ─────────────────────────
-    const redisUrl   = process.env.UPSTASH_REDIS_URL!;
-    const redisToken = process.env.UPSTASH_REDIS_TOKEN!;
     const streamKey  = process.env.REDIS_STREAM_KEY ?? "market-news";
 
     const sanitizedTicker  = ticker.trim().toUpperCase();
     const sanitizedHeadline = headline.trim();
 
-    const command = [
-      "XADD",
-      streamKey,
-      "*",
+    const fields: string[] = [
       "ticker",        sanitizedTicker,
       "headline",      sanitizedHeadline,
       "source",        source ?? "simulation",
@@ -177,30 +173,22 @@ export async function POST(req: NextRequest) {
       ...(article_url ? ["article_url", article_url.trim()] : []),
     ];
 
-    const response = await fetch(redisUrl, {
-      method:  "POST",
-      headers: {
-        "Authorization": `Bearer ${redisToken}`,
-        "Content-Type":  "application/json",
-      },
-      body: JSON.stringify(command),
-    });
+    const redis = await getRedis();
+    const entryId = await redis.sendCommand([
+      "XADD",
+      streamKey,
+      "MAXLEN",
+      "~",
+      String(STREAM_MAX_LEN),
+      "*",
+      ...fields,
+    ]);
 
-    if (!response.ok) {
-      const text = await response.text();
-      console.error("Upstash Redis XADD error:", text);
-      return NextResponse.json(
-        { error: "Failed to publish to Redis stream" },
-        { status: 502 },
-      );
-    }
-
-    const result = await response.json();
     return NextResponse.json({
       success: true,
       ticker: sanitizedTicker,
       headline: sanitizedHeadline,
-      entry_id: result.result,
+      entry_id: entryId,
       remaining: rateLimit.remaining,
     });
 

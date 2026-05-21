@@ -6,10 +6,10 @@ Entry point for the market news ingestion pipeline.
 This service runs forever on Fly.io as a background worker:
   1. Opens a WebSocket connection to Alpaca's live news stream
   2. Filters incoming headlines for relevant stock tickers
-  3. Publishes filtered news to Upstash Kafka for downstream processing
+  3. Publishes filtered news to a Redis Stream for downstream processing
 
 The ingestion service is intentionally decoupled from the AI agent.
-If the agent goes down, this service keeps buffering news in Kafka —
+If the agent goes down, this service keeps buffering news in Redis —
 no headlines are lost. This is the "severed pipeline" design.
 
 Run locally:  python main.py

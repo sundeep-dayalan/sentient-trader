@@ -26,7 +26,7 @@ const nextConfig: NextConfig = {
               "default-src 'self'",
               // ST-04 FIX: 'unsafe-eval' only in dev (HMR needs it), stripped in production.
               `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
-              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://supabase.sundeepdayalan.in wss://supabase.sundeepdayalan.in https://*.upstash.io",
+              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://supabase.sundeepdayalan.in wss://supabase.sundeepdayalan.in",
               "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
               "img-src 'self' data: blob: https://lh3.googleusercontent.com https://avatars.githubusercontent.com",
               "font-src 'self' data: https://fonts.gstatic.com",

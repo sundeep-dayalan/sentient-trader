@@ -1,10 +1,10 @@
 """
 Redis Stream Consumer
 ======================
-Reads news messages from the Upstash Redis Stream and feeds them to
+Reads news messages from the Valkey/Redis Stream and feeds them to
 the AI agent graph one message at a time.
 
-Redis Streams with consumer groups provide the same semantics as Kafka:
+Redis Streams with consumer groups provide durable queue semantics:
   - Messages persist in the stream regardless of consumer uptime
   - Consumer groups track the read position across restarts
   - Each message is delivered to exactly one consumer in the group
@@ -16,30 +16,22 @@ How the polling loop works:
   3. If the stream is empty: sleep 1 second and poll again
   4. On any error: log, sleep 5 seconds, retry
 
-Field format from upstash-redis 1.7.0:
-  xreadgroup returns: [["stream-key", [["entry-id", ["f1","v1","f2","v2",...]], ...]]]
-  Fields are a flat alternating list, not a dict — we convert with zip(even, odd).
+Field format from redis-py:
+  xreadgroup returns: [["stream-key", [["entry-id", {"f1":"v1", ...}], ...]]]
 """
 
 import json
 import logging
-import os
 import time
-from typing import Callable
+from typing import Callable, Mapping
 
-from upstash_redis import Redis
+from redis.exceptions import ResponseError
 
 import config
+from redis_client import create_redis_client
 from schemas import NewsMessage
 
 log = logging.getLogger("agent.consumer")
-
-
-def _is_upstash_quota_error(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return "max requests limit exceeded" in message or (
-        "usage:" in message and "limit:" in message
-    )
 
 
 class RedisStreamConsumer:
@@ -49,10 +41,7 @@ class RedisStreamConsumer:
     """
 
     def __init__(self) -> None:
-        self._redis = Redis(
-            url=os.environ["UPSTASH_REDIS_URL"],
-            token=os.environ["UPSTASH_REDIS_TOKEN"],
-        )
+        self._redis = create_redis_client()
         self._last_state_phase: str | None = None
         self._write_agent_state("starting", "initializing Redis stream consumer")
         self._ensure_consumer_group()
@@ -94,22 +83,10 @@ class RedisStreamConsumer:
                 self._redis.xgroup_create(config.STREAM_KEY, config.CONSUMER_GROUP, "$", mkstream=True)
                 log.info("Consumer group '%s' created on stream '%s'", config.CONSUMER_GROUP, config.STREAM_KEY)
                 return
-            except Exception as e:
+            except ResponseError as e:
                 if "BUSYGROUP" in str(e):
                     log.info("Consumer group '%s' already exists — resuming", config.CONSUMER_GROUP)
                     return
-                if _is_upstash_quota_error(e):
-                    log.error(
-                        "Upstash Redis request quota exhausted while ensuring consumer group — "
-                        "sleeping %.0fs before retry",
-                        config.REDIS_QUOTA_RETRY,
-                    )
-                    self._sleep_with_heartbeat(
-                        config.REDIS_QUOTA_RETRY,
-                        "redis_quota_backoff",
-                        "waiting for Upstash request quota to recover",
-                    )
-                    continue
                 raise
 
     def start(self, on_message: Callable[[NewsMessage], None]) -> None:
@@ -141,16 +118,16 @@ class RedisStreamConsumer:
                     time.sleep(config.POLL_INTERVAL)
                     continue
 
-                # results format: [["stream-key", [["entry-id", ["f","v",...]], ...]]]
+                # results format: [["stream-key", [["entry-id", {"f":"v", ...}], ...]]]
                 _stream_name, entries = results[0]
-                for entry_id, flat_fields in entries:
-                    self._process_entry(entry_id, flat_fields, on_message)
+                for entry_id, fields in entries:
+                    self._process_entry(entry_id, fields, on_message)
 
             except KeyboardInterrupt:
                 log.info("Consumer shutting down...")
                 break
             except Exception as e:
-                retry = config.REDIS_QUOTA_RETRY if _is_upstash_quota_error(e) else config.ERROR_RETRY
+                retry = config.ERROR_RETRY
                 log.error("Stream poll error: %s — retrying in %.0fs", e, retry)
                 self._sleep_with_heartbeat(
                     retry,
@@ -161,22 +138,24 @@ class RedisStreamConsumer:
     def _process_entry(
         self,
         entry_id: str,
-        flat_fields: list,
+        raw_fields: Mapping[str, str] | list[str],
         on_message: Callable[[NewsMessage], None],
     ) -> None:
         """
         Parse one stream entry and call the processing callback.
 
-        upstash-redis returns fields as a flat alternating list:
-          ["ticker", "NVDA", "headline", "...", "source", "...", ...]
-        We convert to a dict with zip(even_indices, odd_indices).
+        redis-py returns fields as a dict when decode_responses=True.
+        The flat-list branch keeps compatibility with older stream fixtures.
 
         We ACK after processing so that a mid-crash leaves the message
         in the Pending Entries List for redelivery.
         """
         try:
-            # Convert flat list ["k1","v1","k2","v2",...] → {"k1":"v1","k2":"v2",...}
-            fields = dict(zip(flat_fields[::2], flat_fields[1::2]))
+            fields = (
+                dict(raw_fields)
+                if isinstance(raw_fields, Mapping)
+                else dict(zip(raw_fields[::2], raw_fields[1::2]))
+            )
             news = NewsMessage(**fields)
             log.info("Consumed [%s]: %s", news.ticker, news.headline[:70])
             on_message(news)

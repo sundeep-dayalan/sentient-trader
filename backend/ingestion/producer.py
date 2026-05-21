@@ -1,10 +1,9 @@
 """
 Redis Stream Producer
 ======================
-Publishes filtered news articles to an Upstash Redis Stream.
+Publishes filtered news articles to a Valkey/Redis Stream.
 
-We replaced Kafka with Redis Streams because Upstash no longer offers
-a Kafka product. Redis Streams provide the same semantics we need:
+Redis Streams provide the same semantics we need:
   - Persistent, ordered message log per topic (stream key)
   - Consumer groups: multiple consumers can share the load
   - At-least-once delivery with ACK support
@@ -22,12 +21,11 @@ import json
 import logging
 import os
 
-from upstash_redis import Redis
+from redis_client import create_redis_client
 
 log = logging.getLogger("ingestion.producer")
 
 # The Redis stream key that the agent consumer reads from.
-# This replaces the Kafka topic name.
 STREAM_KEY = os.environ.get("REDIS_STREAM_KEY", "market-news")
 
 # Limit the stream to the 1,000 most recent messages so it doesn't
@@ -37,15 +35,12 @@ STREAM_MAX_LEN = 1000
 
 class RedisStreamProducer:
     """
-    Publishes news articles to a Redis Stream via the Upstash REST API.
+    Publishes news articles to a Redis Stream.
     One producer instance lives for the lifetime of the ingestion process.
     """
 
     def __init__(self) -> None:
-        self._redis = Redis(
-            url=os.environ["UPSTASH_REDIS_URL"],
-            token=os.environ["UPSTASH_REDIS_TOKEN"],
-        )
+        self._redis = create_redis_client()
         log.info("Redis stream producer connected (stream key: %s)", STREAM_KEY)
 
     def publish(
@@ -62,7 +57,7 @@ class RedisStreamProducer:
         Append one news article to the Redis Stream.
         Never raises — errors are logged so the listener keeps running.
 
-        XADD with maxlen=STREAM_MAX_LEN keeps storage bounded on the free tier.
+        XADD with maxlen=STREAM_MAX_LEN keeps storage bounded.
         The "*" ID lets Redis auto-generate a timestamp-based message ID.
         """
         message = {
@@ -81,9 +76,10 @@ class RedisStreamProducer:
         try:
             entry_id = self._redis.xadd(
                 STREAM_KEY,
-                "*",        # auto-generate a timestamp-based ID
                 message,
+                id="*",        # auto-generate a timestamp-based ID
                 maxlen=STREAM_MAX_LEN,
+                approximate=True,
             )
             log.info("Published [%s] → %s: %s", entry_id, ticker, headline[:70])
 

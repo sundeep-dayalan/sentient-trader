@@ -10,7 +10,9 @@
 
 import { NextResponse }  from "next/server";
 import { createClient }  from "@/lib/supabase";
-import { Redis } from "@upstash/redis";
+import { getRedis }    from "@/lib/redis";
+
+export const runtime = "nodejs";
 
 type ServiceStatus = "ok" | "stale" | "error" | "unknown";
 type ServiceKey = "alpaca" | "supabase" | "groq" | "redis" | "agent";
@@ -97,15 +99,12 @@ async function checkSupabaseAndPipeline(): Promise<{
   let groqStatus: ServiceStatus = "unknown";
   
   try {
-    const redis = new Redis({
-      url: process.env.UPSTASH_REDIS_URL!,
-      token: process.env.UPSTASH_REDIS_TOKEN!,
-    });
+    const redis = await getRedis();
     
     // Check Redis connectivity and Agent heartbeat simultaneously
     const [heartbeatStr, agentStateRaw] = await Promise.all([
-      redis.get<string>("agent:heartbeat"),
-      redis.get<string>("agent:state"),
+      redis.get("agent:heartbeat"),
+      redis.get("agent:state"),
     ]);
     const agentState = parseAgentState(agentStateRaw);
     redisStatus = "ok";

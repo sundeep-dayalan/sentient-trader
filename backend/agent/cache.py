@@ -1,6 +1,6 @@
 """
-Semantic Cache (Upstash Redis)
-===============================
+Semantic Cache (Valkey / Redis)
+================================
 Prevents duplicate LLM calls for the same headline.
 
 The problem it solves:
@@ -24,9 +24,8 @@ TTL of 5 minutes:
 
 import hashlib
 import logging
-import os
 
-from upstash_redis import Redis
+from redis_client import create_redis_client
 
 log = logging.getLogger("agent.cache")
 
@@ -36,15 +35,11 @@ CACHE_TTL_SECONDS = 2 * 60 * 60  # 2 hours
 
 class HeadlineCache:
     """
-    Thin wrapper around Upstash Redis for headline deduplication.
-    Uses the upstash-redis HTTP client — no persistent TCP connection needed.
+    Thin wrapper around Valkey/Redis for headline deduplication.
     """
 
     def __init__(self) -> None:
-        self._redis = Redis(
-            url=os.environ["UPSTASH_REDIS_URL"],
-            token=os.environ["UPSTASH_REDIS_TOKEN"],
-        )
+        self._redis = create_redis_client()
         log.info("Redis cache connected")
 
     def _make_key(self, headline: str) -> str:

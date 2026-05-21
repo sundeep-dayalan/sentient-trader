@@ -1,11 +1,10 @@
-# Fly.io configuration for the ingestion service (WebSocket listener → Kafka)
+# Fly.io configuration for the ingestion service (WebSocket listener -> Redis Stream)
 # Deploy with: flyctl launch  (first time)
 #              flyctl deploy  (subsequent deploys)
 #
 # Secrets (never commit these — set via CLI):
 #   flyctl secrets set ALPACA_API_KEY=xxx ALPACA_SECRET_KEY=xxx \
-#     KAFKA_BOOTSTRAP_SERVER=xxx KAFKA_USERNAME=xxx KAFKA_PASSWORD=xxx \
-#     KAFKA_TOPIC=market-news
+#     REDIS_HOST=127.0.0.1 REDIS_PORT=6379 REDIS_DB=0
 
 app            = "sentient-trader-ingestion"
 primary_region = "iad"   # US East — lowest latency to NYSE/NASDAQ data centers

@@ -27,7 +27,7 @@
 - **URL Query Parameters:** `limit`, `status`, `range`, `before`, `code`, `next`.
 - **HTTP Bodies:** POST requests to `/api/simulate`, `/api/agent-config`, `/api/orders/cancel`.
 - **External Feeds:** Alpaca News REST API (consumed by `backend/ingestion/listener.py`).
-- **Data Stores:** Upstash Redis (Kafka stream), Supabase Postgres Database.
+- **Data Stores:** Valkey/Redis Stream, Supabase Postgres Database.
 
 ### Data Egress
 - **HTTP Responses:** JSON API responses delivered to the React frontend.
@@ -39,7 +39,7 @@
 ### Trust Boundaries
 - Browser ↔ Next.js API
 - Next.js API ↔ Supabase (RLS & Service Role)
-- Next.js API / Python Agent ↔ Upstash Redis
+- Next.js API / Python Agent ↔ Valkey/Redis
 - Python Ingestion / Agent ↔ Alpaca APIs
 - Python Agent ↔ Groq LLM
 
@@ -162,4 +162,4 @@ Generate strict nonces for Next.js inline scripts and remove `'unsafe-inline'` a
 - **Infrastructure Configuration:** I could not verify the contents of the actual production environment variables (`.env`), Fly.io deployment configurations, or Netlify proxy rules. I assume secrets are correctly scoped and injected securely.
 - **Supabase Row-Level Security (RLS) Policies:** The database schema and RLS policies are not present in the accessible repository (e.g., the `supabase/migrations` folder is empty). Therefore, I cannot confirm if the `agent_config` or `trades` tables are immune to unauthorized REST queries directly against the Supabase API.
 - **Dependency Lockfiles:** I performed mental audits on the `package.json` and `requirements.txt` dependencies but could not run dynamic SCA tools.
-- **Upstash Configuration:** I could not confirm if the Upstash Redis clusters or Kafka topics are securely partitioned and firewalled away from public internet access outside the application's VPC/IP range.
+- **Valkey/Redis Configuration:** I could not confirm if the Redis instance is network-partitioned and firewalled away from public internet access outside the application's VPC/IP range.

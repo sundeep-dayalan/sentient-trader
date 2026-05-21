@@ -4,7 +4,7 @@ Sentient Trader — Agent Service
 Entry point for the AI trading agent.
 
 This service runs forever on Fly.io as a background worker:
-  1. Consumes news messages from Kafka (put there by the ingestion service)
+  1. Consumes news messages from a Redis Stream
   2. Runs each headline through the LangGraph pipeline:
        check_cache → fetch_context → momentum_analyst → value_analyst
        → risk_analyst → synthesizer → assess_risk → [trade] → log
@@ -89,7 +89,7 @@ def main() -> None:
             log.error("Graph invocation failed for [%s]: %s", news.ticker, e)
 
     # Start consuming — blocks forever
-    log.info("Agent ready. Waiting for market news from Kafka...")
+    log.info("Agent ready. Waiting for market news from Redis...")
     consumer = RedisStreamConsumer()
     consumer.start(on_message=process_news)
 
