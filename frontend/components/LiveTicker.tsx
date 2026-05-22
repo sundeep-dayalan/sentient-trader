@@ -130,7 +130,7 @@ export default function LiveTicker({
                     </a>
                   )}
                   <span className="text-[11px] text-muted">
-                    {new Date(trade.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    {new Date(trade.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                   </span>
                 </div>
               </div>
