@@ -4,7 +4,7 @@ Sentient Trader — Ingestion Service
 Entry point for the market news ingestion pipeline.
 
 This service runs forever as a background worker:
-  1. Polls Alpaca's news REST API
+  1. Streams real-time news from Alpaca's WebSockets
   2. Filters incoming headlines for relevant stock tickers
   3. Publishes filtered news to a Redis Stream for downstream processing
 
@@ -43,7 +43,7 @@ def main() -> None:
 
     listener = NewsListener()
 
-    # .run() blocks forever — the poll loop stays active.
+    # .run() blocks forever — the websocket loop stays active.
     # The host should restart this process automatically if it crashes.
     listener.run()
 
