@@ -2,7 +2,15 @@ import react from "@vitejs/plugin-react";
 import path from "node:path";
 import { defineConfig } from "vite";
 
+function normalizeBasePath(value: string | undefined): string {
+  if (!value) return "/";
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "/") return "/";
+  return `/${trimmed.replace(/^\/+|\/+$/g, "")}/`;
+}
+
 export default defineConfig({
+  base: normalizeBasePath(process.env.VITE_BASE_PATH),
   plugins: [react()],
   build: {
     rollupOptions: {

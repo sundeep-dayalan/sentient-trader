@@ -56,8 +56,14 @@ export function useAuth(): AuthContextValue {
 }
 
 // ── Helper: get auth callback URL ──────────────────────────────
+function getAppBasePath(): string {
+  const base = import.meta.env.BASE_URL || "/";
+  if (base === "/") return "";
+  return `/${base.replace(/^\/+|\/+$/g, "")}`;
+}
+
 function getAuthCallbackUrl(): string {
-  return `${window.location.origin}/auth/callback`;
+  return `${window.location.origin}${getAppBasePath()}/auth/callback`;
 }
 
 // ── Helper: fetch super user status from the server ────────────
@@ -103,7 +109,7 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
       if (code) {
         // Clean the code from the URL immediately (don't expose it to the user)
         url.searchParams.delete("code");
-        window.history.replaceState({}, "", "/");
+        window.history.replaceState({}, "", getAppBasePath() || "/");
 
         // Exchange the code for a real session
         const { data: { session: oauthSession }, error: oauthError } =

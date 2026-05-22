@@ -22,16 +22,21 @@ Field format from redis-py:
 
 import json
 import logging
+import os
 import time
 from typing import Callable, Mapping
 
-from redis.exceptions import ResponseError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import ResponseError, TimeoutError
 
 import config
 from redis_client import create_redis_client
 from schemas import NewsMessage
 
 log = logging.getLogger("agent.consumer")
+REDIS_HOST = os.environ.get("REDIS_HOST", "127.0.0.1")
+REDIS_PORT = os.environ.get("REDIS_PORT", "6379")
+REDIS_DB = os.environ.get("REDIS_DB", "0")
 
 
 class RedisStreamConsumer:
@@ -88,6 +93,20 @@ class RedisStreamConsumer:
                     log.info("Consumer group '%s' already exists — resuming", config.CONSUMER_GROUP)
                     return
                 raise
+            except (RedisConnectionError, TimeoutError) as e:
+                log.error(
+                    "Redis unavailable at %s:%s DB %s: %s — retrying in %.0fs",
+                    REDIS_HOST,
+                    REDIS_PORT,
+                    REDIS_DB,
+                    e,
+                    config.ERROR_RETRY,
+                )
+                self._sleep_with_heartbeat(
+                    config.ERROR_RETRY,
+                    "redis_backoff",
+                    f"Redis unavailable: {str(e)[:160]}",
+                )
 
     def start(self, on_message: Callable[[NewsMessage], None]) -> None:
         """
