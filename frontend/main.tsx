@@ -1,13 +1,16 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
 import AuthProvider from "@/components/AuthProvider";
 import DashboardClient from "@/DashboardClient";
 import "./globals.css";
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <AuthProvider>
-      <DashboardClient initialTrades={[]} initialStats={null} />
-    </AuthProvider>
+    <BrowserRouter basename={import.meta.env.BASE_URL}>
+      <AuthProvider>
+        <DashboardClient initialTrades={[]} initialStats={null} />
+      </AuthProvider>
+    </BrowserRouter>
   </React.StrictMode>,
 );

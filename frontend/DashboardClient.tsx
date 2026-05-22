@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import AgentMonologue from "@/components/AgentMonologue";
 import AuthGate        from "@/components/AuthGate";
 import CustomNewsForm  from "@/components/CustomNewsForm";
@@ -19,6 +20,26 @@ import { DashboardStats, Trade } from "@/lib/types";
 const PAGE_SIZE = 20;
 const NAV_ITEMS = ["Dashboard", "Signals", "Risk Gate", "Orders", "Portfolio", "Pipeline", "Settings"] as const;
 type ViewName = typeof NAV_ITEMS[number];
+
+const VIEW_PATH_MAP: Record<ViewName, string> = {
+  Dashboard: "/",
+  Signals: "/signals",
+  "Risk Gate": "/risk-gate",
+  Orders: "/orders",
+  Portfolio: "/portfolio",
+  Pipeline: "/pipeline",
+  Settings: "/settings",
+};
+
+const PATH_VIEW_MAP: Record<string, ViewName> = {
+  "/": "Dashboard",
+  "/signals": "Signals",
+  "/risk-gate": "Risk Gate",
+  "/orders": "Orders",
+  "/portfolio": "Portfolio",
+  "/pipeline": "Pipeline",
+  "/settings": "Settings",
+};
 
 interface DashboardClientProps {
   initialTrades: Trade[];
@@ -597,7 +618,18 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   const [authGateReason, setAuthGateReason] = useState<"auth_required" | "limit_reached">("auth_required");
   const [userMenuOpen,  setUserMenuOpen]  = useState(false);
   const [paperBannerDismissed, setPaperBannerDismissed] = useState(false);
-  const [activeView,    setActiveView]    = useState<ViewName>("Dashboard");
+
+  const location = useLocation();
+  const navigate = useNavigate();
+  const pathname = location.pathname;
+  const activeView: ViewName = PATH_VIEW_MAP[pathname] ?? "Dashboard";
+
+  const setActiveView = useCallback(
+    (view: ViewName) => {
+      navigate(VIEW_PATH_MAP[view]);
+    },
+    [navigate]
+  );
 
   // ── Auth state ────────────────────────────────────────────────
   const { user, isAnonymous, isSuperUser, isLoading: authLoading, signOut } = useAuth();
@@ -877,17 +909,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                 <p className="text-sm font-bold text-primary">Sentient Trader</p>
               </div>
 
-              {/* Search */}
-              <div className="hidden min-w-[260px] max-w-sm flex-1 items-center gap-2.5 rounded-xl border border-line bg-surface-2 px-3.5 py-2 md:flex">
-                <svg className="h-4 w-4 shrink-0 text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-4.35-4.35M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15z" />
-                </svg>
-                <input
-                  aria-label="Search signals"
-                  className="min-w-0 flex-1 bg-transparent text-sm text-secondary outline-none placeholder:text-muted"
-                  placeholder="Search signals, tickers…"
-                />
-              </div>
+
 
               <div className="ml-auto flex items-center gap-2">
                 <button
