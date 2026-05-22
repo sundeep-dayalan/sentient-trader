@@ -6,6 +6,12 @@ services:
     restart: unless-stopped
     expose:
       - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     environment:
       PYTHONUNBUFFERED: "1"
       PORT: "${PORT:-8000}"
@@ -31,6 +37,12 @@ services:
       context: ./backend/ingestion
       dockerfile: Dockerfile
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     environment:
       PYTHONUNBUFFERED: "1"
       REDIS_STREAM_KEY: "${REDIS_STREAM_KEY:-market-news}"
@@ -47,6 +59,12 @@ services:
       context: ./backend/agent
       dockerfile: Dockerfile
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     environment:
       PYTHONUNBUFFERED: "1"
       REDIS_STREAM_KEY: "${REDIS_STREAM_KEY:-market-news}"

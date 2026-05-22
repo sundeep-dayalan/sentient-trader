@@ -112,4 +112,8 @@ class NewsListener:
         log.info("Starting news poll loop (every %ds)...", POLL_INTERVAL_SECONDS)
         while True:
             self._poll_once()
+            try:
+                self._producer._redis.set("ingestion:heartbeat", str(int(time.time())))
+            except Exception as e:
+                log.warning("Could not write ingestion heartbeat: %s", e)
             time.sleep(POLL_INTERVAL_SECONDS)
