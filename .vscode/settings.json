@@ -9,5 +9,15 @@
     "${workspaceFolder}/backend/agent"
   ],
   // Use the root venv for the integrated terminal too
-  "python.terminal.activateEnvironment": true
+  "python.terminal.activateEnvironment": true,
+
+  // Auto format on save settings
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+  "black-formatter.path": [
+    "${workspaceFolder}/.venv/bin/black"
+  ]
 }
