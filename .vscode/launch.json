@@ -1,0 +1,54 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Trading Agent",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/agent/main.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}/backend/agent",
+      "envFile": "${workspaceFolder}/backend/agent/.env",
+      "justMyCode": true
+    },
+    {
+      "name": "Debug Ingestion Service",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/ingestion/main.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}/backend/ingestion",
+      "envFile": "${workspaceFolder}/backend/ingestion/.env",
+      "justMyCode": true
+    },
+    {
+      "name": "Debug Backend API",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["main:app", "--reload", "--port", "8080"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}/backend/api",
+      "envFile": "${workspaceFolder}/backend/api/.env",
+      "justMyCode": true
+    },
+    {
+      "name": "Run Frontend Dashboard",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "${workspaceFolder}/frontend",
+      "console": "integratedTerminal"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Sentient Trader — Full Backend Stack",
+      "configurations": [
+        "Debug Trading Agent",
+        "Debug Backend API"
+      ]
+    }
+  ]
+}

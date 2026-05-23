@@ -55,8 +55,8 @@ GROQ_MIN_CONTEXT_WINDOW = int(os.environ.get("GROQ_MIN_CONTEXT_WINDOW", "8192"))
 GROQ_MIN_COMPLETION_TOKENS = int(os.environ.get("GROQ_MIN_COMPLETION_TOKENS", "1024"))
 
 STREAM_KEY     = os.environ.get("REDIS_STREAM_KEY", "market-news")
-CONSUMER_GROUP = "sentient-agent-group"
-CONSUMER_NAME  = "agent-worker-1"
+CONSUMER_GROUP = os.environ.get("REDIS_CONSUMER_GROUP", "sentient-agent-group")
+CONSUMER_NAME  = os.environ.get("REDIS_CONSUMER_NAME", "agent-worker-1")
 BATCH_SIZE     = 10
 POLL_INTERVAL  = 1.0
 ERROR_RETRY    = 5.0

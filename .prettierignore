@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+.venv/
+package-lock.json
+
+# Builds & Outputs
+.next/
+dist/
+build/
+out/
+outputs/
+tsconfig.tsbuildinfo
+
+# Tooling and caches
+.claude/
+.gemini/
+.vscode/
+.DS_Store
+
+# Supabase
+supabase/.temp/
+supabase/migrations/

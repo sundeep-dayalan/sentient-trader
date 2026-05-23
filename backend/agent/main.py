@@ -24,6 +24,9 @@ import sys
 
 from dotenv import load_dotenv
 
+# Load environment variables first, before importing config
+load_dotenv()
+
 import config
 from analyst import build_agent_graph
 from cache import HeadlineCache
@@ -31,8 +34,6 @@ from consumer import RedisStreamConsumer
 from logger import SupabaseLogger
 from schemas import NewsMessage
 from trader import AlpacaTrader
-
-load_dotenv()
 
 # Set up logging first so any startup errors are visible in Fly logs
 logging.basicConfig(

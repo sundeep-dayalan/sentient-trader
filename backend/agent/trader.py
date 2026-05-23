@@ -62,12 +62,16 @@ class AlpacaTrader:
     """
 
     def __init__(self) -> None:
+        self._dry_run = os.environ.get("MOCK_ALPACA", "false").lower() == "true"
         self._client = TradingClient(
             api_key=os.environ["ALPACA_API_KEY"],
             secret_key=os.environ["ALPACA_SECRET_KEY"],
             paper=True,  # Hardcoded — this service must never touch live funds
         )
-        log.info("Alpaca trader initialized (paper trading mode)")
+        if self._dry_run:
+            log.info("Alpaca trader initialized in MOCK mode (Dry run)")
+        else:
+            log.info("Alpaca trader initialized (paper trading mode)")
 
     def place_order(
         self,
@@ -87,6 +91,20 @@ class AlpacaTrader:
         """
         qty = quantity if quantity is not None else config.ORDER_QTY
         side = OrderSide.BUY if action == "BUY" else OrderSide.SELL
+
+        if self._dry_run:
+            import uuid
+            mock_id = str(uuid.uuid4())
+            log.info(
+                "MOCK ORDER (Dry Run): %s %d %s → order_id=%s",
+                action, qty, ticker, mock_id,
+            )
+            return OrderResult(
+                submitted=True,
+                order_id=mock_id,
+                client_order_id=client_order_id,
+                status="accepted",
+            )
 
         order_request = MarketOrderRequest(
             symbol=ticker,

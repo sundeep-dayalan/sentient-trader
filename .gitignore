@@ -22,3 +22,4 @@ dist/
 
 # Claude Code session data (contains permission tokens)
 .claude/
+graphify-out/
