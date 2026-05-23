@@ -17,6 +17,7 @@ from producer import RedisStreamProducer
 
 log = logging.getLogger("ingestion.listener")
 
+
 class NewsListener:
     """
     Streams Alpaca's news via WebSockets and feeds articles into the Redis stream.

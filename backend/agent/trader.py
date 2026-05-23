@@ -94,10 +94,14 @@ class AlpacaTrader:
 
         if self._dry_run:
             import uuid
+
             mock_id = str(uuid.uuid4())
             log.info(
                 "MOCK ORDER (Dry Run): %s %d %s → order_id=%s",
-                action, qty, ticker, mock_id,
+                action,
+                qty,
+                ticker,
+                mock_id,
             )
             return OrderResult(
                 submitted=True,
@@ -118,7 +122,10 @@ class AlpacaTrader:
             order = self._client.submit_order(order_data=order_request)
             log.info(
                 "Order submitted: %s %d %s → order_id=%s",
-                action, qty, ticker, order.id,
+                action,
+                qty,
+                ticker,
+                order.id,
             )
             return OrderResult(
                 submitted=True,
@@ -144,18 +151,30 @@ class AlpacaTrader:
                 "status": str(getattr(account, "status", "") or ""),
                 "currency": str(getattr(account, "currency", "") or ""),
                 "trading_blocked": _boolish(getattr(account, "trading_blocked", None)),
-                "transfers_blocked": _boolish(getattr(account, "transfers_blocked", None)),
+                "transfers_blocked": _boolish(
+                    getattr(account, "transfers_blocked", None)
+                ),
                 "account_blocked": _boolish(getattr(account, "account_blocked", None)),
-                "shorting_enabled": _boolish(getattr(account, "shorting_enabled", None)),
-                "pattern_day_trader": _boolish(getattr(account, "pattern_day_trader", None)),
+                "shorting_enabled": _boolish(
+                    getattr(account, "shorting_enabled", None)
+                ),
+                "pattern_day_trader": _boolish(
+                    getattr(account, "pattern_day_trader", None)
+                ),
                 "buying_power": _floatish(getattr(account, "buying_power", None)),
-                "regt_buying_power": _floatish(getattr(account, "regt_buying_power", None)),
-                "daytrading_buying_power": _floatish(getattr(account, "daytrading_buying_power", None)),
+                "regt_buying_power": _floatish(
+                    getattr(account, "regt_buying_power", None)
+                ),
+                "daytrading_buying_power": _floatish(
+                    getattr(account, "daytrading_buying_power", None)
+                ),
                 "cash": _floatish(getattr(account, "cash", None)),
                 "portfolio_value": _floatish(getattr(account, "portfolio_value", None)),
                 "equity": _floatish(getattr(account, "equity", None)),
                 "last_equity": _floatish(getattr(account, "last_equity", None)),
-                "maintenance_margin": _floatish(getattr(account, "maintenance_margin", None)),
+                "maintenance_margin": _floatish(
+                    getattr(account, "maintenance_margin", None)
+                ),
                 "daytrade_count": getattr(account, "daytrade_count", None),
             }
         except Exception as exc:
@@ -186,17 +205,27 @@ class AlpacaTrader:
                 "side": str(getattr(position, "side", "") or "long"),
                 "market_value": _floatish(getattr(position, "market_value", None)),
                 "cost_basis": _floatish(getattr(position, "cost_basis", None)),
-                "avg_entry_price": _floatish(getattr(position, "avg_entry_price", None)),
+                "avg_entry_price": _floatish(
+                    getattr(position, "avg_entry_price", None)
+                ),
                 "current_price": _floatish(getattr(position, "current_price", None)),
                 "unrealized_pl": _floatish(getattr(position, "unrealized_pl", None)),
-                "unrealized_plpc": _floatish(getattr(position, "unrealized_plpc", None)),
-                "unrealized_intraday_pl": _floatish(getattr(position, "unrealized_intraday_pl", None)),
-                "unrealized_intraday_plpc": _floatish(getattr(position, "unrealized_intraday_plpc", None)),
+                "unrealized_plpc": _floatish(
+                    getattr(position, "unrealized_plpc", None)
+                ),
+                "unrealized_intraday_pl": _floatish(
+                    getattr(position, "unrealized_intraday_pl", None)
+                ),
+                "unrealized_intraday_plpc": _floatish(
+                    getattr(position, "unrealized_intraday_plpc", None)
+                ),
             }
         except APIError as exc:
             status_code = getattr(exc, "status_code", None)
             message = str(exc).lower()
-            missing_position = "position does not exist" in message or "not found" in message
+            missing_position = (
+                "position does not exist" in message or "not found" in message
+            )
             if status_code not in (404, 422) and not missing_position:
                 log.warning("Could not fetch Alpaca position for %s: %s", ticker, exc)
             return flat

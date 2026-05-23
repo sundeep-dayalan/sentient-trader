@@ -75,15 +75,15 @@ class SupabaseLogger:
         """
         trade_id = str(uuid4())
         slim_record = {
-            "id":               trade_id,
-            "ticker":           ticker,
-            "headline":         headline,
-            "sentiment_score":  round(sentiment_score, 4),
+            "id": trade_id,
+            "ticker": ticker,
+            "headline": headline,
+            "sentiment_score": round(sentiment_score, 4),
             "confidence_score": round(confidence_score, 4),
-            "trade_action":     trade_action,
-            "order_id":         order_id,
-            "quantity":         quantity,
-            "is_simulated":     is_simulated,
+            "trade_action": trade_action,
+            "order_id": order_id,
+            "quantity": quantity,
+            "is_simulated": is_simulated,
         }
         if article_url:
             slim_record["article_url"] = article_url
@@ -99,11 +99,15 @@ class SupabaseLogger:
 
         try:
             try:
-                self._client.table("trades").insert(slim_record, returning="minimal").execute()
+                self._client.table("trades").insert(
+                    slim_record, returning="minimal"
+                ).execute()
             except Exception as slim_insert_error:
                 # Compatibility fallback for deployments where migration 010 has
                 # not been applied yet and `trades.reasoning` is still NOT NULL.
-                self._client.table("trades").insert(legacy_record, returning="minimal").execute()
+                self._client.table("trades").insert(
+                    legacy_record, returning="minimal"
+                ).execute()
                 log.warning(
                     "Inserted legacy trade row after slim insert failed: %s",
                     slim_insert_error,
@@ -111,9 +115,9 @@ class SupabaseLogger:
 
             if decision_trace:
                 trace_record = {
-                    "trade_id":       trade_id,
+                    "trade_id": trade_id,
                     "decision_trace": decision_trace,
-                    "reasoning":      reasoning,
+                    "reasoning": reasoning,
                 }
                 if article_source:
                     trace_record["article_source"] = article_source
@@ -126,7 +130,7 @@ class SupabaseLogger:
                     ).execute()
                 except Exception as detailed_trace_error:
                     base_trace_record = {
-                        "trade_id":       trade_id,
+                        "trade_id": trade_id,
                         "decision_trace": decision_trace,
                     }
                     try:

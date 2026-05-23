@@ -58,17 +58,21 @@ class RedisStreamConsumer:
             if phase != self._last_state_phase or detail:
                 self._redis.set(
                     "agent:state",
-                    json.dumps({
-                        "phase": phase,
-                        "detail": detail,
-                        "updated_at": now,
-                    }),
+                    json.dumps(
+                        {
+                            "phase": phase,
+                            "detail": detail,
+                            "updated_at": now,
+                        }
+                    ),
                 )
                 self._last_state_phase = phase
         except Exception as exc:
             log.warning("Could not write agent heartbeat/state: %s", exc)
 
-    def _sleep_with_heartbeat(self, seconds: float, phase: str, detail: str | None = None) -> None:
+    def _sleep_with_heartbeat(
+        self, seconds: float, phase: str, detail: str | None = None
+    ) -> None:
         deadline = time.time() + seconds
         while True:
             remaining = deadline - time.time()
@@ -85,12 +89,21 @@ class RedisStreamConsumer:
         """
         while True:
             try:
-                self._redis.xgroup_create(config.STREAM_KEY, config.CONSUMER_GROUP, "$", mkstream=True)
-                log.info("Consumer group '%s' created on stream '%s'", config.CONSUMER_GROUP, config.STREAM_KEY)
+                self._redis.xgroup_create(
+                    config.STREAM_KEY, config.CONSUMER_GROUP, "$", mkstream=True
+                )
+                log.info(
+                    "Consumer group '%s' created on stream '%s'",
+                    config.CONSUMER_GROUP,
+                    config.STREAM_KEY,
+                )
                 return
             except ResponseError as e:
                 if "BUSYGROUP" in str(e):
-                    log.info("Consumer group '%s' already exists — resuming", config.CONSUMER_GROUP)
+                    log.info(
+                        "Consumer group '%s' already exists — resuming",
+                        config.CONSUMER_GROUP,
+                    )
                     return
                 raise
             except (RedisConnectionError, TimeoutError) as e:
@@ -113,7 +126,11 @@ class RedisStreamConsumer:
         Poll the Redis stream forever.
         on_message: called with a parsed NewsMessage for each new entry.
         """
-        log.info("Redis stream consumer ready (stream=%s, group=%s)", config.STREAM_KEY, config.CONSUMER_GROUP)
+        log.info(
+            "Redis stream consumer ready (stream=%s, group=%s)",
+            config.STREAM_KEY,
+            config.CONSUMER_GROUP,
+        )
         self._write_agent_state("polling", "Redis stream consumer is polling for news")
 
         last_heartbeat = 0.0

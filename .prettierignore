@@ -20,3 +20,6 @@ tsconfig.tsbuildinfo
 # Supabase
 supabase/.temp/
 supabase/migrations/
+
+# Python files (handled by Black)
+**/*.py

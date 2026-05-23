@@ -131,15 +131,15 @@ NewsRequest(start=self._last_seen, sort="asc", limit=50)
 
 Each Redis stream entry contains:
 
-| Field | Source | Always present |
-|---|---|---|
-| `ticker` | Alpaca `symbols[0]` | Yes |
-| `headline` | Alpaca `headline` | Yes |
-| `source` | Alpaca `source` | Yes |
-| `published_at` | Alpaca `created_at` ISO-8601 | Yes |
-| `summary` | Alpaca `summary` (~150–400 tokens) | When available |
-| `article_url` | Alpaca `url` | When available |
-| `article_id` | Alpaca `id` | When available |
+| Field          | Source                             | Always present |
+| -------------- | ---------------------------------- | -------------- |
+| `ticker`       | Alpaca `symbols[0]`                | Yes            |
+| `headline`     | Alpaca `headline`                  | Yes            |
+| `source`       | Alpaca `source`                    | Yes            |
+| `published_at` | Alpaca `created_at` ISO-8601       | Yes            |
+| `summary`      | Alpaca `summary` (~150–400 tokens) | When available |
+| `article_url`  | Alpaca `url`                       | When available |
+| `article_id`   | Alpaca `id`                        | When available |
 
 The stream is capped at 1,000 entries via `XADD MAXLEN ~` (approximate trimming for efficiency). This keeps storage bounded.
 
@@ -315,23 +315,23 @@ Every LLM call goes through `ModelRouter.call()`, which discovers active Groq mo
 
 **Auto-ranking policy:**
 
-| Step | Rule |
-|---|---|
-| 1 | Keep only `active: true` models with enough context and completion capacity |
-| 2 | Exclude non-analysis systems: audio/transcription, prompt guards, safeguards, TTS/speech, and Groq compound systems |
-| 3 | Score candidates by parameter size, context window, max completion tokens, instruction/reasoning signals, and known general-purpose families |
-| 4 | Sort by score and use that as the cascade |
-| 5 | If `GROQ_MODEL_PINNED_ORDER` is set, try those active models first, then append the auto-ranked remainder |
+| Step | Rule                                                                                                                                         |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | Keep only `active: true` models with enough context and completion capacity                                                                  |
+| 2    | Exclude non-analysis systems: audio/transcription, prompt guards, safeguards, TTS/speech, and Groq compound systems                          |
+| 3    | Score candidates by parameter size, context window, max completion tokens, instruction/reasoning signals, and known general-purpose families |
+| 4    | Sort by score and use that as the cascade                                                                                                    |
+| 5    | If `GROQ_MODEL_PINNED_ORDER` is set, try those active models first, then append the auto-ranked remainder                                    |
 
 Groq's models endpoint does not expose per-day token quota or subjective quality, so runtime fallback still matters: a model that is active but quota-limited is cooled down and the router moves to the next candidate.
 
 **Groq limit/failure types handled by the router:**
 
-| Error type | Detection | Behaviour |
-|---|---|---|
-| Per-minute (RPM/TPM) | `429` without "per day"/"daily" in message | Cool down that model using Groq's retry-after value, then fall back within the same call |
+| Error type              | Detection                                     | Behaviour                                                                                |
+| ----------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Per-minute (RPM/TPM)    | `429` without "per day"/"daily" in message    | Cool down that model using Groq's retry-after value, then fall back within the same call |
 | Daily token quota (TPD) | `429` with "per day"/"daily"/"TPD" in message | Cool down that model using Groq's retry-after value, then fall back within the same call |
-| Missing model | `404 model_not_found` or equivalent text | Disable that model for the process and continue to the next configured tier |
+| Missing model           | `404 model_not_found` or equivalent text      | Disable that model for the process and continue to the next configured tier              |
 
 ```mermaid
 flowchart LR
@@ -395,11 +395,11 @@ Requires **both** a strong directional signal AND high confidence. The synthesiz
 
 Default thresholds (seeded in Supabase, editable via Settings UI):
 
-| Parameter | Default |
-|---|---|
-| `BUY_SENTIMENT_THRESHOLD` | 0.65 |
-| `SELL_SENTIMENT_THRESHOLD` | -0.65 |
-| `CONFIDENCE_THRESHOLD` | 0.70 |
+| Parameter                  | Default |
+| -------------------------- | ------- |
+| `BUY_SENTIMENT_THRESHOLD`  | 0.65    |
+| `SELL_SENTIMENT_THRESHOLD` | -0.65   |
+| `CONFIDENCE_THRESHOLD`     | 0.70    |
 
 ---
 
@@ -407,12 +407,12 @@ Default thresholds (seeded in Supabase, editable via Settings UI):
 
 Every unique headline that enters the graph **always produces a row in the `trades` table**, regardless of how analysis went.
 
-| Outcome | `trade_action` written | `reasoning` |
-|---|---|---|
-| Full debate, threshold cleared | `BUY` or `SELL` | Synthesizer's reasoning text |
-| Full debate, threshold not cleared | `HOLD` | Synthesizer's reasoning text |
-| Partial debate (some persona calls failed), threshold cleared | `BUY` or `SELL` | Synthesizer reasons on available opinions |
-| All LLM calls failed / all models exhausted | `HOLD` | `"Analysis skipped — <error message>"` |
+| Outcome                                                       | `trade_action` written | `reasoning`                               |
+| ------------------------------------------------------------- | ---------------------- | ----------------------------------------- |
+| Full debate, threshold cleared                                | `BUY` or `SELL`        | Synthesizer's reasoning text              |
+| Full debate, threshold not cleared                            | `HOLD`                 | Synthesizer's reasoning text              |
+| Partial debate (some persona calls failed), threshold cleared | `BUY` or `SELL`        | Synthesizer reasons on available opinions |
+| All LLM calls failed / all models exhausted                   | `HOLD`                 | `"Analysis skipped — <error message>"`    |
 
 Cached (duplicate) headlines are the only case that produces no new row — they were already logged the first time through.
 
@@ -428,27 +428,27 @@ Cached (duplicate) headlines are the only case that produces no new row — they
 
 The React app is a static single-page application. Netlify serves `dist/`, and the SPA redirect sends every route back to `index.html`.
 
-| View | What it shows |
-|---|---|
-| `/` | Live signal feed, PnL chart, pipeline diagram, dashboard stats |
+| View                | What it shows                                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `/`                 | Live signal feed, PnL chart, pipeline diagram, dashboard stats                                                |
 | Signal detail panel | Full signal detail: all three persona opinions, conviction bars, article link, tooltips on every trading term |
-| Settings panel | Live-edit all agent config values (thresholds, system prompts, model override, order qty) |
+| Settings panel      | Live-edit all agent config values (thresholds, system prompts, model override, order qty)                     |
 
 ### Backend API
 
-| Route | Method | Purpose |
-|---|---|---|
-| `/auth/me` | GET | Validates the Supabase access token and returns dashboard role flags |
-| `/simulate` | POST | Authenticates the user, rate-limits with Valkey, and injects a test headline |
-| `/status` | GET | Combines Supabase, Alpaca, Redis, Groq, and agent heartbeat checks |
-| `/agent-config` | GET | Reads current agent_config row from Supabase |
-| `/agent-config` | POST | Super-user only; writes updated config with the Supabase service role |
-| `/stats` | GET | Aggregated dashboard stats |
-| `/portfolio` | GET | Alpaca paper trading portfolio history |
-| `/orders` | GET | Alpaca account, positions, and order list |
-| `/orders/cancel` | POST | Super-user only; cancels selected Alpaca orders |
-| `/trades` | GET | Paginated trade summaries and polling cursor support |
-| `/trades/{id}` | GET | Trade detail plus Decision Core trace |
+| Route            | Method | Purpose                                                                      |
+| ---------------- | ------ | ---------------------------------------------------------------------------- |
+| `/auth/me`       | GET    | Validates the Supabase access token and returns dashboard role flags         |
+| `/simulate`      | POST   | Authenticates the user, rate-limits with Valkey, and injects a test headline |
+| `/status`        | GET    | Combines Supabase, Alpaca, Redis, Groq, and agent heartbeat checks           |
+| `/agent-config`  | GET    | Reads current agent_config row from Supabase                                 |
+| `/agent-config`  | POST   | Super-user only; writes updated config with the Supabase service role        |
+| `/stats`         | GET    | Aggregated dashboard stats                                                   |
+| `/portfolio`     | GET    | Alpaca paper trading portfolio history                                       |
+| `/orders`        | GET    | Alpaca account, positions, and order list                                    |
+| `/orders/cancel` | POST   | Super-user only; cancels selected Alpaca orders                              |
+| `/trades`        | GET    | Paginated trade summaries and polling cursor support                         |
+| `/trades/{id}`   | GET    | Trade detail plus Decision Core trace                                        |
 
 ### Live feed
 
@@ -457,6 +457,7 @@ The React app is a static single-page application. Netlify serves `dist/`, and t
 ### Signal detail view
 
 `AgentMonologue.tsx` renders the `decision_trace` JSONB stored per signal:
+
 - Stance badge (BULLISH / BEARISH / NEUTRAL) with color coding
 - Conviction bar (0–100% filled)
 - Full reasoning text per persona
@@ -467,6 +468,7 @@ The React app is a static single-page application. Netlify serves `dist/`, and t
 ### Signal Injector
 
 `CustomNewsForm.tsx` accepts all four fields that Alpaca provides:
+
 - **Ticker** (required) — validated to uppercase alpha only
 - **Headline** (required, min 10 chars)
 - **Article Summary** (optional) — gives personas richer context, same as a real Alpaca summary
@@ -478,32 +480,32 @@ Submits to `/simulate` on FastAPI. The backend API rate-limits the user and publ
 
 ## Persistence Layer
 
-| Store | Technology | Used for |
-|---|---|---|
-| Message bus | Valkey/Redis Stream `market-news` | Durable ordered queue between ingestion and agent (max 1,000 entries) |
-| Deduplication | Valkey/Redis (same instance) | SHA-256 headline hash with 5-min TTL — `HeadlineCache` |
-| Signal log | Supabase `trades` table | Every decision summary, linked to full Decision Core trace storage |
-| Config | Supabase `agent_config` table | Single row (id=1) — all trading parameters, editable via Settings UI |
+| Store         | Technology                        | Used for                                                              |
+| ------------- | --------------------------------- | --------------------------------------------------------------------- |
+| Message bus   | Valkey/Redis Stream `market-news` | Durable ordered queue between ingestion and agent (max 1,000 entries) |
+| Deduplication | Valkey/Redis (same instance)      | SHA-256 headline hash with 5-min TTL — `HeadlineCache`                |
+| Signal log    | Supabase `trades` table           | Every decision summary, linked to full Decision Core trace storage    |
+| Config        | Supabase `agent_config` table     | Single row (id=1) — all trading parameters, editable via Settings UI  |
 
 ### Supabase `trades` table schema
 
-| Column | Type | Notes |
-|---|---|---|
-| `id` | `uuid` | Primary key |
-| `created_at` | `timestamptz` | Auto |
-| `ticker` | `text` | |
-| `headline` | `text` | |
-| `sentiment_score` | `float4` | -1.0 to 1.0 |
-| `confidence_score` | `float4` | 0.0 to 1.0 |
-| `reasoning` | `text` | Synthesizer's final reasoning |
-| `trade_action` | `text` | `BUY` / `SELL` / `HOLD` |
-| `order_id` | `text` | Alpaca order ID (null if HOLD) |
-| `quantity` | `int4` | Shares ordered |
-| `is_simulated` | `bool` | True for Signal Injector submissions |
-| `article_source` | `text` | News source name |
-| `article_url` | `text` | Link to original article |
-| `article_id` | `text` | Alpaca article ID |
-| `decision_trace` | `jsonb` | Generic Decision Core trace: LLM inputs/outputs, committee debate, Portfolio Manager decision, risk gate, execution |
+| Column             | Type          | Notes                                                                                                               |
+| ------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `id`               | `uuid`        | Primary key                                                                                                         |
+| `created_at`       | `timestamptz` | Auto                                                                                                                |
+| `ticker`           | `text`        |                                                                                                                     |
+| `headline`         | `text`        |                                                                                                                     |
+| `sentiment_score`  | `float4`      | -1.0 to 1.0                                                                                                         |
+| `confidence_score` | `float4`      | 0.0 to 1.0                                                                                                          |
+| `reasoning`        | `text`        | Synthesizer's final reasoning                                                                                       |
+| `trade_action`     | `text`        | `BUY` / `SELL` / `HOLD`                                                                                             |
+| `order_id`         | `text`        | Alpaca order ID (null if HOLD)                                                                                      |
+| `quantity`         | `int4`        | Shares ordered                                                                                                      |
+| `is_simulated`     | `bool`        | True for Signal Injector submissions                                                                                |
+| `article_source`   | `text`        | News source name                                                                                                    |
+| `article_url`      | `text`        | Link to original article                                                                                            |
+| `article_id`       | `text`        | Alpaca article ID                                                                                                   |
+| `decision_trace`   | `jsonb`       | Generic Decision Core trace: LLM inputs/outputs, committee debate, Portfolio Manager decision, risk gate, execution |
 
 ### Redis Stream message format
 
@@ -546,16 +548,16 @@ The React app sends the user's Supabase access token to FastAPI. FastAPI validat
 
 ## Tech Stack
 
-| Layer | Technology | Why |
-|---|---|---|
-| AI reasoning | Groq API (`instructor` JSON mode) | Sub-second structured LLM output; `instructor` handles Pydantic validation + retries |
-| Agent pipeline | LangGraph 0.2 StateGraph | Explicit conditional routing, composable nodes, no hidden side-effects |
-| Message bus | Valkey/Redis Streams | At-least-once delivery, consumer groups, persistent backlog |
-| Market data | Alpaca News REST + Data API + Paper Trading API | Free tier; news, live prices, and paper orders in one platform |
-| Database | Supabase Postgres | JSONB for Decision Core traces; all server-side reads and writes go through FastAPI or workers |
-| Backend deploy | Oracle Cloud API + workers | Keeps private Valkey access inside the Oracle subnet |
-| Frontend | React + Vite + Tailwind CSS | Static Netlify deploy; browser talks only to FastAPI and Supabase Auth |
-| Charts | Recharts | PnL equity curve and stats panels |
+| Layer          | Technology                                      | Why                                                                                            |
+| -------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| AI reasoning   | Groq API (`instructor` JSON mode)               | Sub-second structured LLM output; `instructor` handles Pydantic validation + retries           |
+| Agent pipeline | LangGraph 0.2 StateGraph                        | Explicit conditional routing, composable nodes, no hidden side-effects                         |
+| Message bus    | Valkey/Redis Streams                            | At-least-once delivery, consumer groups, persistent backlog                                    |
+| Market data    | Alpaca News REST + Data API + Paper Trading API | Free tier; news, live prices, and paper orders in one platform                                 |
+| Database       | Supabase Postgres                               | JSONB for Decision Core traces; all server-side reads and writes go through FastAPI or workers |
+| Backend deploy | Oracle Cloud API + workers                      | Keeps private Valkey access inside the Oracle subnet                                           |
+| Frontend       | React + Vite + Tailwind CSS                     | Static Netlify deploy; browser talks only to FastAPI and Supabase Auth                         |
+| Charts         | Recharts                                        | PnL equity curve and stats panels                                                              |
 
 ---
 

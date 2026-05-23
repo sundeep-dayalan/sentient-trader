@@ -50,29 +50,31 @@ GROQ_MODELS_URL = os.environ.get(
     "GROQ_MODELS_URL",
     "https://api.groq.com/openai/v1/models",
 )
-GROQ_MODEL_DISCOVERY_TIMEOUT = float(os.environ.get("GROQ_MODEL_DISCOVERY_TIMEOUT", "5"))
+GROQ_MODEL_DISCOVERY_TIMEOUT = float(
+    os.environ.get("GROQ_MODEL_DISCOVERY_TIMEOUT", "5")
+)
 GROQ_MIN_CONTEXT_WINDOW = int(os.environ.get("GROQ_MIN_CONTEXT_WINDOW", "8192"))
 GROQ_MIN_COMPLETION_TOKENS = int(os.environ.get("GROQ_MIN_COMPLETION_TOKENS", "1024"))
 
-STREAM_KEY     = os.environ.get("REDIS_STREAM_KEY", "market-news")
+STREAM_KEY = os.environ.get("REDIS_STREAM_KEY", "market-news")
 CONSUMER_GROUP = os.environ.get("REDIS_CONSUMER_GROUP", "sentient-agent-group")
-CONSUMER_NAME  = os.environ.get("REDIS_CONSUMER_NAME", "agent-worker-1")
-BATCH_SIZE     = 10
-POLL_INTERVAL  = 1.0
-ERROR_RETRY    = 5.0
+CONSUMER_NAME = os.environ.get("REDIS_CONSUMER_NAME", "agent-worker-1")
+BATCH_SIZE = 10
+POLL_INTERVAL = 1.0
+ERROR_RETRY = 5.0
 REDIS_QUOTA_RETRY = int(os.environ.get("REDIS_QUOTA_RETRY", "60"))
 
 # ── Agent parameters — populated by reload_from_supabase() at startup ────────
 
-BUY_SENTIMENT_THRESHOLD:  float
+BUY_SENTIMENT_THRESHOLD: float
 SELL_SENTIMENT_THRESHOLD: float
-CONFIDENCE_THRESHOLD:     float
-ORDER_QTY:                int
-MODEL_OVERRIDE:           str | None
+CONFIDENCE_THRESHOLD: float
+ORDER_QTY: int
+MODEL_OVERRIDE: str | None
 
-MOMENTUM_SYSTEM_PROMPT:  str
-VALUE_SYSTEM_PROMPT:     str
-RISK_SYSTEM_PROMPT:      str
+MOMENTUM_SYSTEM_PROMPT: str
+VALUE_SYSTEM_PROMPT: str
+RISK_SYSTEM_PROMPT: str
 SYNTHESIS_SYSTEM_PROMPT: str
 
 
@@ -83,6 +85,7 @@ def reload_from_supabase() -> None:
 
     from supabase import create_client
     from supabase.client import ClientOptions
+
     client = create_client(
         supabase_url=os.environ["SUPABASE_URL"],
         supabase_key=os.environ["SUPABASE_SERVICE_ROLE_KEY"],
@@ -91,29 +94,28 @@ def reload_from_supabase() -> None:
         ),
     )
     result = (
-        client.table("agent_config")
-        .select("config")
-        .eq("id", 1)
-        .single()
-        .execute()
+        client.table("agent_config").select("config").eq("id", 1).single().execute()
     )
     row: dict = result.data.get("config", {}) if result.data else {}
     if not row:
         raise RuntimeError("agent_config table is empty — run migration 004")
 
-    BUY_SENTIMENT_THRESHOLD  = float(row["buy_sentiment_threshold"])
+    BUY_SENTIMENT_THRESHOLD = float(row["buy_sentiment_threshold"])
     SELL_SENTIMENT_THRESHOLD = float(row["sell_sentiment_threshold"])
-    CONFIDENCE_THRESHOLD     = float(row["confidence_threshold"])
-    ORDER_QTY                = int(row["order_qty"])
-    MODEL_OVERRIDE           = row.get("model_override") or None
+    CONFIDENCE_THRESHOLD = float(row["confidence_threshold"])
+    ORDER_QTY = int(row["order_qty"])
+    MODEL_OVERRIDE = row.get("model_override") or None
 
-    MOMENTUM_SYSTEM_PROMPT  = row["momentum_system_prompt"]
-    VALUE_SYSTEM_PROMPT     = row["value_system_prompt"]
-    RISK_SYSTEM_PROMPT      = row["risk_system_prompt"]
+    MOMENTUM_SYSTEM_PROMPT = row["momentum_system_prompt"]
+    VALUE_SYSTEM_PROMPT = row["value_system_prompt"]
+    RISK_SYSTEM_PROMPT = row["risk_system_prompt"]
     SYNTHESIS_SYSTEM_PROMPT = row["synthesis_system_prompt"]
 
     log.info(
         "Config loaded — buy=%.2f  sell=%.2f  confidence=%.2f  qty=%d  model=%s",
-        BUY_SENTIMENT_THRESHOLD, SELL_SENTIMENT_THRESHOLD,
-        CONFIDENCE_THRESHOLD, ORDER_QTY, MODEL_OVERRIDE or "cascade",
+        BUY_SENTIMENT_THRESHOLD,
+        SELL_SENTIMENT_THRESHOLD,
+        CONFIDENCE_THRESHOLD,
+        ORDER_QTY,
+        MODEL_OVERRIDE or "cascade",
     )

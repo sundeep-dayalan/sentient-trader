@@ -61,9 +61,9 @@ class RedisStreamProducer:
         The "*" ID lets Redis auto-generate a timestamp-based message ID.
         """
         message = {
-            "ticker":       ticker,
-            "headline":     headline,
-            "source":       source,
+            "ticker": ticker,
+            "headline": headline,
+            "source": source,
             "published_at": published_at,
         }
         if summary:
@@ -77,7 +77,7 @@ class RedisStreamProducer:
             entry_id = self._redis.xadd(
                 STREAM_KEY,
                 message,
-                id="*",        # auto-generate a timestamp-based ID
+                id="*",  # auto-generate a timestamp-based ID
                 maxlen=STREAM_MAX_LEN,
                 approximate=True,
             )

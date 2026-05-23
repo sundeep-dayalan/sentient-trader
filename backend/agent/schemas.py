@@ -77,20 +77,22 @@ def _coerce_sentiment(value: object) -> float:
 
 # ── Wire Format ──────────────────────────────────────────────────────────────
 
+
 class NewsMessage(BaseModel):
     """A single news article as it arrives from the Redis stream."""
 
-    ticker:       str
-    headline:     str
-    source:       str
+    ticker: str
+    headline: str
+    source: str
     published_at: str
-    summary:      Optional[str] = None   # Alpaca article summary — 1-3 paragraphs
-    article_url:  Optional[str] = None
-    article_id:   Optional[str] = None
+    summary: Optional[str] = None  # Alpaca article summary — 1-3 paragraphs
+    article_url: Optional[str] = None
+    article_id: Optional[str] = None
     is_simulated: bool = False
 
 
 # ── LLM Contracts (instructor-enforced per-node output) ──────────────────────
+
 
 class PersonaAnalysis(BaseModel):
     """
@@ -121,6 +123,7 @@ class PersonaAnalysis(BaseModel):
     headline_take: str = Field(
         description="ONE sentence — the single sharpest insight this persona can offer",
     )
+
     @field_validator("stance", mode="before")
     @classmethod
     def _normalize_stance(cls, value: object) -> str:
@@ -165,6 +168,7 @@ class SynthesisResult(BaseModel):
     action: Literal["BUY", "SELL", "HOLD"] = Field(
         description="Final trade recommendation after weighing all three personas",
     )
+
     @field_validator("action", mode="before")
     @classmethod
     def _normalize_action(cls, value: object) -> str:
@@ -183,6 +187,7 @@ class SynthesisResult(BaseModel):
 
 # ── Storage Format (Supabase + Frontend) ─────────────────────────────────────
 
+
 class LLMOperationTrace(BaseModel):
     """
     One raw Decision Core LLM operation as stored in decision_trace JSONB.
@@ -193,15 +198,15 @@ class LLMOperationTrace(BaseModel):
     new persona or decision step.
     """
 
-    step:            str
-    kind:            Literal["persona_analysis", "portfolio_manager_synthesis"]
+    step: str
+    kind: Literal["persona_analysis", "portfolio_manager_synthesis"]
     response_schema: str
-    messages:        list[dict[str, str]]
-    input:           dict[str, Any]
-    output:          Optional[dict[str, Any]] = None
-    model:           Optional[str] = None
-    error:           Optional[str] = None
-    recorded_at:     str
+    messages: list[dict[str, str]]
+    input: dict[str, Any]
+    output: Optional[dict[str, Any]] = None
+    model: Optional[str] = None
+    error: Optional[str] = None
+    recorded_at: str
 
 
 class PersonaOpinion(BaseModel):
@@ -214,17 +219,19 @@ class PersonaOpinion(BaseModel):
     without changing the high-level UI contract.
     """
 
-    name:       str  # "Momentum Trader" | "Value Investor" | "Risk Manager"
-    stance:     Literal["BULLISH", "BEARISH", "NEUTRAL"]
+    name: str  # "Momentum Trader" | "Value Investor" | "Risk Manager"
+    stance: Literal["BULLISH", "BEARISH", "NEUTRAL"]
     conviction: float  # 0.0–1.0, used for the UI conviction bar
-    view:       str    # = PersonaAnalysis.headline_take — the one-liner shown on the card
-    reasoning:  str    # = PersonaAnalysis.analysis — full text shown on expand
-    model:      Optional[str] = None  # LLM model that powered this persona (e.g. "qwen/qwen3-32b")
+    view: str  # = PersonaAnalysis.headline_take — the one-liner shown on the card
+    reasoning: str  # = PersonaAnalysis.analysis — full text shown on expand
+    model: Optional[str] = (
+        None  # LLM model that powered this persona (e.g. "qwen/qwen3-32b")
+    )
     catalyst_strength: Optional[str] = None
-    evidence_quality:  Optional[str] = None
-    time_horizon:      Optional[str] = None
-    key_evidence:      list[str] = Field(default_factory=list)
-    missing_data:      list[str] = Field(default_factory=list)
+    evidence_quality: Optional[str] = None
+    time_horizon: Optional[str] = None
+    key_evidence: list[str] = Field(default_factory=list)
+    missing_data: list[str] = Field(default_factory=list)
 
 
 class TradeAnalysis(BaseModel):
@@ -237,15 +244,15 @@ class TradeAnalysis(BaseModel):
     TEXT column and shown on dashboard trade cards.
     """
 
-    committee:  list[PersonaOpinion] = Field(
+    committee: list[PersonaOpinion] = Field(
         min_length=3,
         max_length=3,
         description="Three personas in order: Momentum Trader, Value Investor, Risk Manager",
     )
-    sentiment:  float = Field(ge=-1.0, le=1.0)
-    confidence: float = Field(ge=0.0,  le=1.0)
-    reasoning:  str    # consensus one-liner
-    action:     Literal["BUY", "SELL", "HOLD"]
-    model:      Optional[str] = None  # LLM model that powered the synthesis
+    sentiment: float = Field(ge=-1.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
+    reasoning: str  # consensus one-liner
+    action: Literal["BUY", "SELL", "HOLD"]
+    model: Optional[str] = None  # LLM model that powered the synthesis
     thesis_quality: Optional[str] = None
-    primary_risk:   Optional[str] = None
+    primary_risk: Optional[str] = None

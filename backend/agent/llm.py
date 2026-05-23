@@ -74,7 +74,9 @@ def _model_size_billions(model_id: str) -> float:
     """Extract the largest parameter count from IDs such as gpt-oss-120b or qwen3-32b."""
     sizes = [
         float(match)
-        for match in re.findall(r"(\d+(?:\.\d+)?)\s*b(?:\b|-|_)", model_id, re.IGNORECASE)
+        for match in re.findall(
+            r"(\d+(?:\.\d+)?)\s*b(?:\b|-|_)", model_id, re.IGNORECASE
+        )
     ]
     return max(sizes, default=0.0)
 
@@ -157,7 +159,9 @@ def _select_policy_ranked_models(payload: dict[str, Any]) -> list[str]:
 
     scored.sort(key=lambda pair: (-pair[0], pair[1]))
     if rejected:
-        log.info("ModelRouter: rejected non-candidate Groq models: %s", ", ".join(rejected))
+        log.info(
+            "ModelRouter: rejected non-candidate Groq models: %s", ", ".join(rejected)
+        )
     return [model_id for _, model_id in scored]
 
 
@@ -187,7 +191,9 @@ def _fetch_groq_models_payload() -> dict[str, Any] | None:
     """Fetch Groq's active model list. Failure is non-fatal; static config remains usable."""
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        log.warning("ModelRouter: GROQ_API_KEY missing; using fallback model cascade without discovery")
+        log.warning(
+            "ModelRouter: GROQ_API_KEY missing; using fallback model cascade without discovery"
+        )
         return None
 
     req = urlrequest.Request(
@@ -200,10 +206,15 @@ def _fetch_groq_models_payload() -> dict[str, Any] | None:
     )
 
     try:
-        with urlrequest.urlopen(req, timeout=config.GROQ_MODEL_DISCOVERY_TIMEOUT) as resp:
+        with urlrequest.urlopen(
+            req, timeout=config.GROQ_MODEL_DISCOVERY_TIMEOUT
+        ) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except (OSError, TimeoutError, json.JSONDecodeError, urlerror.URLError) as exc:
-        log.warning("ModelRouter: could not fetch Groq model list (%s); using fallback cascade", exc)
+        log.warning(
+            "ModelRouter: could not fetch Groq model list (%s); using fallback cascade",
+            exc,
+        )
         return None
 
 
@@ -212,15 +223,25 @@ def _resolve_model_tiers(pinned_models: list[str]) -> list[str]:
     payload = _fetch_groq_models_payload()
     pinned_unique = list(dict.fromkeys(pinned_models))
     if payload is None:
-        fallback = [model for model in config.GROQ_MODEL_DISCOVERY_FALLBACK if model not in pinned_unique]
+        fallback = [
+            model
+            for model in config.GROQ_MODEL_DISCOVERY_FALLBACK
+            if model not in pinned_unique
+        ]
         return [*pinned_unique, *fallback]
 
     auto_ranked = _select_policy_ranked_models(payload)
     if pinned_unique:
         pinned_active, missing = _select_ranked_active_models(payload, pinned_unique)
         if missing:
-            log.warning("ModelRouter: skipping inactive/unavailable pinned Groq models: %s", ", ".join(missing))
-        selected = [*pinned_active, *(model for model in auto_ranked if model not in pinned_active)]
+            log.warning(
+                "ModelRouter: skipping inactive/unavailable pinned Groq models: %s",
+                ", ".join(missing),
+            )
+        selected = [
+            *pinned_active,
+            *(model for model in auto_ranked if model not in pinned_active),
+        ]
     else:
         selected = auto_ranked
 
@@ -228,12 +249,19 @@ def _resolve_model_tiers(pinned_models: list[str]) -> list[str]:
         log.info("ModelRouter: active Groq cascade: %s", " → ".join(selected))
         return selected
 
-    log.error("ModelRouter: no active Groq text-analysis models found; using fallback cascade")
-    fallback = [model for model in config.GROQ_MODEL_DISCOVERY_FALLBACK if model not in pinned_unique]
+    log.error(
+        "ModelRouter: no active Groq text-analysis models found; using fallback cascade"
+    )
+    fallback = [
+        model
+        for model in config.GROQ_MODEL_DISCOVERY_FALLBACK
+        if model not in pinned_unique
+    ]
     return [*pinned_unique, *fallback]
 
 
 # ── Client Factory ───────────────────────────────────────────────────────────
+
 
 def create_llm_client() -> Any:
     """
@@ -253,6 +281,7 @@ def create_llm_client() -> Any:
 
 # ── Error Sanitisation ──────────────────────────────────────────────────────
 
+
 def sanitize_llm_error(exc: Exception) -> str:
     """
     Convert any LLM-related exception into a clean, user-facing message.
@@ -268,19 +297,33 @@ def sanitize_llm_error(exc: Exception) -> str:
         return "AI model temporarily rate-limited — the system will retry shortly."
     if "model_not_found" in raw or "does not exist or you do not have access" in raw:
         return "AI model is unavailable — the system will try another configured model."
-    if "all groq model tiers" in raw or "all configured groq" in raw or "all available groq" in raw:
+    if (
+        "all groq model tiers" in raw
+        or "all configured groq" in raw
+        or "all available groq" in raw
+    ):
         return "All AI model tiers are temporarily unavailable — the system will retry on the next signal."
     if "timeout" in raw or "timed out" in raw:
         return "AI model request timed out — the system will retry on the next signal."
     if "connection" in raw or "network" in raw:
         return "Network error reaching AI model — the system will retry on the next signal."
-    if any(term in raw for term in ("validation", "failed to parse", "instructor", "max retries", "json")):
+    if any(
+        term in raw
+        for term in (
+            "validation",
+            "failed to parse",
+            "instructor",
+            "max retries",
+            "json",
+        )
+    ):
         return "AI response failed structured validation — the system will retry on the next signal."
     # Generic fallback — still don't expose raw exception text
     return "AI analysis temporarily unavailable — the system will retry on the next signal."
 
 
 # ── Retry-After Parsing ─────────────────────────────────────────────────────
+
 
 def _parse_duration_to_seconds(text: str) -> float | None:
     """Parse Groq duration fragments such as '300ms', '8.5s', or '10m48s'."""
@@ -317,11 +360,17 @@ def _parse_retry_after(exc: Exception) -> float:
     for _ in range(5):  # walk the exception chain, bounded depth
         if isinstance(raw_exc, RateLimitError):
             break
-        raw_exc = getattr(raw_exc, "__cause__", None) or getattr(raw_exc, "__context__", None)
+        raw_exc = getattr(raw_exc, "__cause__", None) or getattr(
+            raw_exc, "__context__", None
+        )
         if raw_exc is None:
             break
 
-    if isinstance(raw_exc, RateLimitError) and hasattr(raw_exc, "response") and raw_exc.response:
+    if (
+        isinstance(raw_exc, RateLimitError)
+        and hasattr(raw_exc, "response")
+        and raw_exc.response
+    ):
         header = raw_exc.response.headers.get("retry-after")
         if header:
             try:
@@ -355,6 +404,7 @@ def _is_model_not_found_error(exc: Exception) -> bool:
 
 
 # ── ModelRouter ──────────────────────────────────────────────────────────────
+
 
 class ModelRouter:
     """
@@ -411,9 +461,9 @@ class ModelRouter:
 
         now = time.time()
         available = [
-            m for m in self.tiers
-            if now >= self._cooldown_until.get(m, 0)
-            and m not in self._disabled_models
+            m
+            for m in self.tiers
+            if now >= self._cooldown_until.get(m, 0) and m not in self._disabled_models
         ]
         if not available:
             live_tiers = [m for m in self.tiers if m not in self._disabled_models]
@@ -430,14 +480,13 @@ class ModelRouter:
                 )
                 time.sleep(wait + 1)
                 available = [
-                    m for m in self.tiers
+                    m
+                    for m in self.tiers
                     if time.time() >= self._cooldown_until.get(m, 0)
                     and m not in self._disabled_models
                 ]
             if not available:
-                raise RuntimeError(
-                    "All Groq model tiers exhausted."
-                )
+                raise RuntimeError("All Groq model tiers exhausted.")
 
         last_structured_error: Exception | None = None
 
@@ -479,7 +528,13 @@ class ModelRouter:
 
                     is_structured_output_error = any(
                         term in exc_str
-                        for term in ("validation", "failed to parse", "instructor", "max retries", "json")
+                        for term in (
+                            "validation",
+                            "failed to parse",
+                            "instructor",
+                            "max retries",
+                            "json",
+                        )
                     )
                     if is_structured_output_error:
                         log.warning(

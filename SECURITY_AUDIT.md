@@ -17,20 +17,20 @@ The browser sends the Supabase access token as an `Authorization: Bearer` header
 
 ### FastAPI Routes
 
-| Route | Auth | Purpose |
-|---|---|---|
-| `GET /health` | None | Basic liveness check |
-| `GET /auth/me` | Optional bearer token | Role flags for the dashboard |
-| `GET /trades` | None | Paginated trade summaries |
-| `GET /trades/{id}` | None | Trade detail plus Decision Core trace |
-| `GET /stats` | None | Dashboard aggregate stats |
-| `GET /portfolio` | None | Alpaca portfolio history |
-| `GET /orders` | None | Alpaca account, positions, and orders |
-| `POST /simulate` | Supabase user | Valkey-backed simulation rate limit and stream injection |
-| `GET /agent-config` | None | Public dashboard config fields |
-| `POST /agent-config` | Super user | Update agent config |
-| `POST /orders/cancel` | Super user | Cancel selected Alpaca orders |
-| `GET /status` | None | Supabase, Alpaca, Redis, Groq, and agent heartbeat status |
+| Route                 | Auth                  | Purpose                                                   |
+| --------------------- | --------------------- | --------------------------------------------------------- |
+| `GET /health`         | None                  | Basic liveness check                                      |
+| `GET /auth/me`        | Optional bearer token | Role flags for the dashboard                              |
+| `GET /trades`         | None                  | Paginated trade summaries                                 |
+| `GET /trades/{id}`    | None                  | Trade detail plus Decision Core trace                     |
+| `GET /stats`          | None                  | Dashboard aggregate stats                                 |
+| `GET /portfolio`      | None                  | Alpaca portfolio history                                  |
+| `GET /orders`         | None                  | Alpaca account, positions, and orders                     |
+| `POST /simulate`      | Supabase user         | Valkey-backed simulation rate limit and stream injection  |
+| `GET /agent-config`   | None                  | Public dashboard config fields                            |
+| `POST /agent-config`  | Super user            | Update agent config                                       |
+| `POST /orders/cancel` | Super user            | Cancel selected Alpaca orders                             |
+| `GET /status`         | None                  | Supabase, Alpaca, Redis, Groq, and agent heartbeat status |
 
 ### Trust Boundaries
 
@@ -43,11 +43,11 @@ The browser sends the Supabase access token as an `Authorization: Bearer` header
 
 ## 3. Findings
 
-| ID | Severity | Category | Location | Summary |
-|---|---|---|---|---|
-| ST-01 | High | LLM Prompt Injection | `backend/agent/analyst.py` | External news text is fed into LLM prompts and can contain adversarial instructions |
-| ST-02 | Medium | CORS / Token Exposure | `backend/api/main.py` | Keep `CORS_ORIGINS` pinned to known Netlify/local origins before production |
-| ST-03 | Low | DoS Limits | `backend/api/main.py` | `/simulate` now bounds headline, summary, source, and URL lengths, but public read endpoints still rely on query limits |
+| ID    | Severity | Category              | Location                   | Summary                                                                                                                 |
+| ----- | -------- | --------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| ST-01 | High     | LLM Prompt Injection  | `backend/agent/analyst.py` | External news text is fed into LLM prompts and can contain adversarial instructions                                     |
+| ST-02 | Medium   | CORS / Token Exposure | `backend/api/main.py`      | Keep `CORS_ORIGINS` pinned to known Netlify/local origins before production                                             |
+| ST-03 | Low      | DoS Limits            | `backend/api/main.py`      | `/simulate` now bounds headline, summary, source, and URL lengths, but public read endpoints still rely on query limits |
 
 ## 4. Resolved By Migration
 

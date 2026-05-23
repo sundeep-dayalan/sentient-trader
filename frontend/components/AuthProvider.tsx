@@ -25,10 +25,10 @@
  *   const { user, isAnonymous, signInWithGithub } = useAuth()
  */
 
-import { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { apiFetch } from "@/lib/api";
-import { createBrowserClient } from "@/lib/supabase-browser";
-import type { User, Session } from "@supabase/supabase-js";
+import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { apiFetch } from '@/lib/api';
+import { createBrowserClient } from '@/lib/supabase-browser';
+import type { User, Session } from '@supabase/supabase-js';
 
 // ── Types ──────────────────────────────────────────────────────
 interface AuthContextValue {
@@ -50,16 +50,16 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error("useAuth() must be used inside <AuthProvider>");
+    throw new Error('useAuth() must be used inside <AuthProvider>');
   }
   return context;
 }
 
 // ── Helper: get auth callback URL ──────────────────────────────
 function getAppBasePath(): string {
-  const base = import.meta.env.BASE_URL || "/";
-  if (base === "/") return "";
-  return `/${base.replace(/^\/+|\/+$/g, "")}`;
+  const base = import.meta.env.BASE_URL || '/';
+  if (base === '/') return '';
+  return `/${base.replace(/^\/+|\/+$/g, '')}`;
 }
 
 function getAuthCallbackUrl(): string {
@@ -69,7 +69,7 @@ function getAuthCallbackUrl(): string {
 // ── Helper: fetch super user status from the server ────────────
 async function fetchUserRole(): Promise<{ isSuperUser: boolean }> {
   try {
-    const data = await apiFetch<{ isSuperUser: boolean }>("/auth/me");
+    const data = await apiFetch<{ isSuperUser: boolean }>('/auth/me');
     return { isSuperUser: data.isSuperUser === true };
   } catch {
     return { isSuperUser: false };
@@ -78,10 +78,10 @@ async function fetchUserRole(): Promise<{ isSuperUser: boolean }> {
 
 // ── Provider Component ─────────────────────────────────────────
 export default function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [supabase]   = useState(() => createBrowserClient());
-  const [user,       setUser]       = useState<User | null>(null);
-  const [session,    setSession]    = useState<Session | null>(null);
-  const [isLoading,  setIsLoading]  = useState(true);
+  const [supabase] = useState(() => createBrowserClient());
+  const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [isSuperUser_, setIsSuperUser] = useState(false);
 
   // Derived state
@@ -104,16 +104,18 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
       // (Site URL fallback) instead of /auth/callback. Supabase stores the
       // PKCE verifier in browser storage, so we can exchange here.
       const url = new URL(window.location.href);
-      const code = url.searchParams.get("code");
+      const code = url.searchParams.get('code');
 
       if (code) {
         // Clean the code from the URL immediately (don't expose it to the user)
-        url.searchParams.delete("code");
-        window.history.replaceState({}, "", getAppBasePath() || "/");
+        url.searchParams.delete('code');
+        window.history.replaceState({}, '', getAppBasePath() || '/');
 
         // Exchange the code for a real session
-        const { data: { session: oauthSession }, error: oauthError } =
-          await supabase.auth.exchangeCodeForSession(code);
+        const {
+          data: { session: oauthSession },
+          error: oauthError,
+        } = await supabase.auth.exchangeCodeForSession(code);
 
         if (!oauthError && oauthSession?.user) {
           setSession(oauthSession);
@@ -122,11 +124,13 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
           return;
         }
         // If exchange fails, fall through to normal init
-        console.error("OAuth code exchange failed:", oauthError?.message);
+        console.error('OAuth code exchange failed:', oauthError?.message);
       }
 
       // ── Step 2: Check for existing session ──
-      const { data: { session: existingSession } } = await supabase.auth.getSession();
+      const {
+        data: { session: existingSession },
+      } = await supabase.auth.getSession();
 
       if (existingSession?.user) {
         setSession(existingSession);
@@ -149,12 +153,12 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
 
   // ── Listen for auth state changes (login, logout, token refresh) ──
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, newSession) => {
-        setSession(newSession);
-        setUser(newSession?.user ?? null);
-      },
-    );
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      setUser(newSession?.user ?? null);
+    });
 
     return () => subscription.unsubscribe();
   }, [supabase]);
@@ -162,7 +166,7 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
   // ── Sign in with GitHub ──────────────────────────────────────
   const signInWithGithub = useCallback(async () => {
     await supabase.auth.signInWithOAuth({
-      provider: "github",
+      provider: 'github',
       options: {
         redirectTo: getAuthCallbackUrl(),
       },
@@ -172,31 +176,34 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
   // ── Sign in with Google ──────────────────────────────────────
   const signInWithGoogle = useCallback(async () => {
     await supabase.auth.signInWithOAuth({
-      provider: "google",
+      provider: 'google',
       options: {
         redirectTo: getAuthCallbackUrl(),
         queryParams: {
-          access_type: "offline",
-          prompt: "consent",
+          access_type: 'offline',
+          prompt: 'consent',
         },
       },
     });
   }, [supabase]);
 
   // ── Sign in with Magic Link ──────────────────────────────────
-  const signInWithMagicLink = useCallback(async (email: string) => {
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: getAuthCallbackUrl(),
-      },
-    });
+  const signInWithMagicLink = useCallback(
+    async (email: string) => {
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          emailRedirectTo: getAuthCallbackUrl(),
+        },
+      });
 
-    if (error) {
-      return { error: error.message };
-    }
-    return {};
-  }, [supabase]);
+      if (error) {
+        return { error: error.message };
+      }
+      return {};
+    },
+    [supabase],
+  );
 
   // ── Sign out ─────────────────────────────────────────────────
   const signOut = useCallback(async () => {

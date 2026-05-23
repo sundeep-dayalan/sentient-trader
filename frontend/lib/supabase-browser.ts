@@ -10,8 +10,8 @@
  *   const supabase = createBrowserClient()
  */
 
-import { createClient } from "@supabase/supabase-js";
-import { SUPABASE_CLIENT_OPTIONS } from "@/lib/supabase-schema";
+import { createClient } from '@supabase/supabase-js';
+import { SUPABASE_CLIENT_OPTIONS } from '@/lib/supabase-schema';
 
 let browserClient: ReturnType<typeof createClient> | null = null;
 

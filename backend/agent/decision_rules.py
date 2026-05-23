@@ -16,7 +16,6 @@ from typing import Any, Optional
 
 from schemas import NewsMessage, TradeAnalysis
 
-
 STRONG_CATALYST_PATTERNS = [
     r"\bbeats?\b",
     r"\bmiss(?:es|ed)?\b",
@@ -225,13 +224,18 @@ def committee_metrics(
     dominant_weight = max(bull, bear, neutral)
     agreement = round(dominant_weight / total_conviction, 3)
 
-    action_sign = 1 if analysis.action == "BUY" else -1 if analysis.action == "SELL" else 0
+    action_sign = (
+        1 if analysis.action == "BUY" else -1 if analysis.action == "SELL" else 0
+    )
     high_conviction_dissenters = [
         p.name
         for p in opinions
         if action_sign
         and p.conviction >= 0.72
-        and ((action_sign > 0 and p.stance == "BEARISH") or (action_sign < 0 and p.stance == "BULLISH"))
+        and (
+            (action_sign > 0 and p.stance == "BEARISH")
+            or (action_sign < 0 and p.stance == "BULLISH")
+        )
     ]
 
     confidence_cap = 0.95
@@ -259,15 +263,27 @@ def committee_metrics(
         cap_reasons.append("high-conviction dissenter")
 
     day_change_pct = (market_context or {}).get("day_change_pct")
-    if analysis.action == "BUY" and isinstance(day_change_pct, (int, float)) and day_change_pct > 8:
+    if (
+        analysis.action == "BUY"
+        and isinstance(day_change_pct, (int, float))
+        and day_change_pct > 8
+    ):
         confidence_cap = min(confidence_cap, 0.82)
         cap_reasons.append("already extended intraday")
-    if analysis.action == "SELL" and isinstance(day_change_pct, (int, float)) and day_change_pct < -8:
+    if (
+        analysis.action == "SELL"
+        and isinstance(day_change_pct, (int, float))
+        and day_change_pct < -8
+    ):
         confidence_cap = min(confidence_cap, 0.82)
         cap_reasons.append("already deeply sold off intraday")
 
     calibrated_confidence = round(min(analysis.confidence, confidence_cap), 4)
-    thesis_quality = "EXECUTABLE" if calibrated_confidence >= 0.78 and quality.grade == "HIGH" else "WATCH" if calibrated_confidence >= 0.62 else "WEAK"
+    thesis_quality = (
+        "EXECUTABLE"
+        if calibrated_confidence >= 0.78 and quality.grade == "HIGH"
+        else "WATCH" if calibrated_confidence >= 0.62 else "WEAK"
+    )
 
     return {
         "bullish_weight": round(bull, 3),
@@ -325,27 +341,37 @@ def build_execution_plan(
         plan["blocked_reasons"].append("Alpaca account is trading/account blocked.")
 
     if price is None or price <= 0:
-        plan["blocked_reasons"].append("Live price unavailable; refusing blind market order.")
+        plan["blocked_reasons"].append(
+            "Live price unavailable; refusing blind market order."
+        )
 
     if action == "BUY":
         plan["side"] = "buy"
         plan["quantity"] = int(order_qty)
-        plan["position_intent"] = "open_or_add_long" if position_qty <= 0 else "add_to_long"
+        plan["position_intent"] = (
+            "open_or_add_long" if position_qty <= 0 else "add_to_long"
+        )
         if price is not None:
             plan["estimated_notional"] = round(price * order_qty, 2)
             if buying_power is not None and buying_power < price * order_qty * 1.02:
-                plan["blocked_reasons"].append("Insufficient buying power for order plus safety buffer.")
+                plan["blocked_reasons"].append(
+                    "Insufficient buying power for order plus safety buffer."
+                )
 
     if action == "SELL":
         plan["side"] = "sell"
         if position_qty <= 0:
             plan["position_intent"] = "no_long_position"
-            plan["blocked_reasons"].append("No long position to reduce; short sells are disabled by policy.")
+            plan["blocked_reasons"].append(
+                "No long position to reduce; short sells are disabled by policy."
+            )
         else:
             whole_share_qty = int(position_qty)
             if whole_share_qty <= 0:
                 plan["position_intent"] = "fractional_position_below_minimum"
-                plan["blocked_reasons"].append("Position is below one whole share; configured order flow uses whole-share orders.")
+                plan["blocked_reasons"].append(
+                    "Position is below one whole share; configured order flow uses whole-share orders."
+                )
                 return plan
             sell_qty = min(int(order_qty), whole_share_qty)
             plan["quantity"] = sell_qty

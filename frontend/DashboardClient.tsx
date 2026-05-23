@@ -1,44 +1,52 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
-import AgentMonologue from "@/components/AgentMonologue";
-import AuthGate        from "@/components/AuthGate";
-import CustomNewsForm  from "@/components/CustomNewsForm";
-import LiveTicker      from "@/components/LiveTicker";
-import OrdersPage      from "@/components/OrdersPage";
-import PnLChart        from "@/components/PnLChart";
-import PortfolioPage   from "@/components/PortfolioPage";
-import StatsBar        from "@/components/StatsBar";
-import SystemStatus    from "@/components/SystemStatus";
-import ThemeToggle     from "@/components/ThemeToggle";
-import PipelinePage    from "@/components/PipelinePage";
-import SettingsPage    from "@/components/SettingsPage";
-import { useAuth }     from "@/components/AuthProvider";
-import { ApiError, apiFetch } from "@/lib/api";
-import { isRiskGated } from "@/lib/dashboardStats";
-import { DashboardStats, Trade } from "@/lib/types";
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import AgentMonologue from '@/components/AgentMonologue';
+import AuthGate from '@/components/AuthGate';
+import CustomNewsForm from '@/components/CustomNewsForm';
+import LiveTicker from '@/components/LiveTicker';
+import OrdersPage from '@/components/OrdersPage';
+import PnLChart from '@/components/PnLChart';
+import PortfolioPage from '@/components/PortfolioPage';
+import StatsBar from '@/components/StatsBar';
+import SystemStatus from '@/components/SystemStatus';
+import ThemeToggle from '@/components/ThemeToggle';
+import PipelinePage from '@/components/PipelinePage';
+import SettingsPage from '@/components/SettingsPage';
+import { useAuth } from '@/components/AuthProvider';
+import { ApiError, apiFetch } from '@/lib/api';
+import { isRiskGated } from '@/lib/dashboardStats';
+import { DashboardStats, Trade } from '@/lib/types';
 
 const PAGE_SIZE = 20;
-const NAV_ITEMS = ["Dashboard", "Signals", "Risk Gate", "Orders", "Portfolio", "Pipeline", "Settings"] as const;
-type ViewName = typeof NAV_ITEMS[number];
+const NAV_ITEMS = [
+  'Dashboard',
+  'Signals',
+  'Risk Gate',
+  'Orders',
+  'Portfolio',
+  'Pipeline',
+  'Settings',
+] as const;
+type ViewName = (typeof NAV_ITEMS)[number];
 
 const VIEW_PATH_MAP: Record<ViewName, string> = {
-  Dashboard: "/",
-  Signals: "/signals",
-  "Risk Gate": "/risk-gate",
-  Orders: "/orders",
-  Portfolio: "/portfolio",
-  Pipeline: "/pipeline",
-  Settings: "/settings",
+  Dashboard: '/',
+  Signals: '/signals',
+  'Risk Gate': '/risk-gate',
+  Orders: '/orders',
+  Portfolio: '/portfolio',
+  Pipeline: '/pipeline',
+  Settings: '/settings',
 };
 
 const PATH_VIEW_MAP: Record<string, ViewName> = {
-  "/": "Dashboard",
-  "/signals": "Signals",
-  "/risk-gate": "Risk Gate",
-  "/orders": "Orders",
-  "/portfolio": "Portfolio",
-  "/pipeline": "Pipeline",
-  "/settings": "Settings",
+  '/': 'Dashboard',
+  '/signals': 'Signals',
+  '/risk-gate': 'Risk Gate',
+  '/orders': 'Orders',
+  '/portfolio': 'Portfolio',
+  '/pipeline': 'Pipeline',
+  '/settings': 'Settings',
 };
 
 interface DashboardClientProps {
@@ -123,23 +131,23 @@ const EMPTY_ALPACA_DATA: OrdersResponse = {
   fetchedAt: new Date().toISOString(),
 };
 
-const SIGNAL_STYLE: Record<Trade["trade_action"], string> = {
-  BUY:  "border-positive-border bg-positive-soft text-positive",
-  SELL: "border-negative-border bg-negative-soft text-negative",
-  HOLD: "border-line bg-surface-2 text-muted",
+const SIGNAL_STYLE: Record<Trade['trade_action'], string> = {
+  BUY: 'border-positive-border bg-positive-soft text-positive',
+  SELL: 'border-negative-border bg-negative-soft text-negative',
+  HOLD: 'border-line bg-surface-2 text-muted',
 };
 
 const ORDER_STATUS_STYLE: Record<string, string> = {
-  open:     "border-cyan-border bg-cyan-soft text-cyan",
-  filled:   "border-positive-border bg-positive-soft text-positive",
-  canceled: "border-warning-border bg-warning-soft text-warning",
-  rejected: "border-negative-border bg-negative-soft text-negative",
-  other:    "border-line bg-surface-2 text-muted",
+  open: 'border-cyan-border bg-cyan-soft text-cyan',
+  filled: 'border-positive-border bg-positive-soft text-positive',
+  canceled: 'border-warning-border bg-warning-soft text-warning',
+  rejected: 'border-negative-border bg-negative-soft text-negative',
+  other: 'border-line bg-surface-2 text-muted',
 };
 
 const ORDER_DOT_STYLE: Record<string, string> = {
-  buy:  "border-positive-border bg-positive-soft text-positive",
-  sell: "border-negative-border bg-negative-soft text-negative",
+  buy: 'border-positive-border bg-positive-soft text-positive',
+  sell: 'border-negative-border bg-negative-soft text-negative',
 };
 
 function numberValue(value?: string | number | null) {
@@ -149,75 +157,87 @@ function numberValue(value?: string | number | null) {
 
 function money(value?: string | number | null, maximumFractionDigits = 2) {
   const number = numberValue(value);
-  if (number === null) return "—";
-  return number.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
+  if (number === null) return '—';
+  return number.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
     maximumFractionDigits,
   });
 }
 
 function percent(value: number | null) {
-  if (value === null || !Number.isFinite(value)) return "0.00%";
-  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+  if (value === null || !Number.isFinite(value)) return '0.00%';
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
 function ratioPercent(value?: string | number | null) {
   const number = numberValue(value);
-  return number === null ? "—" : percent(number * 100);
+  return number === null ? '—' : percent(number * 100);
 }
 
 function compactMoney(value?: string | number | null) {
   const number = numberValue(value);
-  if (number === null) return "—";
-  return number.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    notation: "compact",
+  if (number === null) return '—';
+  return number.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    notation: 'compact',
     maximumFractionDigits: 1,
   });
 }
 
 function shareQuantity(value?: string | number | null) {
   const number = numberValue(value);
-  if (number === null) return "—";
-  return `${number.toLocaleString("en-US", { maximumFractionDigits: 4 })} sh`;
+  if (number === null) return '—';
+  return `${number.toLocaleString('en-US', { maximumFractionDigits: 4 })} sh`;
 }
 
 function timeLabel(value?: string | null) {
-  if (!value) return "—";
-  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (!value) return '—';
+  return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function orderBucket(status?: string) {
-  const normalized = status?.toLowerCase() ?? "other";
-  if (["new", "accepted", "accepted_for_bidding", "pending_new", "partially_filled", "pending_cancel", "pending_replace", "stopped"].includes(normalized)) return "open";
-  if (normalized === "filled") return "filled";
-  if (["canceled", "expired", "done_for_day"].includes(normalized)) return "canceled";
-  if (["rejected", "failed", "suspended"].includes(normalized)) return "rejected";
-  return "other";
+  const normalized = status?.toLowerCase() ?? 'other';
+  if (
+    [
+      'new',
+      'accepted',
+      'accepted_for_bidding',
+      'pending_new',
+      'partially_filled',
+      'pending_cancel',
+      'pending_replace',
+      'stopped',
+    ].includes(normalized)
+  )
+    return 'open';
+  if (normalized === 'filled') return 'filled';
+  if (['canceled', 'expired', 'done_for_day'].includes(normalized)) return 'canceled';
+  if (['rejected', 'failed', 'suspended'].includes(normalized)) return 'rejected';
+  return 'other';
 }
 
 function orderQuantity(order: AlpacaOrder) {
   if (order.notional) return money(order.notional);
-  if (order.qty) return `${Number(order.qty).toLocaleString("en-US")} sh`;
-  return "—";
+  if (order.qty) return `${Number(order.qty).toLocaleString('en-US')} sh`;
+  return '—';
 }
 
 function orderPrice(order: AlpacaOrder) {
   if (order.filled_avg_price) return money(order.filled_avg_price);
   if (order.limit_price) return `LMT ${money(order.limit_price)}`;
-  return "Market";
+  return 'Market';
 }
 
 function hasTracePayload(trade: Trade): boolean {
-  return Object.prototype.hasOwnProperty.call(trade, "decision_trace");
+  return Object.prototype.hasOwnProperty.call(trade, 'decision_trace');
 }
 
 function ChangeArrow({ up }: { up: boolean }) {
   return (
     <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-      <path d={up ? "M10 3.5 16.5 15h-13L10 3.5z" : "M10 16.5 3.5 5h13L10 16.5z"} />
+      <path d={up ? 'M10 3.5 16.5 15h-13L10 3.5z' : 'M10 16.5 3.5 5h13L10 16.5z'} />
     </svg>
   );
 }
@@ -225,7 +245,7 @@ function ChangeArrow({ up }: { up: boolean }) {
 function EmptyDots() {
   return (
     <div className="flex h-full min-h-[120px] items-center justify-center gap-1.5">
-      {[0, 1, 2].map(i => (
+      {[0, 1, 2].map((i) => (
         <span
           key={i}
           className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted"
@@ -236,25 +256,23 @@ function EmptyDots() {
   );
 }
 
-function RecentSignalsCard({
-  trades,
-  onSeeMore,
-}: {
-  trades: Trade[];
-  onSeeMore: () => void;
-}) {
+function RecentSignalsCard({ trades, onSeeMore }: { trades: Trade[]; onSeeMore: () => void }) {
   const visibleTrades = trades.slice(0, 3);
 
   return (
     <section className="rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-card)] p-4 shadow-[var(--dashboard-shadow)] 2xl:p-6">
       <div className="mb-4 flex items-center justify-between gap-3 2xl:mb-5">
-        <h2 className="text-2xl font-bold leading-none text-[var(--dashboard-text)] 2xl:text-[28px]">Recent Signals</h2>
+        <h2 className="text-2xl font-bold leading-none text-[var(--dashboard-text)] 2xl:text-[28px]">
+          Recent Signals
+        </h2>
         <button
           onClick={onSeeMore}
           className="inline-flex shrink-0 items-center gap-2 rounded-full px-1 py-1 text-sm font-medium text-[var(--dashboard-link)] transition hover:text-accent"
         >
           <span className="hidden min-[1440px]:inline">See more</span>
-          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--dashboard-control)] text-lg leading-none">›</span>
+          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--dashboard-control)] text-lg leading-none">
+            ›
+          </span>
         </button>
       </div>
 
@@ -269,34 +287,50 @@ function RecentSignalsCard({
           <div
             key={trade.id}
             className={[
-              "grid grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-2.5 py-3.5 2xl:grid-cols-[28px_minmax(0,1fr)_auto] 2xl:gap-3 2xl:py-4",
-              index > 0 ? "border-t border-[var(--dashboard-divider)]" : "",
-            ].join(" ")}
+              'grid grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-2.5 py-3.5 2xl:grid-cols-[28px_minmax(0,1fr)_auto] 2xl:gap-3 2xl:py-4',
+              index > 0 ? 'border-t border-[var(--dashboard-divider)]' : '',
+            ].join(' ')}
           >
             <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-cyan-border bg-cyan-soft text-cyan 2xl:h-7 2xl:w-7">
-              <svg className="h-3 w-3 2xl:h-3.5 2xl:w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <svg
+                className="h-3 w-3 2xl:h-3.5 2xl:w-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
                 <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
               </svg>
             </div>
             <div className="min-w-0">
               <div className="flex min-w-0 items-center gap-2">
-                <p className="truncate text-sm font-semibold text-[var(--dashboard-text)] 2xl:text-base">{trade.ticker}</p>
-                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${SIGNAL_STYLE[trade.trade_action]}`}>
+                <p className="truncate text-sm font-semibold text-[var(--dashboard-text)] 2xl:text-base">
+                  {trade.ticker}
+                </p>
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${SIGNAL_STYLE[trade.trade_action]}`}
+                >
                   {trade.trade_action}
                 </span>
               </div>
-              <p className="mt-1 line-clamp-1 text-xs text-[var(--dashboard-subtle)]">{trade.headline}</p>
+              <p className="mt-1 line-clamp-1 text-xs text-[var(--dashboard-subtle)]">
+                {trade.headline}
+              </p>
             </div>
             <div className="text-right">
               <p className="font-mono text-sm font-semibold text-positive">
                 {(trade.confidence_score * 100).toFixed(0)}%
               </p>
-              <p className="mt-1 text-[11px] text-[var(--dashboard-muted)]">{timeLabel(trade.created_at)}</p>
+              <p className="mt-1 text-[11px] text-[var(--dashboard-muted)]">
+                {timeLabel(trade.created_at)}
+              </p>
             </div>
           </div>
         ))}
       </div>
-
     </section>
   );
 }
@@ -317,13 +351,17 @@ function RecentOrdersCard({
   return (
     <section className="rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-card-muted)] p-4 shadow-[var(--dashboard-shadow)] 2xl:p-6">
       <div className="mb-4 flex items-center justify-between gap-3 2xl:mb-5">
-        <h2 className="text-2xl font-bold leading-none text-[var(--dashboard-text)] 2xl:text-[28px]">Transactions</h2>
+        <h2 className="text-2xl font-bold leading-none text-[var(--dashboard-text)] 2xl:text-[28px]">
+          Transactions
+        </h2>
         <button
           onClick={onSeeMore}
           className="inline-flex shrink-0 items-center gap-2 rounded-full px-1 py-1 text-sm font-medium text-[var(--dashboard-link)] transition hover:text-accent"
         >
           <span className="hidden min-[1440px]:inline">See more</span>
-          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--dashboard-control)] text-lg leading-none">›</span>
+          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--dashboard-control)] text-lg leading-none">
+            ›
+          </span>
         </button>
       </div>
 
@@ -341,33 +379,48 @@ function RecentOrdersCard({
         )}
 
         {visibleOrders.map((order, index) => {
-          const side = order.side?.toLowerCase() === "sell" ? "sell" : "buy";
+          const side = order.side?.toLowerCase() === 'sell' ? 'sell' : 'buy';
           const bucket = orderBucket(order.status);
           return (
             <div
               key={order.id}
               className={[
-                "grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-3 py-3 2xl:grid-cols-[42px_minmax(0,1fr)_auto] 2xl:gap-4 2xl:py-3.5",
-                index > 0 ? "border-t border-[var(--dashboard-divider)]" : "",
-              ].join(" ")}
+                'grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-3 py-3 2xl:grid-cols-[42px_minmax(0,1fr)_auto] 2xl:gap-4 2xl:py-3.5',
+                index > 0 ? 'border-t border-[var(--dashboard-divider)]' : '',
+              ].join(' ')}
             >
-              <div className={`flex h-9 w-9 items-center justify-center rounded-full border 2xl:h-11 2xl:w-11 ${ORDER_DOT_STYLE[side]}`}>
-                <span className="font-mono text-xs font-bold 2xl:text-sm">{order.symbol?.slice(0, 1) ?? "?"}</span>
+              <div
+                className={`flex h-9 w-9 items-center justify-center rounded-full border 2xl:h-11 2xl:w-11 ${ORDER_DOT_STYLE[side]}`}
+              >
+                <span className="font-mono text-xs font-bold 2xl:text-sm">
+                  {order.symbol?.slice(0, 1) ?? '?'}
+                </span>
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <p className="truncate text-sm font-semibold text-[var(--dashboard-text)] 2xl:text-base">{order.symbol ?? "Unknown"}</p>
-                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${ORDER_STATUS_STYLE[bucket]}`}>
-                    {order.status ?? "unknown"}
+                  <p className="truncate text-sm font-semibold text-[var(--dashboard-text)] 2xl:text-base">
+                    {order.symbol ?? 'Unknown'}
+                  </p>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${ORDER_STATUS_STYLE[bucket]}`}
+                  >
+                    {order.status ?? 'unknown'}
                   </span>
                 </div>
                 <p className="mt-1 text-xs capitalize text-[var(--dashboard-subtle)] 2xl:text-sm">
-                  {order.side ?? "order"} · {order.type ?? order.order_type ?? "market"}
+                  {order.side ?? 'order'} · {order.type ?? order.order_type ?? 'market'}
                 </p>
               </div>
               <div className="text-right">
-                <p className={side === "buy" ? "font-mono text-sm font-semibold text-positive" : "font-mono text-sm font-semibold text-negative"}>
-                  {side === "buy" ? "+" : "-"}{orderQuantity(order)}
+                <p
+                  className={
+                    side === 'buy'
+                      ? 'font-mono text-sm font-semibold text-positive'
+                      : 'font-mono text-sm font-semibold text-negative'
+                  }
+                >
+                  {side === 'buy' ? '+' : '-'}
+                  {orderQuantity(order)}
                 </p>
                 <p className="mt-1 text-[11px] text-[var(--dashboard-muted)]">
                   {orderPrice(order)} · {timeLabel(order.submitted_at ?? order.created_at)}
@@ -377,7 +430,6 @@ function RecentOrdersCard({
           );
         })}
       </div>
-
     </section>
   );
 }
@@ -401,36 +453,53 @@ function AlpacaBalanceCard({
   const equity = numberValue(accountValue);
   const lastEquity = numberValue(account?.last_equity);
   const dailyChange = equity !== null && lastEquity !== null ? equity - lastEquity : 0;
-  const dailyChangePct = lastEquity ? dailyChange / lastEquity * 100 : 0;
+  const dailyChangePct = lastEquity ? (dailyChange / lastEquity) * 100 : 0;
   const isUp = dailyChange >= 0;
-  const openOrders = orders.filter(order => orderBucket(order.status) === "open").length;
-  const filledOrders = orders.filter(order => orderBucket(order.status) === "filled").length;
+  const openOrders = orders.filter((order) => orderBucket(order.status) === 'open').length;
+  const filledOrders = orders.filter((order) => orderBucket(order.status) === 'filled').length;
   const topPositions = [...positions]
-    .sort((a, b) => Math.abs(numberValue(b.market_value) ?? 0) - Math.abs(numberValue(a.market_value) ?? 0))
+    .sort(
+      (a, b) =>
+        Math.abs(numberValue(b.market_value) ?? 0) - Math.abs(numberValue(a.market_value) ?? 0),
+    )
     .slice(0, 3);
-  const investedValue = positions.reduce((sum, position) => sum + Math.abs(numberValue(position.market_value) ?? 0), 0);
-  const allocationPct = equity && equity > 0 ? investedValue / equity * 100 : null;
-  const tradingBlocked = Boolean(account?.trading_blocked || account?.account_blocked || account?.trade_suspended_by_user);
+  const investedValue = positions.reduce(
+    (sum, position) => sum + Math.abs(numberValue(position.market_value) ?? 0),
+    0,
+  );
+  const allocationPct = equity && equity > 0 ? (investedValue / equity) * 100 : null;
+  const tradingBlocked = Boolean(
+    account?.trading_blocked || account?.account_blocked || account?.trade_suspended_by_user,
+  );
 
   const metrics = [
-    { label: "Buying power", value: money(account?.buying_power), sub: account?.multiplier ? `${account.multiplier}x margin` : "available" },
-    { label: "Cash", value: money(account?.cash), sub: account?.currency ?? "USD" },
-    { label: "Invested", value: compactMoney(investedValue), sub: allocationPct === null ? "allocation" : `${allocationPct.toFixed(1)}% of equity` },
-    { label: "Open orders", value: String(openOrders), sub: `${filledOrders} filled recent` },
+    {
+      label: 'Buying power',
+      value: money(account?.buying_power),
+      sub: account?.multiplier ? `${account.multiplier}x margin` : 'available',
+    },
+    { label: 'Cash', value: money(account?.cash), sub: account?.currency ?? 'USD' },
+    {
+      label: 'Invested',
+      value: compactMoney(investedValue),
+      sub: allocationPct === null ? 'allocation' : `${allocationPct.toFixed(1)}% of equity`,
+    },
+    { label: 'Open orders', value: String(openOrders), sub: `${filledOrders} filled recent` },
   ];
 
   const statusPills = [
     {
-      label: account?.status ?? "paper",
-      className: account?.status?.toLowerCase() === "active"
-        ? "border-positive-border bg-positive-soft text-positive"
-        : "border-line bg-surface-2 text-muted",
+      label: account?.status ?? 'paper',
+      className:
+        account?.status?.toLowerCase() === 'active'
+          ? 'border-positive-border bg-positive-soft text-positive'
+          : 'border-line bg-surface-2 text-muted',
     },
     {
-      label: tradingBlocked ? "Trading blocked" : "Trading enabled",
+      label: tradingBlocked ? 'Trading blocked' : 'Trading enabled',
       className: tradingBlocked
-        ? "border-negative-border bg-negative-soft text-negative"
-        : "border-positive-border bg-positive-soft text-positive",
+        ? 'border-negative-border bg-negative-soft text-negative'
+        : 'border-positive-border bg-positive-soft text-positive',
     },
   ];
 
@@ -440,10 +509,10 @@ function AlpacaBalanceCard({
         <div>
           <p className="text-sm font-medium text-[var(--dashboard-subtle)]">Alpaca Live Equity</p>
           <p className="mt-3 font-sans text-[30px] font-bold leading-none tracking-tight text-[var(--dashboard-text)]">
-            {loading && !account ? "—" : money(accountValue)}
+            {loading && !account ? '—' : money(accountValue)}
           </p>
           <p className="mt-2 text-[11px] font-medium text-[var(--dashboard-muted)]">
-            Synced {fetchedAt ? timeLabel(fetchedAt) : "—"}
+            Synced {fetchedAt ? timeLabel(fetchedAt) : '—'}
           </p>
         </div>
         <span className="inline-flex shrink-0 items-center gap-2 rounded-full border border-positive-border bg-positive-soft px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-positive">
@@ -452,14 +521,19 @@ function AlpacaBalanceCard({
         </span>
       </div>
 
-      <div className={`mt-4 inline-flex items-center gap-2 font-mono text-sm font-semibold ${isUp ? "text-positive" : "text-negative"}`}>
+      <div
+        className={`mt-4 inline-flex items-center gap-2 font-mono text-sm font-semibold ${isUp ? 'text-positive' : 'text-negative'}`}
+      >
         <ChangeArrow up={isUp} />
         {money(Math.abs(dailyChange))} {percent(dailyChangePct)}
       </div>
 
       <div className="mt-5 flex flex-wrap gap-2">
-        {statusPills.map(item => (
-          <span key={item.label} className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${item.className}`}>
+        {statusPills.map((item) => (
+          <span
+            key={item.label}
+            className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${item.className}`}
+          >
             {item.label}
           </span>
         ))}
@@ -477,13 +551,17 @@ function AlpacaBalanceCard({
         )}
 
         <div className="grid grid-cols-2 gap-2.5">
-          {metrics.map(item => (
+          {metrics.map((item) => (
             <div key={item.label} className="rounded-xl bg-[var(--dashboard-row)] px-3 py-2.5">
-              <span className="block text-xs font-medium text-[var(--dashboard-subtle)]">{item.label}</span>
-              <span className="mt-1 block truncate font-mono text-[15px] font-semibold text-[var(--dashboard-text)]">
-                {loading && !account ? "—" : item.value}
+              <span className="block text-xs font-medium text-[var(--dashboard-subtle)]">
+                {item.label}
               </span>
-              <span className="mt-1 block truncate text-[10px] text-[var(--dashboard-muted)]">{loading && !account ? "—" : item.sub}</span>
+              <span className="mt-1 block truncate font-mono text-[15px] font-semibold text-[var(--dashboard-text)]">
+                {loading && !account ? '—' : item.value}
+              </span>
+              <span className="mt-1 block truncate text-[10px] text-[var(--dashboard-muted)]">
+                {loading && !account ? '—' : item.sub}
+              </span>
             </div>
           ))}
         </div>
@@ -510,7 +588,7 @@ function AlpacaBalanceCard({
         )}
 
         <div className="space-y-0">
-          {topPositions.map(position => {
+          {topPositions.map((position) => {
             const marketValue = numberValue(position.market_value) ?? 0;
             const pl = numberValue(position.unrealized_pl);
             const isPositionUp = (pl ?? 0) >= 0;
@@ -520,14 +598,20 @@ function AlpacaBalanceCard({
                 key={position.symbol ?? position.asset_class ?? marketValue}
                 className="grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-3 border-t border-[var(--dashboard-divider)] py-3 first:border-t-0"
               >
-                <div className={`flex h-9 w-9 items-center justify-center rounded-full border ${isPositionUp ? "border-positive-border bg-positive-soft text-positive" : "border-negative-border bg-negative-soft text-negative"}`}>
-                  <span className="font-mono text-xs font-bold">{position.symbol?.slice(0, 1) ?? "?"}</span>
+                <div
+                  className={`flex h-9 w-9 items-center justify-center rounded-full border ${isPositionUp ? 'border-positive-border bg-positive-soft text-positive' : 'border-negative-border bg-negative-soft text-negative'}`}
+                >
+                  <span className="font-mono text-xs font-bold">
+                    {position.symbol?.slice(0, 1) ?? '?'}
+                  </span>
                 </div>
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-2">
-                    <p className="truncate text-sm font-semibold text-[var(--dashboard-text)]">{position.symbol ?? "Unknown"}</p>
+                    <p className="truncate text-sm font-semibold text-[var(--dashboard-text)]">
+                      {position.symbol ?? 'Unknown'}
+                    </p>
                     <span className="rounded-full border border-line bg-surface-2 px-2 py-0.5 text-[10px] font-bold uppercase text-muted">
-                      {position.side ?? "long"}
+                      {position.side ?? 'long'}
                     </span>
                   </div>
                   <p className="mt-1 truncate text-xs text-[var(--dashboard-subtle)]">
@@ -535,8 +619,12 @@ function AlpacaBalanceCard({
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="font-mono text-sm font-semibold text-[var(--dashboard-text)]">{compactMoney(position.market_value)}</p>
-                  <p className={`mt-1 font-mono text-[11px] font-semibold ${isPositionUp ? "text-positive" : "text-negative"}`}>
+                  <p className="font-mono text-sm font-semibold text-[var(--dashboard-text)]">
+                    {compactMoney(position.market_value)}
+                  </p>
+                  <p
+                    className={`mt-1 font-mono text-[11px] font-semibold ${isPositionUp ? 'text-positive' : 'text-negative'}`}
+                  >
                     {ratioPercent(position.unrealized_plpc)}
                   </p>
                 </div>
@@ -556,8 +644,8 @@ function addTradeToStats(stats: DashboardStats, trade: Trade): DashboardStats {
   return {
     analyzed,
     executed: stats.executed + (trade.order_id?.trim() ? 1 : 0),
-    buyOrders: stats.buyOrders + (trade.trade_action === "BUY" ? 1 : 0),
-    sellOrders: stats.sellOrders + (trade.trade_action === "SELL" ? 1 : 0),
+    buyOrders: stats.buyOrders + (trade.trade_action === 'BUY' ? 1 : 0),
+    sellOrders: stats.sellOrders + (trade.trade_action === 'SELL' ? 1 : 0),
     riskGated: stats.riskGated + (isRiskGated(trade) ? 1 : 0),
     avgSentiment: sentimentTotal / analyzed,
   };
@@ -565,39 +653,112 @@ function addTradeToStats(stats: DashboardStats, trade: Trade): DashboardStats {
 
 const NAV_ICONS: Record<string, React.ReactNode> = {
   Dashboard: (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" />
-      <rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" />
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="3" y="3" width="7" height="7" rx="1.5" />
+      <rect x="14" y="3" width="7" height="7" rx="1.5" />
+      <rect x="3" y="14" width="7" height="7" rx="1.5" />
+      <rect x="14" y="14" width="7" height="7" rx="1.5" />
     </svg>
   ),
   Signals: (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
     </svg>
   ),
-  "Risk Gate": (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  'Risk Gate': (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
     </svg>
   ),
   Orders: (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
-      <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <line x1="8" y1="6" x2="21" y2="6" />
+      <line x1="8" y1="12" x2="21" y2="12" />
+      <line x1="8" y1="18" x2="21" y2="18" />
+      <line x1="3" y1="6" x2="3.01" y2="6" />
+      <line x1="3" y1="12" x2="3.01" y2="12" />
+      <line x1="3" y1="18" x2="3.01" y2="18" />
     </svg>
   ),
   Portfolio: (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" />
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <line x1="18" y1="20" x2="18" y2="10" />
+      <line x1="12" y1="20" x2="12" y2="4" />
+      <line x1="6" y1="20" x2="6" y2="14" />
     </svg>
   ),
   Pipeline: (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M6 21V9a9 9 0 0 0 9 9" />
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="18" cy="18" r="3" />
+      <circle cx="6" cy="6" r="3" />
+      <path d="M6 21V9a9 9 0 0 0 9 9" />
     </svg>
   ),
   Settings: (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
       <circle cx="12" cy="12" r="3" />
     </svg>
@@ -605,59 +766,65 @@ const NAV_ICONS: Record<string, React.ReactNode> = {
 };
 
 export default function DashboardClient({ initialTrades, initialStats }: DashboardClientProps) {
-  const [trades,        setTrades]        = useState<Trade[]>(initialTrades);
+  const [trades, setTrades] = useState<Trade[]>(initialTrades);
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(initialStats);
-  const [newIds,        setNewIds]        = useState<Set<string>>(new Set());
+  const [newIds, setNewIds] = useState<Set<string>>(new Set());
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(initialTrades[0] ?? null);
   const [traceLoadingId, setTraceLoadingId] = useState<string | null>(null);
-  const [traceError,    setTraceError]    = useState<string | null>(null);
-  const [hasMore,       setHasMore]       = useState(initialTrades.length === PAGE_SIZE);
+  const [traceError, setTraceError] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(initialTrades.length === PAGE_SIZE);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
-  const [authGateOpen,  setAuthGateOpen]  = useState(false);
-  const [authGateReason, setAuthGateReason] = useState<"auth_required" | "limit_reached">("auth_required");
-  const [userMenuOpen,  setUserMenuOpen]  = useState(false);
+  const [authGateOpen, setAuthGateOpen] = useState(false);
+  const [authGateReason, setAuthGateReason] = useState<'auth_required' | 'limit_reached'>(
+    'auth_required',
+  );
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [paperBannerDismissed, setPaperBannerDismissed] = useState(false);
 
   const location = useLocation();
   const navigate = useNavigate();
   const pathname = location.pathname;
-  const activeView: ViewName = PATH_VIEW_MAP[pathname] ?? "Dashboard";
+  const activeView: ViewName = PATH_VIEW_MAP[pathname] ?? 'Dashboard';
 
   const setActiveView = useCallback(
     (view: ViewName) => {
       navigate(VIEW_PATH_MAP[view]);
     },
-    [navigate]
+    [navigate],
   );
 
   // ── Auth state ────────────────────────────────────────────────
   const { user, isAnonymous, isSuperUser, isLoading: authLoading, signOut } = useAuth();
-  const [alpacaData,    setAlpacaData]    = useState<OrdersResponse>(EMPTY_ALPACA_DATA);
+  const [alpacaData, setAlpacaData] = useState<OrdersResponse>(EMPTY_ALPACA_DATA);
   const [alpacaLoading, setAlpacaLoading] = useState(true);
 
-  const tailRef        = useRef<string | null>(
-    initialTrades.length > 0 ? initialTrades[initialTrades.length - 1].created_at : null
+  const tailRef = useRef<string | null>(
+    initialTrades.length > 0 ? initialTrades[initialTrades.length - 1].created_at : null,
   );
-  const latestSeenRef  = useRef<string | null>(initialTrades[0]?.created_at ?? null);
-  const knownTradeIdsRef = useRef<Set<string>>(new Set(initialTrades.map(trade => trade.id)));
+  const latestSeenRef = useRef<string | null>(initialTrades[0]?.created_at ?? null);
+  const knownTradeIdsRef = useRef<Set<string>>(new Set(initialTrades.map((trade) => trade.id)));
   const tradeDetailCacheRef = useRef<Map<string, Trade>>(new Map());
   const pollingLatestRef = useRef(false);
-  const hasMoreRef     = useRef(hasMore);
+  const hasMoreRef = useRef(hasMore);
   const loadingMoreRef = useRef(false);
 
-  useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
 
   useEffect(() => {
     if (!isSimulatorOpen) return;
-    const closeOnEscape = (e: KeyboardEvent) => { if (e.key === "Escape") setIsSimulatorOpen(false); };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
+    const closeOnEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsSimulatorOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
   }, [isSimulatorOpen]);
 
   const loadAlpacaSummary = useCallback(async () => {
     try {
-      const json = await apiFetch<OrdersResponse>("/orders?status=all&limit=25");
+      const json = await apiFetch<OrdersResponse>('/orders?status=all&limit=25');
       setAlpacaData(json);
     } catch (error) {
       if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
@@ -665,9 +832,9 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
         setAlpacaLoading(false);
         return;
       }
-      setAlpacaData(current => ({
+      setAlpacaData((current) => ({
         ...current,
-        error: "Could not load Alpaca summary",
+        error: 'Could not load Alpaca summary',
       }));
     } finally {
       setAlpacaLoading(false);
@@ -676,7 +843,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
   const loadDashboardStats = useCallback(async () => {
     try {
-      const json = await apiFetch<{ stats: DashboardStats | null }>("/stats");
+      const json = await apiFetch<{ stats: DashboardStats | null }>('/stats');
       if (json.stats) {
         setDashboardStats(json.stats);
       }
@@ -697,44 +864,49 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
   const latestTrade = trades[0] ?? null;
   const lastSignalTime = latestTrade
-    ? new Date(latestTrade.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : "Awaiting";
+    ? new Date(latestTrade.created_at).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : 'Awaiting';
 
   const viewSubtitle: Partial<Record<ViewName, string>> = {
-    Dashboard: "Live AI trading activity overview",
-    Signals:   "Real-time signal history and decision trace",
-    Orders:    "Alpaca order execution and account context",
-    Portfolio: "Live equity, holdings, buying power, and Alpaca position detail",
-    Settings:  "Agent configuration and tunable parameters",
+    Dashboard: 'Live AI trading activity overview',
+    Signals: 'Real-time signal history and decision trace',
+    Orders: 'Alpaca order execution and account context',
+    Portfolio: 'Live equity, holdings, buying power, and Alpaca position detail',
+    Settings: 'Agent configuration and tunable parameters',
   };
 
   const ingestFreshTrades = useCallback((freshTrades: Trade[]) => {
-    const uniqueTrades = freshTrades.filter(trade => !knownTradeIdsRef.current.has(trade.id));
+    const uniqueTrades = freshTrades.filter((trade) => !knownTradeIdsRef.current.has(trade.id));
     if (uniqueTrades.length === 0) return;
 
-    uniqueTrades.forEach(trade => knownTradeIdsRef.current.add(trade.id));
+    uniqueTrades.forEach((trade) => knownTradeIdsRef.current.add(trade.id));
     latestSeenRef.current = uniqueTrades[0].created_at;
     if (!tailRef.current) {
       tailRef.current = uniqueTrades[uniqueTrades.length - 1].created_at;
     }
 
-    setTrades(prev => [...uniqueTrades, ...prev]);
-    setSelectedTrade(current => current ?? uniqueTrades[0]);
-    setDashboardStats(current => uniqueTrades.reduce(
-      (nextStats, trade) => nextStats ? addTradeToStats(nextStats, trade) : nextStats,
-      current,
-    ));
-    setNewIds(prev => {
+    setTrades((prev) => [...uniqueTrades, ...prev]);
+    setSelectedTrade((current) => current ?? uniqueTrades[0]);
+    setDashboardStats((current) =>
+      uniqueTrades.reduce(
+        (nextStats, trade) => (nextStats ? addTradeToStats(nextStats, trade) : nextStats),
+        current,
+      ),
+    );
+    setNewIds((prev) => {
       const next = new Set(prev);
-      uniqueTrades.forEach(trade => next.add(trade.id));
+      uniqueTrades.forEach((trade) => next.add(trade.id));
       return next;
     });
 
-    const ids = uniqueTrades.map(trade => trade.id);
+    const ids = uniqueTrades.map((trade) => trade.id);
     setTimeout(() => {
-      setNewIds(prev => {
+      setNewIds((prev) => {
         const next = new Set(prev);
-        ids.forEach(id => next.delete(id));
+        ids.forEach((id) => next.delete(id));
         return next;
       });
     }, 900);
@@ -747,7 +919,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
     try {
       const after = latestSeenRef.current;
-      const url = after ? `/trades?after=${encodeURIComponent(after)}` : "/trades";
+      const url = after ? `/trades?after=${encodeURIComponent(after)}` : '/trades';
       const { trades: fresh } = await apiFetch<{ trades: Trade[] }>(url);
       if (fresh.length > 0) {
         ingestFreshTrades(fresh);
@@ -760,17 +932,17 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   // ── Poll FastAPI for slim trade rows ──────────────────────────
   useEffect(() => {
     const refreshIfVisible = () => {
-      if (document.visibilityState === "visible") loadNewTrades();
+      if (document.visibilityState === 'visible') loadNewTrades();
     };
 
     loadNewTrades();
     const interval = setInterval(loadNewTrades, 10_000);
-    window.addEventListener("focus", loadNewTrades);
-    document.addEventListener("visibilitychange", refreshIfVisible);
+    window.addEventListener('focus', loadNewTrades);
+    document.addEventListener('visibilitychange', refreshIfVisible);
     return () => {
       clearInterval(interval);
-      window.removeEventListener("focus", loadNewTrades);
-      document.removeEventListener("visibilitychange", refreshIfVisible);
+      window.removeEventListener('focus', loadNewTrades);
+      document.removeEventListener('visibilitychange', refreshIfVisible);
     };
   }, [loadNewTrades]);
 
@@ -779,7 +951,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   }, []);
 
   useEffect(() => {
-    if (activeView !== "Signals" || !selectedTrade) return;
+    if (activeView !== 'Signals' || !selectedTrade) return;
     if (hasTracePayload(selectedTrade)) {
       setTraceLoadingId(null);
       setTraceError(null);
@@ -800,14 +972,18 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     apiFetch<{ trade: Trade }>(`/trades/${tradeId}`, { signal: controller.signal })
       .then(({ trade }) => {
         tradeDetailCacheRef.current.set(trade.id, trade);
-        setSelectedTrade(current => current?.id === trade.id ? { ...current, ...trade } : current);
+        setSelectedTrade((current) =>
+          current?.id === trade.id ? { ...current, ...trade } : current,
+        );
       })
-      .catch(error => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setTraceError(error instanceof Error ? error.message : "Could not load the full decision trace.");
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setTraceError(
+          error instanceof Error ? error.message : 'Could not load the full decision trace.',
+        );
       })
       .finally(() => {
-        setTraceLoadingId(current => current === tradeId ? null : current);
+        setTraceLoadingId((current) => (current === tradeId ? null : current));
       });
 
     return () => controller.abort();
@@ -823,11 +999,11 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
         `/trades?before=${encodeURIComponent(tailRef.current)}`,
       );
       if (more.length > 0) {
-        const uniqueMore = more.filter(trade => !knownTradeIdsRef.current.has(trade.id));
-        uniqueMore.forEach(trade => knownTradeIdsRef.current.add(trade.id));
+        const uniqueMore = more.filter((trade) => !knownTradeIdsRef.current.has(trade.id));
+        uniqueMore.forEach((trade) => knownTradeIdsRef.current.add(trade.id));
         tailRef.current = (uniqueMore[uniqueMore.length - 1] ?? more[more.length - 1]).created_at;
         if (uniqueMore.length > 0) {
-          setTrades(prev => [...prev, ...uniqueMore]);
+          setTrades((prev) => [...prev, ...uniqueMore]);
         }
       }
       setHasMore(next);
@@ -841,14 +1017,21 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   return (
     <div className="min-h-screen bg-background text-primary xl:h-screen xl:overflow-hidden">
       <div className="flex min-h-screen xl:h-screen">
-
         {/* ── Sidebar ──────────────────────────────────────────────── */}
         <aside className="hidden w-[240px] shrink-0 flex-col border-r border-line bg-surface px-5 py-6 xl:flex">
-
           {/* Brand */}
           <div className="flex items-center gap-3 px-1">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-white shadow-sm">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
               </svg>
             </div>
@@ -860,19 +1043,21 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
           {/* Navigation */}
           <nav className="mt-6 space-y-0.5">
-            <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted">Navigation</p>
-            {NAV_ITEMS.map(item => (
+            <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted">
+              Navigation
+            </p>
+            {NAV_ITEMS.map((item) => (
               <button
                 key={item}
                 onClick={() => setActiveView(item)}
                 className={[
-                  "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-all duration-150",
+                  'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-all duration-150',
                   activeView === item
-                    ? "bg-accent-soft text-accent"
-                    : "text-secondary hover:bg-hover hover:text-primary",
-                ].join(" ")}
+                    ? 'bg-accent-soft text-accent'
+                    : 'text-secondary hover:bg-hover hover:text-primary',
+                ].join(' ')}
               >
-                <span className={activeView === item ? "text-accent" : "text-muted"}>
+                <span className={activeView === item ? 'text-accent' : 'text-muted'}>
                   {NAV_ICONS[item]}
                 </span>
                 {item}
@@ -886,7 +1071,9 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
               <span className="pulse-dot h-2 w-2 shrink-0 rounded-full bg-positive" />
               <div className="min-w-0">
                 <p className="text-xs font-semibold text-positive">Autonomous</p>
-                <p className="mt-0.5 text-[10px] text-positive opacity-70">Last signal {lastSignalTime}</p>
+                <p className="mt-0.5 text-[10px] text-positive opacity-70">
+                  Last signal {lastSignalTime}
+                </p>
               </div>
             </div>
           </div>
@@ -894,22 +1081,27 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
         {/* ── Main area ─────────────────────────────────────────────── */}
         <div className="flex min-w-0 flex-1 flex-col xl:h-screen">
-
           {/* Header */}
           <header className="z-50 shrink-0 border-b border-line bg-surface">
             <div className="flex min-h-[60px] items-center gap-3 px-4 py-3 md:px-6">
-
               {/* Mobile brand */}
               <div className="flex min-w-0 items-center gap-3 xl:hidden">
                 <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-white">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                   </svg>
                 </div>
                 <p className="text-sm font-bold text-primary">Sentient Trader</p>
               </div>
-
-
 
               <div className="ml-auto flex items-center gap-2">
                 <button
@@ -917,7 +1109,12 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                   aria-label="Open simulator"
                   className="flex h-9 items-center gap-2 rounded-xl bg-accent px-4 text-[13px] font-semibold text-white shadow-sm transition-all duration-150 hover:opacity-90 active:scale-95"
                 >
-                  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <svg
+                    className="h-3.5 w-3.5"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
                     <path d="M8 5.14v14l11-7-11-7z" />
                   </svg>
                   <span className="hidden sm:inline">Simulate</span>
@@ -929,7 +1126,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                 {!authLoading && user && !isAnonymous && (
                   <div className="relative">
                     <button
-                      onClick={() => setUserMenuOpen(prev => !prev)}
+                      onClick={() => setUserMenuOpen((prev) => !prev)}
                       className="flex items-center gap-2 rounded-xl border border-line bg-surface-2 px-2.5 py-1.5 transition hover:border-accent-border"
                     >
                       {/* Avatar: show profile picture if available, else initial */}
@@ -941,13 +1138,19 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                         />
                       ) : (
                         <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent-soft text-[10px] font-bold text-accent">
-                          {(user.email?.[0] ?? "U").toUpperCase()}
+                          {(user.email?.[0] ?? 'U').toUpperCase()}
                         </span>
                       )}
                       <span className="hidden text-xs font-medium text-secondary sm:inline">
-                        {user.user_metadata?.full_name ?? user.email?.split("@")[0] ?? "User"}
+                        {user.user_metadata?.full_name ?? user.email?.split('@')[0] ?? 'User'}
                       </span>
-                      <svg className={`h-3 w-3 text-muted transition-transform ${userMenuOpen ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <svg
+                        className={`h-3 w-3 text-muted transition-transform ${userMenuOpen ? 'rotate-180' : ''}`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
                         <path strokeLinecap="round" strokeLinejoin="round" d="m19 9-7 7-7-7" />
                       </svg>
                     </button>
@@ -956,21 +1159,30 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                     {userMenuOpen && (
                       <>
                         {/* Invisible overlay to close on click outside */}
-                        <div className="fixed inset-0 z-[99]" onClick={() => setUserMenuOpen(false)} />
+                        <div
+                          className="fixed inset-0 z-[99]"
+                          onClick={() => setUserMenuOpen(false)}
+                        />
                         <div className="absolute right-0 top-full z-[100] mt-2 w-64 rounded-xl border border-line bg-surface shadow-card-md">
                           {/* User info */}
                           <div className="border-b border-line px-4 py-3">
                             <div className="flex items-center gap-3">
                               {user.user_metadata?.avatar_url ? (
-                                <img src={user.user_metadata.avatar_url} alt="" className="h-9 w-9 rounded-full" />
+                                <img
+                                  src={user.user_metadata.avatar_url}
+                                  alt=""
+                                  className="h-9 w-9 rounded-full"
+                                />
                               ) : (
                                 <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent-soft text-sm font-bold text-accent">
-                                  {(user.email?.[0] ?? "U").toUpperCase()}
+                                  {(user.email?.[0] ?? 'U').toUpperCase()}
                                 </span>
                               )}
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-sm font-semibold text-primary">
-                                  {user.user_metadata?.full_name ?? user.email?.split("@")[0] ?? "User"}
+                                  {user.user_metadata?.full_name ??
+                                    user.email?.split('@')[0] ??
+                                    'User'}
                                 </p>
                                 <p className="truncate text-[11px] text-muted">{user.email}</p>
                               </div>
@@ -978,7 +1190,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                             {/* Provider + super user badge */}
                             <div className="mt-2 flex items-center gap-1.5">
                               <span className="rounded-md border border-line bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold text-muted">
-                                {user.app_metadata?.provider ?? "email"}
+                                {user.app_metadata?.provider ?? 'email'}
                               </span>
                               {isSuperUser && (
                                 <span className="rounded-md border border-accent-border bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent">
@@ -990,11 +1202,24 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                           {/* Sign out */}
                           <div className="p-2">
                             <button
-                              onClick={() => { setUserMenuOpen(false); signOut(); }}
+                              onClick={() => {
+                                setUserMenuOpen(false);
+                                signOut();
+                              }}
                               className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-secondary transition hover:bg-hover hover:text-negative"
                             >
-                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
+                              <svg
+                                className="h-3.5 w-3.5"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9"
+                                />
                               </svg>
                               Sign out
                             </button>
@@ -1006,11 +1231,24 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                 )}
                 {!authLoading && (isAnonymous || !user) && (
                   <button
-                    onClick={() => { setAuthGateReason("auth_required"); setAuthGateOpen(true); }}
+                    onClick={() => {
+                      setAuthGateReason('auth_required');
+                      setAuthGateOpen(true);
+                    }}
                     className="flex h-9 items-center gap-1.5 rounded-xl border border-line bg-surface-2 px-3 text-xs font-semibold text-secondary transition hover:border-accent-border hover:text-accent"
                   >
-                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0" />
+                    <svg
+                      className="h-3.5 w-3.5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0"
+                      />
                     </svg>
                     Sign in
                   </button>
@@ -1022,28 +1260,42 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
           {/* Page content */}
           <main
             className={[
-              "mx-auto flex w-full max-w-[1660px] flex-1 flex-col overflow-y-auto bg-[var(--dashboard-bg)] px-4 py-5 md:px-6 xl:min-h-0",
-              activeView === "Dashboard"
-                ? "xl:overflow-y-auto"
-                : "gap-4 xl:overflow-y-auto",
-            ].join(" ")}
+              'mx-auto flex w-full max-w-[1660px] flex-1 flex-col overflow-y-auto bg-[var(--dashboard-bg)] px-4 py-5 md:px-6 xl:min-h-0',
+              activeView === 'Dashboard' ? 'xl:overflow-y-auto' : 'gap-4 xl:overflow-y-auto',
+            ].join(' ')}
           >
-
             {/* Paper trading disclaimer */}
             {!paperBannerDismissed && (
               <div className="mb-3 flex items-center gap-3 rounded-xl border border-warning-border bg-warning-soft px-4 py-2.5">
-                <svg className="h-4 w-4 shrink-0 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 0 1-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 0 1 4.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0 1 12 15a9.065 9.065 0 0 0-6.23.693L5 14.5m14.8.8 1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0 1 12 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
+                <svg
+                  className="h-4 w-4 shrink-0 text-warning"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M9.75 3.104v5.714a2.25 2.25 0 0 1-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 0 1 4.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0 1 12 15a9.065 9.065 0 0 0-6.23.693L5 14.5m14.8.8 1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0 1 12 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5"
+                  />
                 </svg>
                 <p className="flex-1 text-xs leading-relaxed text-warning">
-                  <strong>Paper Trading Mode</strong> — This dashboard uses Alpaca&apos;s paper trading API with simulated funds. No real money is involved.
+                  <strong>Paper Trading Mode</strong> — This dashboard uses Alpaca&apos;s paper
+                  trading API with simulated funds. No real money is involved.
                 </p>
                 <button
                   onClick={() => setPaperBannerDismissed(true)}
                   className="shrink-0 rounded-lg p-1 text-warning transition hover:bg-warning/10"
                   aria-label="Dismiss"
                 >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <svg
+                    className="h-3.5 w-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
                     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
                   </svg>
                 </button>
@@ -1051,28 +1303,30 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
             )}
 
             {/* Page header strip */}
-            {activeView !== "Dashboard" && (
-            <section className="glass-panel flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-2xl px-5 py-4">
-              <div>
-                <h1 className="text-2xl font-bold leading-tight text-[var(--dashboard-text)]">{activeView}</h1>
-                <p className="mt-1 text-sm text-[var(--dashboard-subtle)]">
-                  {viewSubtitle[activeView] ?? "View coming online."}
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-positive-border bg-positive-soft px-3 py-1 text-xs font-semibold text-positive">
-                  <span className="h-1.5 w-1.5 rounded-full bg-positive" />
-                  Autonomous online
-                </span>
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1 text-xs font-medium text-secondary">
-                  Last signal {lastSignalTime}
-                </span>
-              </div>
-            </section>
+            {activeView !== 'Dashboard' && (
+              <section className="glass-panel flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-2xl px-5 py-4">
+                <div>
+                  <h1 className="text-2xl font-bold leading-tight text-[var(--dashboard-text)]">
+                    {activeView}
+                  </h1>
+                  <p className="mt-1 text-sm text-[var(--dashboard-subtle)]">
+                    {viewSubtitle[activeView] ?? 'View coming online.'}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-positive-border bg-positive-soft px-3 py-1 text-xs font-semibold text-positive">
+                    <span className="h-1.5 w-1.5 rounded-full bg-positive" />
+                    Autonomous online
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1 text-xs font-medium text-secondary">
+                    Last signal {lastSignalTime}
+                  </span>
+                </div>
+              </section>
             )}
 
             {/* Dashboard view */}
-            {activeView === "Dashboard" && (
+            {activeView === 'Dashboard' && (
               <div className="w-full space-y-6">
                 <StatsBar trades={trades} stats={dashboardStats} />
                 <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_440px]">
@@ -1081,13 +1335,13 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:gap-6">
                       <RecentSignalsCard
                         trades={trades}
-                        onSeeMore={() => setActiveView("Signals")}
+                        onSeeMore={() => setActiveView('Signals')}
                       />
                       <RecentOrdersCard
                         orders={alpacaData.orders}
                         loading={alpacaLoading}
                         error={alpacaData.error}
-                        onSeeMore={() => setActiveView("Orders")}
+                        onSeeMore={() => setActiveView('Orders')}
                       />
                     </div>
                   </div>
@@ -1106,7 +1360,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
             )}
 
             {/* Signals view */}
-            {activeView === "Signals" && (
+            {activeView === 'Signals' && (
               <div className="grid min-h-[640px] flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(420px,0.9fr)_minmax(0,1.1fr)]">
                 <LiveTicker
                   trades={trades}
@@ -1125,9 +1379,9 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
               </div>
             )}
 
-            {activeView === "Orders" && <OrdersPage />}
+            {activeView === 'Orders' && <OrdersPage />}
 
-            {activeView === "Portfolio" && (
+            {activeView === 'Portfolio' && (
               <PortfolioPage
                 account={alpacaData.account}
                 positions={alpacaData.positions}
@@ -1138,23 +1392,28 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
               />
             )}
 
-            {activeView === "Settings" && <SettingsPage />}
+            {activeView === 'Settings' && <SettingsPage />}
 
-            {activeView === "Pipeline" && (
+            {activeView === 'Pipeline' && (
               <PipelinePage stats={dashboardStats} trades={trades} newIds={newIds} />
             )}
 
-            {activeView !== "Dashboard" && activeView !== "Signals" && activeView !== "Orders" && activeView !== "Portfolio" && activeView !== "Pipeline" && activeView !== "Settings" && (
-              <div className="glass-panel flex min-h-[520px] flex-1 items-center justify-center rounded-2xl p-10 text-center">
-                <div>
-                  <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl bg-surface-2 text-muted">
-                    {NAV_ICONS[activeView]}
+            {activeView !== 'Dashboard' &&
+              activeView !== 'Signals' &&
+              activeView !== 'Orders' &&
+              activeView !== 'Portfolio' &&
+              activeView !== 'Pipeline' &&
+              activeView !== 'Settings' && (
+                <div className="glass-panel flex min-h-[520px] flex-1 items-center justify-center rounded-2xl p-10 text-center">
+                  <div>
+                    <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl bg-surface-2 text-muted">
+                      {NAV_ICONS[activeView]}
+                    </div>
+                    <p className="text-base font-semibold text-primary">{activeView}</p>
+                    <p className="mt-1.5 text-sm text-muted">This workspace is coming soon.</p>
                   </div>
-                  <p className="text-base font-semibold text-primary">{activeView}</p>
-                  <p className="mt-1.5 text-sm text-muted">This workspace is coming soon.</p>
                 </div>
-              </div>
-            )}
+              )}
           </main>
         </div>
       </div>
@@ -1178,7 +1437,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
             role="dialog"
             aria-modal="true"
             aria-label="Simulate signal"
-            onMouseDown={e => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
           >
             <div className="mb-5 flex items-center justify-between gap-3">
               <div>
@@ -1190,7 +1449,13 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                 className="flex h-8 w-8 items-center justify-center rounded-xl border border-line bg-surface-2 text-muted transition-all duration-150 hover:border-accent-border hover:text-accent"
                 aria-label="Close simulator"
               >
-                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <svg
+                  className="h-3.5 w-3.5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
                 </svg>
               </button>
@@ -1199,7 +1464,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
               variant="modal"
               onAuthRequired={() => {
                 setIsSimulatorOpen(false);
-                setAuthGateReason("auth_required");
+                setAuthGateReason('auth_required');
                 setAuthGateOpen(true);
               }}
             />

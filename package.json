@@ -1,0 +1,9 @@
+{
+  "name": "sentient-trader-root",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Root tasks and formatting commands for Sentient Trader",
+  "scripts": {
+    "format": "./format.sh"
+  }
+}

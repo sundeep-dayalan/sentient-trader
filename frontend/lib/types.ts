@@ -5,22 +5,22 @@
  */
 
 export interface PersonaOpinion {
-  name:       string;                               // "Momentum Trader" | "Value Investor" | "Risk Manager"
-  stance:     "BULLISH" | "BEARISH" | "NEUTRAL";
-  conviction: number;                               // 0.0–1.0, shown as a conviction bar in the UI
-  view:       string;                               // one-sentence headline take (always visible on card)
-  reasoning:  string;                               // full 2-3 sentence reasoning (shown below the take)
-  model?:     string | null;                        // LLM model that powered this persona
+  name: string; // "Momentum Trader" | "Value Investor" | "Risk Manager"
+  stance: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  conviction: number; // 0.0–1.0, shown as a conviction bar in the UI
+  view: string; // one-sentence headline take (always visible on card)
+  reasoning: string; // full 2-3 sentence reasoning (shown below the take)
+  model?: string | null; // LLM model that powered this persona
   catalyst_strength?: string | null;
-  evidence_quality?:  string | null;
-  time_horizon?:      string | null;
-  key_evidence?:      string[];
-  missing_data?:      string[];
+  evidence_quality?: string | null;
+  time_horizon?: string | null;
+  key_evidence?: string[];
+  missing_data?: string[];
 }
 
 export interface ArticleQuality {
   score?: number;
-  grade?: "HIGH" | "MEDIUM" | "LOW" | string;
+  grade?: 'HIGH' | 'MEDIUM' | 'LOW' | string;
   category?: string;
   reasons?: string[];
   flags?: string[];
@@ -30,7 +30,7 @@ export interface ArticleQuality {
 export interface RiskGateTrace {
   step?: string;
   inputs?: {
-    action?: "BUY" | "SELL" | "HOLD";
+    action?: 'BUY' | 'SELL' | 'HOLD';
     sentiment?: number;
     confidence?: number;
     calibrated_confidence?: number;
@@ -64,7 +64,7 @@ export interface RiskGateTrace {
 
 export interface LLMOperationTrace {
   step: string;
-  kind: "persona_analysis" | "portfolio_manager_synthesis" | string;
+  kind: 'persona_analysis' | 'portfolio_manager_synthesis' | string;
   response_schema?: string;
   messages?: Array<{ role: string; content: string }>;
   input?: unknown;
@@ -89,7 +89,7 @@ export interface DecisionTrace {
     sentiment?: number;
     confidence?: number;
     reasoning?: string;
-    action?: "BUY" | "SELL" | "HOLD";
+    action?: 'BUY' | 'SELL' | 'HOLD';
     thesis_quality?: string | null;
     primary_risk?: string | null;
   } | null;
@@ -106,16 +106,16 @@ export interface Trade {
   article_url: string | null;
   article_source?: string | null;
   article_id?: string | null;
-  sentiment_score: number;   // -1.0 to 1.0
-  confidence_score: number;  // 0.0 to 1.0
-  reasoning?: string;        // loaded with full trace, not feed rows
-  trade_action: "BUY" | "SELL" | "HOLD";
-  order_id: string | null;   // Alpaca order UUID — null if HOLD
+  sentiment_score: number; // -1.0 to 1.0
+  confidence_score: number; // 0.0 to 1.0
+  reasoning?: string; // loaded with full trace, not feed rows
+  trade_action: 'BUY' | 'SELL' | 'HOLD';
+  order_id: string | null; // Alpaca order UUID — null if HOLD
   quantity: number;
-  is_simulated: boolean;     // true when injected via the Simulate button
+  is_simulated: boolean; // true when injected via the Simulate button
   decision_trace?: DecisionTrace | PersonaOpinion[] | null; // generic Decision Core JSONB trace
-  committee_debate?: PersonaOpinion[] | null;              // legacy pre-008 rows
-  model?: string | null;                                   // legacy pre-008 synthesis model
+  committee_debate?: PersonaOpinion[] | null; // legacy pre-008 rows
+  model?: string | null; // legacy pre-008 synthesis model
 }
 
 export interface DashboardStats {
@@ -128,8 +128,8 @@ export interface DashboardStats {
 }
 
 export interface PortfolioPoint {
-  timestamp: string;  // ISO string
-  equity: number;     // dollar value
+  timestamp: string; // ISO string
+  equity: number; // dollar value
 }
 
 export interface PortfolioSummary {

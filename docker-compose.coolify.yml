@@ -5,32 +5,38 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     expose:
-      - "8000"
+      - '8000'
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
     environment:
-      PYTHONUNBUFFERED: "1"
-      PORT: "${PORT:-8000}"
-      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000}"
-      REDIS_STREAM_KEY: "${REDIS_STREAM_KEY:-market-news}"
-      REDIS_HOST: "${REDIS_HOST:-127.0.0.1}"
-      REDIS_PORT: "${REDIS_PORT:-6379}"
-      REDIS_DB: "${REDIS_DB:-0}"
-      REDIS_USERNAME: "${REDIS_USERNAME:-}"
-      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
-      SUPABASE_DB_SCHEMA: "${SUPABASE_DB_SCHEMA:-sentient_trader}"
-      SUPABASE_URL: "${SUPABASE_URL}"
-      SUPABASE_ANON_KEY: "${SUPABASE_ANON_KEY}"
-      SUPABASE_SERVICE_ROLE_KEY: "${SUPABASE_SERVICE_ROLE_KEY}"
-      SUPER_USER_EMAILS: "${SUPER_USER_EMAILS:-}"
-      ALPACA_API_KEY: "${ALPACA_API_KEY}"
-      ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY}"
-      ALPACA_BASE_URL: "${ALPACA_BASE_URL:-https://paper-api.alpaca.markets}"
-      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      PYTHONUNBUFFERED: '1'
+      PORT: '${PORT:-8000}'
+      CORS_ORIGINS: '${CORS_ORIGINS:-http://localhost:3000}'
+      REDIS_STREAM_KEY: '${REDIS_STREAM_KEY:-market-news}'
+      REDIS_HOST: '${REDIS_HOST:-127.0.0.1}'
+      REDIS_PORT: '${REDIS_PORT:-6379}'
+      REDIS_DB: '${REDIS_DB:-0}'
+      REDIS_USERNAME: '${REDIS_USERNAME:-}'
+      REDIS_PASSWORD: '${REDIS_PASSWORD:-}'
+      SUPABASE_DB_SCHEMA: '${SUPABASE_DB_SCHEMA:-sentient_trader}'
+      SUPABASE_URL: '${SUPABASE_URL}'
+      SUPABASE_ANON_KEY: '${SUPABASE_ANON_KEY}'
+      SUPABASE_SERVICE_ROLE_KEY: '${SUPABASE_SERVICE_ROLE_KEY}'
+      SUPER_USER_EMAILS: '${SUPER_USER_EMAILS:-}'
+      ALPACA_API_KEY: '${ALPACA_API_KEY}'
+      ALPACA_SECRET_KEY: '${ALPACA_SECRET_KEY}'
+      ALPACA_BASE_URL: '${ALPACA_BASE_URL:-https://paper-api.alpaca.markets}'
+      GROQ_API_KEY: '${GROQ_API_KEY:-}'
 
   ingestion:
     build:
@@ -38,21 +44,21 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "healthcheck.py"]
+      test: ['CMD', 'python', 'healthcheck.py']
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
     environment:
-      PYTHONUNBUFFERED: "1"
-      REDIS_STREAM_KEY: "${REDIS_STREAM_KEY:-market-news}"
-      REDIS_HOST: "${REDIS_HOST:-127.0.0.1}"
-      REDIS_PORT: "${REDIS_PORT:-6379}"
-      REDIS_DB: "${REDIS_DB:-0}"
-      REDIS_USERNAME: "${REDIS_USERNAME:-}"
-      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
-      ALPACA_API_KEY: "${ALPACA_API_KEY}"
-      ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY}"
+      PYTHONUNBUFFERED: '1'
+      REDIS_STREAM_KEY: '${REDIS_STREAM_KEY:-market-news}'
+      REDIS_HOST: '${REDIS_HOST:-127.0.0.1}'
+      REDIS_PORT: '${REDIS_PORT:-6379}'
+      REDIS_DB: '${REDIS_DB:-0}'
+      REDIS_USERNAME: '${REDIS_USERNAME:-}'
+      REDIS_PASSWORD: '${REDIS_PASSWORD:-}'
+      ALPACA_API_KEY: '${ALPACA_API_KEY}'
+      ALPACA_SECRET_KEY: '${ALPACA_SECRET_KEY}'
 
   agent:
     build:
@@ -60,22 +66,22 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "healthcheck.py"]
+      test: ['CMD', 'python', 'healthcheck.py']
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
     environment:
-      PYTHONUNBUFFERED: "1"
-      REDIS_STREAM_KEY: "${REDIS_STREAM_KEY:-market-news}"
-      REDIS_HOST: "${REDIS_HOST:-127.0.0.1}"
-      REDIS_PORT: "${REDIS_PORT:-6379}"
-      REDIS_DB: "${REDIS_DB:-0}"
-      REDIS_USERNAME: "${REDIS_USERNAME:-}"
-      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
-      SUPABASE_DB_SCHEMA: "${SUPABASE_DB_SCHEMA:-sentient_trader}"
-      SUPABASE_URL: "${SUPABASE_URL}"
-      SUPABASE_SERVICE_ROLE_KEY: "${SUPABASE_SERVICE_ROLE_KEY}"
-      ALPACA_API_KEY: "${ALPACA_API_KEY}"
-      ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY}"
-      GROQ_API_KEY: "${GROQ_API_KEY}"
+      PYTHONUNBUFFERED: '1'
+      REDIS_STREAM_KEY: '${REDIS_STREAM_KEY:-market-news}'
+      REDIS_HOST: '${REDIS_HOST:-127.0.0.1}'
+      REDIS_PORT: '${REDIS_PORT:-6379}'
+      REDIS_DB: '${REDIS_DB:-0}'
+      REDIS_USERNAME: '${REDIS_USERNAME:-}'
+      REDIS_PASSWORD: '${REDIS_PASSWORD:-}'
+      SUPABASE_DB_SCHEMA: '${SUPABASE_DB_SCHEMA:-sentient_trader}'
+      SUPABASE_URL: '${SUPABASE_URL}'
+      SUPABASE_SERVICE_ROLE_KEY: '${SUPABASE_SERVICE_ROLE_KEY}'
+      ALPACA_API_KEY: '${ALPACA_API_KEY}'
+      ALPACA_SECRET_KEY: '${ALPACA_SECRET_KEY}'
+      GROQ_API_KEY: '${GROQ_API_KEY}'

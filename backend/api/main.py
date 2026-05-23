@@ -40,7 +40,9 @@ app = FastAPI(title="Sentient Trader Backend API")
 
 cors_origins = [
     origin.strip()
-    for origin in os.environ.get("CORS_ORIGINS", os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")).split(",")
+    for origin in os.environ.get(
+        "CORS_ORIGINS", os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
+    ).split(",")
     if origin.strip()
 ]
 app.add_middleware(
@@ -55,7 +57,9 @@ ServiceStatus = Literal["ok", "stale", "error", "unknown"]
 UserTier = Literal["anonymous", "social", "super"]
 
 ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-GROQ_MODELS_URL = os.environ.get("GROQ_MODELS_URL", "https://api.groq.com/openai/v1/models")
+GROQ_MODELS_URL = os.environ.get(
+    "GROQ_MODELS_URL", "https://api.groq.com/openai/v1/models"
+)
 STREAM_KEY = os.environ.get("REDIS_STREAM_KEY", "market-news")
 STREAM_MAX_LEN = 1000
 PAGE_SIZE = 20
@@ -66,11 +70,15 @@ TRADE_SUMMARY_SELECT = (
     "id, created_at, ticker, headline, article_url, sentiment_score, "
     "confidence_score, trade_action, order_id, quantity, is_simulated"
 )
-LEGACY_TRADE_DETAIL_SELECT = f"{TRADE_SUMMARY_SELECT}, reasoning, article_source, article_id, decision_trace"
+LEGACY_TRADE_DETAIL_SELECT = (
+    f"{TRADE_SUMMARY_SELECT}, reasoning, article_source, article_id, decision_trace"
+)
 TRACE_DETAIL_SELECT = "decision_trace, reasoning, article_source, article_id"
 TRADE_STATS_SELECT = "trade_action, order_id, sentiment_score"
 
-UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.I)
+UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.I
+)
 TICKER_REGEX = re.compile(r"^[A-Z]{1,6}$")
 ALLOWED_ORDER_STATUSES = {"open", "closed", "all"}
 RANGE_CONFIG = {
@@ -169,7 +177,9 @@ def get_supabase():
         _supabase_client = create_client(
             supabase_url=os.environ["SUPABASE_URL"],
             supabase_key=os.environ["SUPABASE_SERVICE_ROLE_KEY"],
-            options=ClientOptions(schema=os.environ.get("SUPABASE_DB_SCHEMA", "public")),
+            options=ClientOptions(
+                schema=os.environ.get("SUPABASE_DB_SCHEMA", "public")
+            ),
         )
     return _supabase_client
 
@@ -189,7 +199,9 @@ def get_user_from_token(token: str) -> UserInfo:
     supabase_url = os.environ["SUPABASE_URL"].rstrip("/")
     anon_key = get_supabase_anon_key()
     if not anon_key:
-        raise HTTPException(status_code=500, detail="SUPABASE_ANON_KEY is not configured")
+        raise HTTPException(
+            status_code=500, detail="SUPABASE_ANON_KEY is not configured"
+        )
 
     try:
         with httpx.Client(timeout=5) as client:
@@ -201,7 +213,9 @@ def get_user_from_token(token: str) -> UserInfo:
                 },
             )
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=503, detail="Could not validate Supabase session") from exc
+        raise HTTPException(
+            status_code=503, detail="Could not validate Supabase session"
+        ) from exc
 
     if response.status_code != 200:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
@@ -214,7 +228,9 @@ def get_user_from_token(token: str) -> UserInfo:
     )
 
 
-def get_optional_user(authorization: str | None = Header(default=None)) -> UserInfo | None:
+def get_optional_user(
+    authorization: str | None = Header(default=None),
+) -> UserInfo | None:
     token = auth_token(authorization)
     if not token:
         return None
@@ -224,7 +240,9 @@ def get_optional_user(authorization: str | None = Header(default=None)) -> UserI
 def require_user(authorization: str | None = Header(default=None)) -> UserInfo:
     token = auth_token(authorization)
     if not token:
-        raise HTTPException(status_code=401, detail="Authentication required. Please sign in.")
+        raise HTTPException(
+            status_code=401, detail="Authentication required. Please sign in."
+        )
     return get_user_from_token(token)
 
 
@@ -239,7 +257,9 @@ def is_super_user(user: UserInfo) -> bool:
 
 def require_super_user(user: UserInfo = Depends(require_user)) -> UserInfo:
     if user.is_anonymous:
-        raise HTTPException(status_code=403, detail="Please sign in to access this feature.")
+        raise HTTPException(
+            status_code=403, detail="Please sign in to access this feature."
+        )
     if not is_super_user(user):
         raise HTTPException(
             status_code=403,
@@ -286,7 +306,11 @@ def number_value(value: Any) -> float | None:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if number == number and number not in (float("inf"), float("-inf")) else None
+    return (
+        number
+        if number == number and number not in (float("inf"), float("-inf"))
+        else None
+    )
 
 
 def string_value(value: Any) -> str | None:
@@ -297,7 +321,11 @@ def is_risk_gated(row: dict[str, Any]) -> bool:
     trace = row.get("decision_trace")
     if isinstance(trace, dict):
         risk_gate = trace.get("risk_gate")
-        if isinstance(risk_gate, dict) and risk_gate.get("should_trade") is False and not str(row.get("order_id") or "").strip():
+        if (
+            isinstance(risk_gate, dict)
+            and risk_gate.get("should_trade") is False
+            and not str(row.get("order_id") or "").strip()
+        ):
             return True
     return row.get("trade_action") == "HOLD"
 
@@ -348,7 +376,9 @@ def alpaca_fetch(path: str) -> Any:
     with httpx.Client(timeout=15) as client:
         response = client.get(f"{ALPACA_BASE_URL}{path}", headers=alpaca_headers())
     if response.status_code >= 400:
-        raise RuntimeError(f"Alpaca API returned HTTP {response.status_code} for {path}")
+        raise RuntimeError(
+            f"Alpaca API returned HTTP {response.status_code} for {path}"
+        )
     return response.json()
 
 
@@ -390,27 +420,45 @@ def validate_simulation(payload: SimulateRequest) -> tuple[str, str, str]:
     source = (payload.source or "simulation").strip() or "simulation"
 
     if not TICKER_REGEX.match(ticker):
-        raise HTTPException(status_code=400, detail="Invalid ticker. Must be 1-6 uppercase letters.")
+        raise HTTPException(
+            status_code=400, detail="Invalid ticker. Must be 1-6 uppercase letters."
+        )
     if len(headline) < 5:
-        raise HTTPException(status_code=400, detail="Headline is required and must be at least 5 characters.")
+        raise HTTPException(
+            status_code=400,
+            detail="Headline is required and must be at least 5 characters.",
+        )
     if len(headline) > 500:
-        raise HTTPException(status_code=400, detail="Headline must be 500 characters or fewer.")
+        raise HTTPException(
+            status_code=400, detail="Headline must be 500 characters or fewer."
+        )
     if payload.summary and len(payload.summary) > 2000:
-        raise HTTPException(status_code=400, detail="Summary must be 2000 characters or fewer.")
+        raise HTTPException(
+            status_code=400, detail="Summary must be 2000 characters or fewer."
+        )
     if len(source) > 200:
-        raise HTTPException(status_code=400, detail="Source must be 200 characters or fewer.")
+        raise HTTPException(
+            status_code=400, detail="Source must be 200 characters or fewer."
+        )
     if payload.article_url and len(payload.article_url) > 2048:
-        raise HTTPException(status_code=400, detail="Article URL must be 2048 characters or fewer.")
+        raise HTTPException(
+            status_code=400, detail="Article URL must be 2048 characters or fewer."
+        )
     if contains_injection_marker(headline) or (
         payload.summary and contains_injection_marker(payload.summary)
     ):
-        raise HTTPException(status_code=400, detail="Input contains disallowed phrases.")
+        raise HTTPException(
+            status_code=400, detail="Input contains disallowed phrases."
+        )
 
     return ticker, headline, source
 
 
 def model_size_billions(model_id: str) -> float:
-    sizes = [float(match) for match in re.findall(r"(\d+(?:\.\d+)?)\s*b(?:\b|-|_)", model_id, flags=re.I)]
+    sizes = [
+        float(match)
+        for match in re.findall(r"(\d+(?:\.\d+)?)\s*b(?:\b|-|_)", model_id, flags=re.I)
+    ]
     return max(sizes) if sizes else 0
 
 
@@ -443,17 +491,23 @@ def score_groq_model(model: dict[str, Any]) -> float:
 
 
 def format_model_label(model_id: str) -> str:
-    return " ".join(part.capitalize() if part.upper() != part else part for part in re.split(r"[-_]", model_id.split("/")[-1]) if part)
+    return " ".join(
+        part.capitalize() if part.upper() != part else part
+        for part in re.split(r"[-_]", model_id.split("/")[-1])
+        if part
+    )
 
 
 def fallback_auto_cascade() -> list[dict[str, str]]:
-    return [{
-        "id": "auto-ranked-groq-models",
-        "label": "Auto-ranked Groq models",
-        "reqDay": "Discovered by backend agent",
-        "tpm": "Live active model list",
-        "quality": "high",
-    }]
+    return [
+        {
+            "id": "auto-ranked-groq-models",
+            "label": "Auto-ranked Groq models",
+            "reqDay": "Discovered by backend agent",
+            "tpm": "Live active model list",
+            "quality": "high",
+        }
+    ]
 
 
 def get_model_cascade() -> list[dict[str, str]]:
@@ -464,7 +518,10 @@ def get_model_cascade() -> list[dict[str, str]]:
         with httpx.Client(timeout=5) as client:
             response = client.get(
                 GROQ_MODELS_URL,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
             )
         if response.status_code >= 400:
             return fallback_auto_cascade()
@@ -476,7 +533,9 @@ def get_model_cascade() -> list[dict[str, str]]:
             ],
             key=lambda item: (-item[1], str(item[0].get("id") or "")),
         )
-        ranked = [(model, score) for model, score in ranked if score > 0 and model.get("id")][:8]
+        ranked = [
+            (model, score) for model, score in ranked if score > 0 and model.get("id")
+        ][:8]
         if not ranked:
             return fallback_auto_cascade()
         return [
@@ -508,11 +567,19 @@ def auth_me(user: UserInfo | None = Depends(get_optional_user)) -> dict[str, boo
 @app.get("/trades")
 def trades(before: str | None = None, after: str | None = None) -> dict[str, Any]:
     if before and after:
-        raise HTTPException(status_code=400, detail="Use either 'before' or 'after', not both.")
+        raise HTTPException(
+            status_code=400, detail="Use either 'before' or 'after', not both."
+        )
     if before and not valid_iso_timestamp(before):
-        raise HTTPException(status_code=400, detail="Invalid 'before' parameter. Must be a valid ISO 8601 timestamp.")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid 'before' parameter. Must be a valid ISO 8601 timestamp.",
+        )
     if after and not valid_iso_timestamp(after):
-        raise HTTPException(status_code=400, detail="Invalid 'after' parameter. Must be a valid ISO 8601 timestamp.")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid 'after' parameter. Must be a valid ISO 8601 timestamp.",
+        )
 
     query = (
         get_supabase()
@@ -539,7 +606,14 @@ def trade_detail(trade_id: str) -> dict[str, Any]:
 
     sb = get_supabase()
     try:
-        trade = sb.table("trades").select(TRADE_SUMMARY_SELECT).eq("id", trade_id).single().execute().data
+        trade = (
+            sb.table("trades")
+            .select(TRADE_SUMMARY_SELECT)
+            .eq("id", trade_id)
+            .single()
+            .execute()
+            .data
+        )
     except Exception as exc:
         raise HTTPException(status_code=404, detail="Trade not found.") from exc
 
@@ -570,7 +644,8 @@ def trade_detail(trade_id: str) -> dict[str, Any]:
     return {
         "trade": {
             **trade,
-            "reasoning": (trace_row or {}).get("reasoning") or reasoning_from_trace((trace_row or {}).get("decision_trace")),
+            "reasoning": (trace_row or {}).get("reasoning")
+            or reasoning_from_trace((trace_row or {}).get("decision_trace")),
             "article_source": (trace_row or {}).get("article_source"),
             "article_id": (trace_row or {}).get("article_id"),
             "decision_trace": (trace_row or {}).get("decision_trace"),
@@ -580,16 +655,27 @@ def trade_detail(trade_id: str) -> dict[str, Any]:
 
 @app.get("/stats")
 def stats() -> dict[str, Any]:
-    result = get_supabase().table("trades").select(TRADE_STATS_SELECT).limit(10000).execute()
+    result = (
+        get_supabase().table("trades").select(TRADE_STATS_SELECT).limit(10000).execute()
+    )
     return {"stats": compute_dashboard_stats(result.data or []), "fetchedAt": now_iso()}
 
 
 @app.get("/agent-config")
 def agent_config() -> dict[str, Any]:
-    result = get_supabase().table("agent_config").select("config").eq("id", 1).single().execute()
+    result = (
+        get_supabase()
+        .table("agent_config")
+        .select("config")
+        .eq("id", 1)
+        .single()
+        .execute()
+    )
     row = result.data.get("config") if result.data else None
     if not row:
-        raise HTTPException(status_code=500, detail="Failed to load agent configuration.")
+        raise HTTPException(
+            status_code=500, detail="Failed to load agent configuration."
+        )
     return {
         "thresholds": {
             "buy_sentiment": row.get("buy_sentiment_threshold"),
@@ -597,7 +683,10 @@ def agent_config() -> dict[str, Any]:
             "confidence": row.get("confidence_threshold"),
         },
         "execution": {"order_qty": row.get("order_qty")},
-        "model": {"cascade": get_model_cascade(), "override": row.get("model_override")},
+        "model": {
+            "cascade": get_model_cascade(),
+            "override": row.get("model_override"),
+        },
         "prompts": {
             "momentum": row.get("momentum_system_prompt"),
             "value": row.get("value_system_prompt"),
@@ -609,9 +698,15 @@ def agent_config() -> dict[str, Any]:
 
 
 @app.post("/agent-config")
-def update_agent_config(body: dict[str, Any], _user: UserInfo = Depends(require_super_user)) -> dict[str, bool]:
-    thresholds = body.get("thresholds") if isinstance(body.get("thresholds"), dict) else None
-    execution = body.get("execution") if isinstance(body.get("execution"), dict) else None
+def update_agent_config(
+    body: dict[str, Any], _user: UserInfo = Depends(require_super_user)
+) -> dict[str, bool]:
+    thresholds = (
+        body.get("thresholds") if isinstance(body.get("thresholds"), dict) else None
+    )
+    execution = (
+        body.get("execution") if isinstance(body.get("execution"), dict) else None
+    )
     model = body.get("model") if isinstance(body.get("model"), dict) else None
     prompts = body.get("prompts") if isinstance(body.get("prompts"), dict) else None
 
@@ -620,21 +715,32 @@ def update_agent_config(body: dict[str, Any], _user: UserInfo = Depends(require_
         sell = thresholds.get("sell_sentiment")
         confidence = thresholds.get("confidence")
         if buy is not None and not -1 <= float(buy) <= 1:
-            raise HTTPException(status_code=400, detail="buy_sentiment must be between -1 and 1")
+            raise HTTPException(
+                status_code=400, detail="buy_sentiment must be between -1 and 1"
+            )
         if sell is not None and not -1 <= float(sell) <= 1:
-            raise HTTPException(status_code=400, detail="sell_sentiment must be between -1 and 1")
+            raise HTTPException(
+                status_code=400, detail="sell_sentiment must be between -1 and 1"
+            )
         if confidence is not None and not 0 <= float(confidence) <= 1:
-            raise HTTPException(status_code=400, detail="confidence must be between 0 and 1")
+            raise HTTPException(
+                status_code=400, detail="confidence must be between 0 and 1"
+            )
 
     if execution and execution.get("order_qty") is not None:
         qty = execution["order_qty"]
         if not isinstance(qty, int) or qty < 1 or qty > 100:
-            raise HTTPException(status_code=400, detail="order_qty must be an integer between 1 and 100")
+            raise HTTPException(
+                status_code=400, detail="order_qty must be an integer between 1 and 100"
+            )
 
     if prompts:
         for key, value in prompts.items():
             if isinstance(value, str) and len(value) > MAX_PROMPT_LENGTH:
-                raise HTTPException(status_code=400, detail=f'Prompt "{key}" exceeds maximum length of {MAX_PROMPT_LENGTH} characters')
+                raise HTTPException(
+                    status_code=400,
+                    detail=f'Prompt "{key}" exceeds maximum length of {MAX_PROMPT_LENGTH} characters',
+                )
 
     patch: dict[str, Any] = {}
     if thresholds:
@@ -659,7 +765,9 @@ def update_agent_config(body: dict[str, Any], _user: UserInfo = Depends(require_
             patch["synthesis_system_prompt"] = prompts["synthesis"]
 
     sb = get_supabase()
-    existing = sb.table("agent_config").select("config").eq("id", 1).single().execute().data
+    existing = (
+        sb.table("agent_config").select("config").eq("id", 1).single().execute().data
+    )
     merged = {**(existing.get("config") if existing else {}), **patch}
     result = (
         sb.table("agent_config")
@@ -668,12 +776,16 @@ def update_agent_config(body: dict[str, Any], _user: UserInfo = Depends(require_
         .execute()
     )
     if not result.data:
-        raise HTTPException(status_code=500, detail="Failed to update configuration. Please try again.")
+        raise HTTPException(
+            status_code=500, detail="Failed to update configuration. Please try again."
+        )
     return {"ok": True}
 
 
 @app.get("/orders")
-def orders(status: str = "all", limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+def orders(
+    status: str = "all", limit: int = Query(default=100, ge=1, le=500)
+) -> dict[str, Any]:
     try:
         safe_status = status if status in ALLOWED_ORDER_STATUSES else "all"
         query = f"status={safe_status}&limit={limit}&direction=desc&nested=true"
@@ -683,19 +795,40 @@ def orders(status: str = "all", limit: int = Query(default=100, ge=1, le=500)) -
             alpaca_fetch(f"/v2/orders?{query}"),
         )
         account.pop("account_number", None)
-        return {"account": account, "positions": positions, "orders": order_rows, "fetchedAt": now_iso()}
+        return {
+            "account": account,
+            "positions": positions,
+            "orders": order_rows,
+            "fetchedAt": now_iso(),
+        }
     except Exception as exc:
         log.exception("Orders fetch error")
-        return {"account": None, "positions": [], "orders": [], "fetchedAt": now_iso(), "error": str(exc)}
+        return {
+            "account": None,
+            "positions": [],
+            "orders": [],
+            "fetchedAt": now_iso(),
+            "error": str(exc),
+        }
 
 
 @app.post("/orders/cancel")
-def cancel_orders(payload: CancelOrdersRequest, _user: UserInfo = Depends(require_super_user)) -> dict[str, Any]:
-    order_ids = list(dict.fromkeys(order_id for order_id in payload.orderIds if isinstance(order_id, str) and order_id))
+def cancel_orders(
+    payload: CancelOrdersRequest, _user: UserInfo = Depends(require_super_user)
+) -> dict[str, Any]:
+    order_ids = list(
+        dict.fromkeys(
+            order_id
+            for order_id in payload.orderIds
+            if isinstance(order_id, str) and order_id
+        )
+    )
     if not order_ids:
         raise HTTPException(status_code=400, detail="No order ids provided")
     if len(order_ids) > MAX_ORDER_IDS:
-        raise HTTPException(status_code=400, detail=f"Too many order IDs. Maximum is {MAX_ORDER_IDS}.")
+        raise HTTPException(
+            status_code=400, detail=f"Too many order IDs. Maximum is {MAX_ORDER_IDS}."
+        )
 
     results = []
     with httpx.Client(timeout=15) as client:
@@ -705,11 +838,29 @@ def cancel_orders(payload: CancelOrdersRequest, _user: UserInfo = Depends(requir
                 headers=alpaca_headers(),
             )
             if response.status_code == 204:
-                results.append({"id": order_id, "ok": True, "status": 204, "message": "Cancel request accepted"})
+                results.append(
+                    {
+                        "id": order_id,
+                        "ok": True,
+                        "status": 204,
+                        "message": "Cancel request accepted",
+                    }
+                )
                 continue
             body = response.json() if response.content else {}
-            message = body.get("message") if isinstance(body, dict) and isinstance(body.get("message"), str) else f"Alpaca returned HTTP {response.status_code}"
-            results.append({"id": order_id, "ok": False, "status": response.status_code, "message": message})
+            message = (
+                body.get("message")
+                if isinstance(body, dict) and isinstance(body.get("message"), str)
+                else f"Alpaca returned HTTP {response.status_code}"
+            )
+            results.append(
+                {
+                    "id": order_id,
+                    "ok": False,
+                    "status": response.status_code,
+                    "message": message,
+                }
+            )
 
     return {
         "results": results,
@@ -724,44 +875,102 @@ def portfolio(range: str = "D") -> dict[str, Any]:
         range_key = range if range in RANGE_CONFIG else "D"
         config = RANGE_CONFIG[range_key]
         query = f"period={config['period']}&timeframe={config['timeframe']}&intraday_reporting=extended_hours"
-        data, account = alpaca_fetch(f"/v2/account/portfolio/history?{query}"), alpaca_fetch("/v2/account")
+        data, account = alpaca_fetch(
+            f"/v2/account/portfolio/history?{query}"
+        ), alpaca_fetch("/v2/account")
 
-        timestamps = data.get("timestamp") if isinstance(data.get("timestamp"), list) else []
+        timestamps = (
+            data.get("timestamp") if isinstance(data.get("timestamp"), list) else []
+        )
         equities = data.get("equity") if isinstance(data.get("equity"), list) else []
-        profit_loss = data.get("profit_loss") if isinstance(data.get("profit_loss"), list) else []
-        profit_loss_pct = data.get("profit_loss_pct") if isinstance(data.get("profit_loss_pct"), list) else []
+        profit_loss = (
+            data.get("profit_loss") if isinstance(data.get("profit_loss"), list) else []
+        )
+        profit_loss_pct = (
+            data.get("profit_loss_pct")
+            if isinstance(data.get("profit_loss_pct"), list)
+            else []
+        )
 
         history = []
         for index, ts in enumerate(timestamps):
             equity = number_value(equities[index] if index < len(equities) else None)
             if equity is not None:
-                history.append({"timestamp": datetime.fromtimestamp(ts, timezone.utc).isoformat().replace("+00:00", "Z"), "equity": equity})
+                history.append(
+                    {
+                        "timestamp": datetime.fromtimestamp(ts, timezone.utc)
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                        "equity": equity,
+                    }
+                )
 
-        live_equity = number_value(account.get("portfolio_value") or account.get("equity"))
+        live_equity = number_value(
+            account.get("portfolio_value") or account.get("equity")
+        )
         latest = history[-1] if history else None
         if live_equity and live_equity > 0:
-            latest_age_ms = time.time() * 1000 - datetime.fromisoformat(latest["timestamp"].replace("Z", "+00:00")).timestamp() * 1000 if latest else float("inf")
-            value_changed = abs(latest["equity"] - live_equity) >= 0.005 if latest else True
+            latest_age_ms = (
+                time.time() * 1000
+                - datetime.fromisoformat(
+                    latest["timestamp"].replace("Z", "+00:00")
+                ).timestamp()
+                * 1000
+                if latest
+                else float("inf")
+            )
+            value_changed = (
+                abs(latest["equity"] - live_equity) >= 0.005 if latest else True
+            )
             if not latest or latest_age_ms > 45_000 or value_changed:
                 history.append({"timestamp": now_iso(), "equity": live_equity})
 
         base_value = number_value(data.get("base_value"))
         raw_profit_loss = number_value(profit_loss[-1] if profit_loss else None)
-        raw_profit_loss_pct = number_value(profit_loss_pct[-1] if profit_loss_pct else None)
+        raw_profit_loss_pct = number_value(
+            profit_loss_pct[-1] if profit_loss_pct else None
+        )
         raw_latest_equity = number_value(equities[-1] if equities else None)
-        current_equity = live_equity if live_equity and live_equity > 0 else history[-1]["equity"] if history else 0
-        derived_profit_loss = current_equity - base_value if base_value is not None else raw_profit_loss or 0
-        derived_profit_loss_pct = derived_profit_loss / base_value if base_value and base_value > 0 else raw_profit_loss_pct or 0
-        live_value_changed = raw_latest_equity is not None and abs(current_equity - raw_latest_equity) >= 0.005
+        current_equity = (
+            live_equity
+            if live_equity and live_equity > 0
+            else history[-1]["equity"] if history else 0
+        )
+        derived_profit_loss = (
+            current_equity - base_value
+            if base_value is not None
+            else raw_profit_loss or 0
+        )
+        derived_profit_loss_pct = (
+            derived_profit_loss / base_value
+            if base_value and base_value > 0
+            else raw_profit_loss_pct or 0
+        )
+        live_value_changed = (
+            raw_latest_equity is not None
+            and abs(current_equity - raw_latest_equity) >= 0.005
+        )
 
         return {
             "history": history,
             "summary": {
                 "equity": current_equity,
-                "profitLoss": derived_profit_loss if live_value_changed else raw_profit_loss or derived_profit_loss,
-                "profitLossPct": derived_profit_loss_pct if live_value_changed else raw_profit_loss_pct or derived_profit_loss_pct,
+                "profitLoss": (
+                    derived_profit_loss
+                    if live_value_changed
+                    else raw_profit_loss or derived_profit_loss
+                ),
+                "profitLossPct": (
+                    derived_profit_loss_pct
+                    if live_value_changed
+                    else raw_profit_loss_pct or derived_profit_loss_pct
+                ),
                 "baseValue": base_value,
-                "baseValueAsOf": data.get("base_value_asof") if isinstance(data.get("base_value_asof"), str) else None,
+                "baseValueAsOf": (
+                    data.get("base_value_asof")
+                    if isinstance(data.get("base_value_asof"), str)
+                    else None
+                ),
             },
             "account": {
                 "id": string_value(account.get("id")),
@@ -785,9 +994,15 @@ def status() -> dict[str, Any]:
 
     try:
         with httpx.Client(timeout=5) as client:
-            alpaca_res = client.get(f"{ALPACA_BASE_URL}/v2/clock", headers=alpaca_headers())
+            alpaca_res = client.get(
+                f"{ALPACA_BASE_URL}/v2/clock", headers=alpaca_headers()
+            )
         alpaca_status: ServiceStatus = "ok" if alpaca_res.status_code < 400 else "error"
-        details["alpaca"] = "Paper trading clock reachable." if alpaca_status == "ok" else f"Alpaca returned HTTP {alpaca_res.status_code}."
+        details["alpaca"] = (
+            "Paper trading clock reachable."
+            if alpaca_status == "ok"
+            else f"Alpaca returned HTTP {alpaca_res.status_code}."
+        )
     except Exception:
         alpaca_status = "error"
         details["alpaca"] = "Could not reach Alpaca paper API."
@@ -808,7 +1023,9 @@ def status() -> dict[str, Any]:
     except Exception as exc:
         supabase_status = "error"
         last_trade_at = None
-        details["supabase"] = status_error_detail("Could not query Supabase trades table", exc)
+        details["supabase"] = status_error_detail(
+            "Could not query Supabase trades table", exc
+        )
 
     try:
         redis = get_redis()
@@ -816,26 +1033,44 @@ def status() -> dict[str, Any]:
         agent_state = parse_agent_state(redis.get("agent:state"))
         redis_status_value: ServiceStatus = "ok"
         details["redis"] = "Redis reachable."
-        groq_status: ServiceStatus = agent_state.get("groq", "unknown") if agent_state else "unknown"
-        details["groq"] = (agent_state or {}).get("groq_detail") or "Backend agent has not published Groq provider status yet."
+        groq_status: ServiceStatus = (
+            agent_state.get("groq", "unknown") if agent_state else "unknown"
+        )
+        details["groq"] = (agent_state or {}).get(
+            "groq_detail"
+        ) or "Backend agent has not published Groq provider status yet."
         agent_status: ServiceStatus = "unknown"
         last_heartbeat_at = None
 
         if heartbeat_str:
             heartbeat = int(heartbeat_str)
             heartbeat_age = time.time() - heartbeat
-            last_heartbeat_at = datetime.fromtimestamp(heartbeat, timezone.utc).isoformat().replace("+00:00", "Z")
+            last_heartbeat_at = (
+                datetime.fromtimestamp(heartbeat, timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
             phase = agent_state.get("phase") if agent_state else None
-            phase_detail = f": {agent_state.get('detail')}" if agent_state and agent_state.get("detail") else ""
+            phase_detail = (
+                f": {agent_state.get('detail')}"
+                if agent_state and agent_state.get("detail")
+                else ""
+            )
             if heartbeat_age < 60 and phase == "polling":
                 agent_status = "ok"
                 details["agent"] = "Worker heartbeat is fresh and polling Redis stream."
             elif heartbeat_age < 180:
                 agent_status = "stale"
-                details["agent"] = f"Worker heartbeat is fresh but phase is {phase}{phase_detail}." if phase else "Worker heartbeat is fresh, but no phase state was published."
+                details["agent"] = (
+                    f"Worker heartbeat is fresh but phase is {phase}{phase_detail}."
+                    if phase
+                    else "Worker heartbeat is fresh, but no phase state was published."
+                )
             else:
                 agent_status = "error"
-                details["agent"] = f"Worker heartbeat is stale by {int(heartbeat_age // 60)} minutes."
+                details["agent"] = (
+                    f"Worker heartbeat is stale by {int(heartbeat_age // 60)} minutes."
+                )
         else:
             agent_status = "error"
             details["agent"] = "No agent heartbeat found in Redis."
@@ -845,8 +1080,12 @@ def status() -> dict[str, Any]:
         groq_status = "unknown"
         last_heartbeat_at = None
         details["redis"] = status_error_detail("Could not read Redis heartbeat", exc)
-        details["agent"] = "Agent status depends on Redis heartbeat, which could not be read."
-        details["groq"] = "Groq status depends on backend agent state, which could not be read from Redis."
+        details["agent"] = (
+            "Agent status depends on Redis heartbeat, which could not be read."
+        )
+        details["groq"] = (
+            "Groq status depends on backend agent state, which could not be read from Redis."
+        )
 
     return {
         "alpaca": alpaca_status,
@@ -862,7 +1101,9 @@ def status() -> dict[str, Any]:
 
 
 @app.post("/simulate")
-def simulate(payload: SimulateRequest, user: UserInfo = Depends(require_user)) -> dict[str, Any]:
+def simulate(
+    payload: SimulateRequest, user: UserInfo = Depends(require_user)
+) -> dict[str, Any]:
     ticker, headline, source = validate_simulation(payload)
     rate_limit = check_simulate_limit(user.id, user_tier(user))
     if not rate_limit["success"]:
@@ -880,7 +1121,9 @@ def simulate(payload: SimulateRequest, user: UserInfo = Depends(require_user)) -
     if payload.article_url:
         message["article_url"] = payload.article_url.strip()
 
-    entry_id = get_redis().xadd(STREAM_KEY, message, id="*", maxlen=STREAM_MAX_LEN, approximate=True)
+    entry_id = get_redis().xadd(
+        STREAM_KEY, message, id="*", maxlen=STREAM_MAX_LEN, approximate=True
+    )
     return {
         "success": True,
         "ticker": ticker,

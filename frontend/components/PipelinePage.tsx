@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   ReactFlow,
   Background,
@@ -11,9 +11,9 @@ import {
   MarkerType,
   useNodesState,
   useEdgesState,
-} from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
-import { DashboardStats, Trade } from "@/lib/types";
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import { DashboardStats, Trade } from '@/lib/types';
 
 // --- CUSTOM NODE ---
 
@@ -31,8 +31,8 @@ function PipelineNode({ data, isConnectable }: NodeProps<Node<PipelineNodeData>>
     <div
       className={`relative min-w-[200px] rounded-2xl border border-[var(--dashboard-border)] p-4 shadow-[var(--dashboard-shadow)] backdrop-blur-md transition-all duration-300 ${
         data.isActive
-          ? "border-accent bg-accent/10 shadow-[0_0_20px_rgba(var(--accent-rgb),0.2)]"
-          : "bg-[var(--dashboard-card)]"
+          ? 'border-accent bg-accent/10 shadow-[0_0_20px_rgba(var(--accent-rgb),0.2)]'
+          : 'bg-[var(--dashboard-card)]'
       }`}
     >
       {/* Top Handle */}
@@ -47,12 +47,21 @@ function PipelineNode({ data, isConnectable }: NodeProps<Node<PipelineNodeData>>
         <div
           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${
             data.isActive
-              ? "border-accent-border bg-accent text-white"
-              : "border-[var(--dashboard-border)] bg-[var(--dashboard-control)] text-[var(--dashboard-text)]"
+              ? 'border-accent-border bg-accent text-white'
+              : 'border-[var(--dashboard-border)] bg-[var(--dashboard-control)] text-[var(--dashboard-text)]'
           } transition-colors duration-300`}
         >
           {data.icon || (
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
             </svg>
           )}
@@ -61,7 +70,10 @@ function PipelineNode({ data, isConnectable }: NodeProps<Node<PipelineNodeData>>
           <p className="text-sm font-bold text-[var(--dashboard-text)]">{data.label}</p>
           {data.value !== undefined && (
             <p className="mt-0.5 font-mono text-xs font-semibold text-accent">
-              {data.value} <span className="text-[10px] font-normal text-[var(--dashboard-subtle)]">{data.subValue}</span>
+              {data.value}{' '}
+              <span className="text-[10px] font-normal text-[var(--dashboard-subtle)]">
+                {data.subValue}
+              </span>
             </p>
           )}
         </div>
@@ -93,14 +105,23 @@ const nodeTypes = {
 
 const initialNodes: Node<PipelineNodeData>[] = [
   {
-    id: "ingestion",
-    type: "custom",
+    id: 'ingestion',
+    type: 'custom',
     position: { x: 350, y: 50 },
     data: {
-      label: "Data Ingestion",
-      subValue: "News & Events",
+      label: 'Data Ingestion',
+      subValue: 'News & Events',
       icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8l-4 4v14a2 2 0 0 0 2 2z" />
           <path d="M14 2v4a2 2 0 0 0 2 2h4" />
         </svg>
@@ -108,28 +129,46 @@ const initialNodes: Node<PipelineNodeData>[] = [
     },
   },
   {
-    id: "stream",
-    type: "custom",
+    id: 'stream',
+    type: 'custom',
     position: { x: 350, y: 180 },
     data: {
-      label: "Event Stream",
-      subValue: "Valkey / Redis",
+      label: 'Event Stream',
+      subValue: 'Valkey / Redis',
       icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
         </svg>
       ),
     },
   },
   {
-    id: "agent",
-    type: "custom",
+    id: 'agent',
+    type: 'custom',
     position: { x: 350, y: 310 },
     data: {
-      label: "Agent Analysis",
-      subValue: "Articles analyzed",
+      label: 'Agent Analysis',
+      subValue: 'Articles analyzed',
       icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <circle cx="12" cy="12" r="10" />
           <path d="M12 16v-4" />
           <path d="M12 8h.01" />
@@ -138,28 +177,46 @@ const initialNodes: Node<PipelineNodeData>[] = [
     },
   },
   {
-    id: "risk",
-    type: "custom",
+    id: 'risk',
+    type: 'custom',
     position: { x: 350, y: 440 },
     data: {
-      label: "Risk Gate",
-      subValue: "Trades blocked",
+      label: 'Risk Gate',
+      subValue: 'Trades blocked',
       icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
         </svg>
       ),
     },
   },
   {
-    id: "trader",
-    type: "custom",
+    id: 'trader',
+    type: 'custom',
     position: { x: 150, y: 570 },
     data: {
-      label: "Alpaca Trader",
-      subValue: "Orders executed",
+      label: 'Alpaca Trader',
+      subValue: 'Orders executed',
       icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <line x1="12" y1="2" x2="12" y2="22" />
           <line x1="17" y1="5" x2="7" y2="5" />
           <line x1="17" y1="19" x2="7" y2="19" />
@@ -169,14 +226,23 @@ const initialNodes: Node<PipelineNodeData>[] = [
     },
   },
   {
-    id: "database",
-    type: "custom",
+    id: 'database',
+    type: 'custom',
     position: { x: 550, y: 570 },
     data: {
-      label: "Supabase Log",
-      subValue: "Total records",
+      label: 'Supabase Log',
+      subValue: 'Total records',
       icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <ellipse cx="12" cy="5" rx="9" ry="3" />
           <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
           <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
@@ -187,28 +253,28 @@ const initialNodes: Node<PipelineNodeData>[] = [
 ];
 
 const initialEdges: Edge[] = [
-  { id: "e-ingestion-stream", source: "ingestion", target: "stream", animated: true },
-  { id: "e-stream-agent", source: "stream", target: "agent", animated: true },
-  { id: "e-agent-risk", source: "agent", target: "risk", animated: true },
+  { id: 'e-ingestion-stream', source: 'ingestion', target: 'stream', animated: true },
+  { id: 'e-stream-agent', source: 'stream', target: 'agent', animated: true },
+  { id: 'e-agent-risk', source: 'agent', target: 'risk', animated: true },
   {
-    id: "e-risk-trader",
-    source: "risk",
-    target: "trader",
+    id: 'e-risk-trader',
+    source: 'risk',
+    target: 'trader',
     animated: true,
-    label: "BUY / SELL",
-    labelBgStyle: { fill: "var(--dashboard-bg)", color: "var(--dashboard-text)" },
-    style: { stroke: "var(--positive)" },
+    label: 'BUY / SELL',
+    labelBgStyle: { fill: 'var(--dashboard-bg)', color: 'var(--dashboard-text)' },
+    style: { stroke: 'var(--positive)' },
   },
   {
-    id: "e-risk-database",
-    source: "risk",
-    target: "database",
+    id: 'e-risk-database',
+    source: 'risk',
+    target: 'database',
     animated: true,
-    label: "HOLD",
-    labelBgStyle: { fill: "var(--dashboard-bg)", color: "var(--dashboard-text)" },
-    style: { stroke: "var(--muted)" },
+    label: 'HOLD',
+    labelBgStyle: { fill: 'var(--dashboard-bg)', color: 'var(--dashboard-text)' },
+    style: { stroke: 'var(--muted)' },
   },
-  { id: "e-trader-database", source: "trader", target: "database", animated: true },
+  { id: 'e-trader-database', source: 'trader', target: 'database', animated: true },
 ];
 
 export interface PipelinePageProps {
@@ -223,14 +289,14 @@ export default function PipelinePage({ stats, trades, newIds }: PipelinePageProp
 
   // We want to trigger a visual pulse when `newIds` changes
   const [isPulsing, setIsPulsing] = useState(false);
-  const [lastTradeType, setLastTradeType] = useState<"BUY" | "SELL" | "HOLD" | null>(null);
+  const [lastTradeType, setLastTradeType] = useState<'BUY' | 'SELL' | 'HOLD' | null>(null);
 
   useEffect(() => {
     if (newIds.size > 0) {
       setIsPulsing(true);
-      
+
       // Look at the most recent trade among the new ones
-      const recentTrade = trades.find(t => newIds.has(t.id));
+      const recentTrade = trades.find((t) => newIds.has(t.id));
       if (recentTrade) {
         setLastTradeType(recentTrade.trade_action);
       }
@@ -245,12 +311,12 @@ export default function PipelinePage({ stats, trades, newIds }: PipelinePageProp
     setNodes((nds) =>
       nds.map((node) => {
         const newData = { ...node.data };
-        
+
         // Update stats
-        if (node.id === "agent") newData.value = stats?.analyzed ?? 0;
-        if (node.id === "risk") newData.value = stats?.riskGated ?? 0;
-        if (node.id === "trader") newData.value = stats?.executed ?? 0;
-        if (node.id === "database") newData.value = trades.length;
+        if (node.id === 'agent') newData.value = stats?.analyzed ?? 0;
+        if (node.id === 'risk') newData.value = stats?.riskGated ?? 0;
+        if (node.id === 'trader') newData.value = stats?.executed ?? 0;
+        if (node.id === 'database') newData.value = trades.length;
 
         // Visual pulsing logic
         newData.isActive = isPulsing;
@@ -258,29 +324,29 @@ export default function PipelinePage({ stats, trades, newIds }: PipelinePageProp
 
         // Specific routing logic for pulses
         if (isPulsing) {
-          if (node.id === "trader" && lastTradeType === "HOLD") {
+          if (node.id === 'trader' && lastTradeType === 'HOLD') {
             newData.isActive = false; // Trader doesn't pulse on HOLD
           }
         }
 
         return { ...node, data: newData };
-      })
+      }),
     );
 
     // Update edge animations
     setEdges((eds) =>
       eds.map((edge) => {
         let active = isPulsing;
-        
+
         // Edge specific logic
-        if (edge.id === "e-risk-trader" && lastTradeType === "HOLD") {
+        if (edge.id === 'e-risk-trader' && lastTradeType === 'HOLD') {
           active = false;
         }
-        if (edge.id === "e-trader-database" && lastTradeType === "HOLD") {
+        if (edge.id === 'e-trader-database' && lastTradeType === 'HOLD') {
           active = false;
         }
-        if (edge.id === "e-risk-database" && lastTradeType !== "HOLD") {
-          active = false; 
+        if (edge.id === 'e-risk-database' && lastTradeType !== 'HOLD') {
+          active = false;
         }
 
         return {
@@ -292,7 +358,7 @@ export default function PipelinePage({ stats, trades, newIds }: PipelinePageProp
             opacity: active ? 1 : 0.4,
           },
         };
-      })
+      }),
     );
   }, [stats, trades, isPulsing, lastTradeType, setNodes, setEdges]);
 
@@ -309,12 +375,12 @@ export default function PipelinePage({ stats, trades, newIds }: PipelinePageProp
         minZoom={0.5}
         maxZoom={1.5}
         defaultEdgeOptions={{
-          type: "smoothstep",
+          type: 'smoothstep',
           markerEnd: {
             type: MarkerType.ArrowClosed,
             width: 15,
             height: 15,
-            color: "var(--dashboard-subtle)",
+            color: 'var(--dashboard-subtle)',
           },
         }}
       >
