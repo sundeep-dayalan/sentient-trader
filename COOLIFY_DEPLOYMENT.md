@@ -98,6 +98,8 @@ REDIS_DB=0
 REDIS_STREAM_KEY=market-news
 REDIS_USERNAME=
 REDIS_PASSWORD=
+WORKER_HEALTH_KEY=sentient:workers:health
+AGENT_WORKER_NAME=agent
 
 SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_ANON_KEY=...

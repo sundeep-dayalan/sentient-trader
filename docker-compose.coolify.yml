@@ -28,6 +28,8 @@ services:
       REDIS_DB: '${REDIS_DB:-0}'
       REDIS_USERNAME: '${REDIS_USERNAME:-}'
       REDIS_PASSWORD: '${REDIS_PASSWORD:-}'
+      WORKER_HEALTH_KEY: '${WORKER_HEALTH_KEY:-sentient:workers:health}'
+      AGENT_WORKER_NAME: '${AGENT_WORKER_NAME:-agent}'
       SUPABASE_DB_SCHEMA: '${SUPABASE_DB_SCHEMA:-sentient_trader}'
       SUPABASE_URL: '${SUPABASE_URL}'
       SUPABASE_ANON_KEY: '${SUPABASE_ANON_KEY}'

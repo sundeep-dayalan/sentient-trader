@@ -4,7 +4,6 @@ Redis-backed ingestion health state.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import Any
@@ -13,6 +12,7 @@ from redis import Redis
 
 import config
 from models import iso_z, utc_now
+from shared.worker_health import write_worker_state
 
 log = logging.getLogger("ingestion.health")
 
@@ -20,7 +20,6 @@ log = logging.getLogger("ingestion.health")
 class IngestionHealth:
     def __init__(self, redis: Redis) -> None:
         self._redis = redis
-        self._key = config.WORKER_HEALTH_KEY
         self._worker_name = config.WORKER_NAME
         self._state: dict[str, Any] = {
             "worker": self._worker_name,
@@ -43,11 +42,7 @@ class IngestionHealth:
         self._state["last_heartbeat_epoch"] = int(time.time())
         self._state["updated_at"] = iso_z(now)
         try:
-            self._redis.hset(
-                self._key,
-                self._worker_name,
-                json.dumps(self._state, default=str),
-            )
+            write_worker_state(self._redis, "ingestion", self._state)
         except Exception as exc:
             log.warning("Could not write ingestion health state: %s", exc)
 

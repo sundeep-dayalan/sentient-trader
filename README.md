@@ -747,6 +747,8 @@ export REDIS_HOST=127.0.0.1
 export REDIS_PORT=6379
 export REDIS_DB=0
 export REDIS_STREAM_KEY=market-news
+export WORKER_HEALTH_KEY=sentient:workers:health
+export AGENT_WORKER_NAME=agent
 export ALPACA_API_KEY=...
 export ALPACA_SECRET_KEY=...
 export ALPACA_BASE_URL=https://paper-api.alpaca.markets
@@ -786,10 +788,12 @@ Open the dashboard → Signal Injector panel → enter a ticker and headline →
   REDIS_HOST=127.0.0.1 \
   REDIS_PORT=6379 \
   REDIS_DB=0 \
-  REDIS_STREAM_KEY=market-news
+  REDIS_STREAM_KEY=market-news \
+  WORKER_HEALTH_KEY=sentient:workers:health
 
 # backend/api additionally needs:
   CORS_ORIGINS=https://your-netlify-site.netlify.app \
+  AGENT_WORKER_NAME=agent \
   SUPABASE_URL=... \
   SUPABASE_ANON_KEY=... \
   SUPABASE_SERVICE_ROLE_KEY=... \

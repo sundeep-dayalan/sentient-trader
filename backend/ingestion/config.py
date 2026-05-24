@@ -22,7 +22,6 @@ def env_float(name: str, default: float) -> float:
 
 
 PROVIDER = os.environ.get("INGESTION_PROVIDER", "alpaca")
-WORKER_HEALTH_KEY = os.environ.get("WORKER_HEALTH_KEY", "sentient:workers:health")
 WORKER_NAME = os.environ.get("INGESTION_WORKER_NAME", "ingestion")
 
 ALPACA_NEWS_BASE_URL = os.environ.get(

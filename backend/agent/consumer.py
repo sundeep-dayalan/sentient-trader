@@ -183,6 +183,19 @@ class RedisStreamConsumer:
             except KeyboardInterrupt:
                 log.info("Consumer shutting down...")
                 break
+            except ResponseError as e:
+                if "NOGROUP" in str(e):
+                    log.warning(
+                        "Consumer group missing while polling stream — recreating: %s",
+                        e,
+                    )
+                    self._write_agent_state(
+                        "stream_backoff",
+                        f"Consumer group missing; recreating: {str(e)[:160]}",
+                    )
+                    self._ensure_consumer_group()
+                    continue
+                raise
             except Exception as e:
                 retry = config.ERROR_RETRY
                 log.error("Stream poll error: %s — retrying in %.0fs", e, retry)

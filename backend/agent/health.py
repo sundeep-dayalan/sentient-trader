@@ -4,7 +4,6 @@ Redis-backed agent health state.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import Any
@@ -45,17 +44,6 @@ class AgentHealth:
         self._state["updated_at"] = now
         try:
             write_worker_state(self._redis, "agent", self._state)
-            self._redis.set("agent:heartbeat", str(now))
-            self._redis.set(
-                "agent:state",
-                json.dumps(
-                    {
-                        "phase": self._state.get("phase"),
-                        "detail": self._state.get("detail"),
-                        "updated_at": now,
-                    }
-                ),
-            )
         except Exception as exc:
             log.warning("Could not write agent health state: %s", exc)
 

@@ -9,12 +9,13 @@ All database, Alpaca, Groq, Redis, and admin operations live here.
 from __future__ import annotations
 
 import hmac
-import json
 import logging
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Literal
 
 import httpx
@@ -25,7 +26,10 @@ from pydantic import BaseModel
 from supabase import create_client
 from supabase.client import ClientOptions
 
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
 from redis_client import create_redis_client
+from shared.worker_health import health_key, read_worker_state, worker_name
 
 load_dotenv()
 
@@ -289,16 +293,6 @@ def contains_injection_marker(text: str) -> bool:
 
 def status_error_detail(prefix: str, error: Exception) -> str:
     return f"{prefix}: {str(error)[:240]}"
-
-
-def parse_agent_state(raw: str | None) -> dict[str, Any] | None:
-    if not raw:
-        return None
-    try:
-        parsed = json.loads(raw)
-        return parsed if isinstance(parsed, dict) else None
-    except json.JSONDecodeError:
-        return None
 
 
 def number_value(value: Any) -> float | None:
@@ -1029,8 +1023,8 @@ def status() -> dict[str, Any]:
 
     try:
         redis = get_redis()
-        heartbeat_str = redis.get("agent:heartbeat")
-        agent_state = parse_agent_state(redis.get("agent:state"))
+        agent_worker_name = worker_name("agent")
+        agent_state = read_worker_state(redis, agent_worker_name)
         redis_status_value: ServiceStatus = "ok"
         details["redis"] = "Redis reachable."
         groq_status: ServiceStatus = (
@@ -1042,49 +1036,65 @@ def status() -> dict[str, Any]:
         agent_status: ServiceStatus = "unknown"
         last_heartbeat_at = None
 
-        if heartbeat_str:
-            heartbeat = int(heartbeat_str)
+        if agent_state:
+            heartbeat = int(agent_state.get("last_heartbeat_epoch") or 0)
             heartbeat_age = time.time() - heartbeat
-            last_heartbeat_at = (
+            last_heartbeat_at = agent_state.get("last_heartbeat_at") or (
                 datetime.fromtimestamp(heartbeat, timezone.utc)
                 .isoformat()
                 .replace("+00:00", "Z")
             )
             phase = agent_state.get("phase") if agent_state else None
+            worker_status = agent_state.get("status", "unknown")
             phase_detail = (
                 f": {agent_state.get('detail')}"
                 if agent_state and agent_state.get("detail")
                 else ""
             )
-            if heartbeat_age < 60 and phase == "polling":
-                agent_status = "ok"
-                details["agent"] = "Worker heartbeat is fresh and polling Redis stream."
-            elif heartbeat_age < 180:
-                agent_status = "stale"
-                details["agent"] = (
-                    f"Worker heartbeat is fresh but phase is {phase}{phase_detail}."
-                    if phase
-                    else "Worker heartbeat is fresh, but no phase state was published."
-                )
-            else:
+            if heartbeat_age >= 180:
                 agent_status = "error"
                 details["agent"] = (
-                    f"Worker heartbeat is stale by {int(heartbeat_age // 60)} minutes."
+                    f"Worker '{agent_worker_name}' heartbeat is stale by "
+                    f"{int(heartbeat_age // 60)} minutes."
+                )
+            elif worker_status == "unhealthy":
+                agent_status = "error"
+                details["agent"] = (
+                    f"Worker '{agent_worker_name}' is unhealthy: "
+                    f"{phase}{phase_detail}."
+                )
+            elif heartbeat_age < 60 and worker_status == "healthy":
+                agent_status = "ok"
+                details["agent"] = (
+                    f"Worker '{agent_worker_name}' is fresh: {phase}{phase_detail}."
+                )
+            else:
+                agent_status = "stale"
+                details["agent"] = (
+                    f"Worker '{agent_worker_name}' is fresh but status is "
+                    f"{worker_status}, phase is {phase}{phase_detail}."
+                    if phase
+                    else f"Worker '{agent_worker_name}' is fresh, but no phase "
+                    "state was published."
                 )
         else:
             agent_status = "error"
-            details["agent"] = "No agent heartbeat found in Redis."
+            details["agent"] = (
+                f"No agent worker state found for '{agent_worker_name}' in Redis key '{health_key()}'."
+            )
     except Exception as exc:
         redis_status_value = "error"
         agent_status = "unknown"
         groq_status = "unknown"
         last_heartbeat_at = None
-        details["redis"] = status_error_detail("Could not read Redis heartbeat", exc)
+        details["redis"] = status_error_detail(
+            "Could not read Redis worker health", exc
+        )
         details["agent"] = (
-            "Agent status depends on Redis heartbeat, which could not be read."
+            "Agent status depends on Redis worker health, which could not be read."
         )
         details["groq"] = (
-            "Groq status depends on backend agent state, which could not be read from Redis."
+            "Groq status depends on backend agent worker state, which could not be read from Redis."
         )
 
     return {
