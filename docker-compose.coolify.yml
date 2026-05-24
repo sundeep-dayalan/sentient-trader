@@ -1,8 +1,8 @@
 services:
   api:
     build:
-      context: ./backend/api
-      dockerfile: Dockerfile
+      context: ./backend
+      dockerfile: api/Dockerfile
     restart: unless-stopped
     expose:
       - '8000'
@@ -40,8 +40,8 @@ services:
 
   ingestion:
     build:
-      context: ./backend/ingestion
-      dockerfile: Dockerfile
+      context: ./backend
+      dockerfile: ingestion/Dockerfile
     restart: unless-stopped
     healthcheck:
       test: ['CMD', 'python', 'healthcheck.py']
@@ -57,13 +57,18 @@ services:
       REDIS_DB: '${REDIS_DB:-0}'
       REDIS_USERNAME: '${REDIS_USERNAME:-}'
       REDIS_PASSWORD: '${REDIS_PASSWORD:-}'
+      WORKER_HEALTH_KEY: '${WORKER_HEALTH_KEY:-sentient:workers:health}'
+      INGESTION_WORKER_NAME: '${INGESTION_WORKER_NAME:-ingestion}'
+      SUPABASE_DB_SCHEMA: '${SUPABASE_DB_SCHEMA:-sentient_trader}'
+      SUPABASE_URL: '${SUPABASE_URL}'
+      SUPABASE_SERVICE_ROLE_KEY: '${SUPABASE_SERVICE_ROLE_KEY}'
       ALPACA_API_KEY: '${ALPACA_API_KEY}'
       ALPACA_SECRET_KEY: '${ALPACA_SECRET_KEY}'
 
   agent:
     build:
-      context: ./backend/agent
-      dockerfile: Dockerfile
+      context: ./backend
+      dockerfile: agent/Dockerfile
     restart: unless-stopped
     healthcheck:
       test: ['CMD', 'python', 'healthcheck.py']
@@ -79,6 +84,8 @@ services:
       REDIS_DB: '${REDIS_DB:-0}'
       REDIS_USERNAME: '${REDIS_USERNAME:-}'
       REDIS_PASSWORD: '${REDIS_PASSWORD:-}'
+      WORKER_HEALTH_KEY: '${WORKER_HEALTH_KEY:-sentient:workers:health}'
+      AGENT_WORKER_NAME: '${AGENT_WORKER_NAME:-agent}'
       SUPABASE_DB_SCHEMA: '${SUPABASE_DB_SCHEMA:-sentient_trader}'
       SUPABASE_URL: '${SUPABASE_URL}'
       SUPABASE_SERVICE_ROLE_KEY: '${SUPABASE_SERVICE_ROLE_KEY}'

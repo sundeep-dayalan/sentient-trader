@@ -9,7 +9,7 @@ Create three Coolify resources from the same GitHub repository.
 ### Service A: `sentient-trader-agent`
 
 - Build pack: Dockerfile
-- Base directory / build context: `backend/agent`
+- Base directory / build context: `backend`
 - Dockerfile: `backend/agent/Dockerfile`
 - Domain: none
 - Exposed port: none
@@ -25,6 +25,8 @@ REDIS_DB=0
 REDIS_STREAM_KEY=market-news
 REDIS_USERNAME=
 REDIS_PASSWORD=
+WORKER_HEALTH_KEY=sentient:workers:health
+AGENT_WORKER_NAME=agent
 
 SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=...
@@ -38,7 +40,7 @@ GROQ_API_KEY=...
 ### Service B: `sentient-trader-ingestion`
 
 - Build pack: Dockerfile
-- Base directory / build context: `backend/ingestion`
+- Base directory / build context: `backend`
 - Dockerfile: `backend/ingestion/Dockerfile`
 - Domain: none
 - Exposed port: none
@@ -54,6 +56,12 @@ REDIS_DB=0
 REDIS_STREAM_KEY=market-news
 REDIS_USERNAME=
 REDIS_PASSWORD=
+WORKER_HEALTH_KEY=sentient:workers:health
+INGESTION_WORKER_NAME=ingestion
+
+SUPABASE_URL=https://xxx.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=...
+SUPABASE_DB_SCHEMA=sentient_trader
 
 ALPACA_API_KEY=...
 ALPACA_SECRET_KEY=...
@@ -62,7 +70,7 @@ ALPACA_SECRET_KEY=...
 ### Service C: `sentient-trader-api`
 
 - Build pack: Dockerfile
-- Base directory / build context: `backend/api`
+- Base directory / build context: `backend`
 - Dockerfile: `backend/api/Dockerfile`
 - Domain: `https://sentient-trader.coolify.sundeepdayalan.in`
 - Exposed/container port: `8000`

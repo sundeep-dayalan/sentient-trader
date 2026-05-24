@@ -7,10 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY ingestion/requirements.txt .
 RUN python -m pip install --prefer-binary -r requirements.txt
 
-COPY . .
+COPY shared ./shared
+COPY ingestion/. .
 
 RUN addgroup --system appuser && adduser --system --ingroup appuser appuser
 USER appuser

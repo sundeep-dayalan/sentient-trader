@@ -23,15 +23,20 @@ Field format from redis-py:
 import json
 import logging
 import os
+import sys
 import time
+from pathlib import Path
 from typing import Callable, Mapping
 
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import ResponseError, TimeoutError
 
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
 import config
 from redis_client import create_redis_client
 from schemas import NewsMessage
+from shared.worker_health import write_worker_state
 
 log = logging.getLogger("agent.consumer")
 REDIS_HOST = os.environ.get("REDIS_HOST", "127.0.0.1")
@@ -48,11 +53,14 @@ class RedisStreamConsumer:
     def __init__(self) -> None:
         self._redis = create_redis_client()
         self._last_state_phase: str | None = None
+        self._last_state_detail: str | None = None
         self._write_agent_state("starting", "initializing Redis stream consumer")
         self._ensure_consumer_group()
 
     def _write_agent_state(self, phase: str, detail: str | None = None) -> None:
         now = int(time.time())
+        if detail is not None:
+            self._last_state_detail = detail
         try:
             self._redis.set("agent:heartbeat", str(now))
             if phase != self._last_state_phase or detail:
@@ -67,6 +75,16 @@ class RedisStreamConsumer:
                     ),
                 )
                 self._last_state_phase = phase
+            write_worker_state(
+                self._redis,
+                "agent",
+                {
+                    "status": "healthy" if phase == "polling" else "degraded",
+                    "phase": phase,
+                    "detail": detail if detail is not None else self._last_state_detail,
+                    "updated_at": now,
+                },
+            )
         except Exception as exc:
             log.warning("Could not write agent heartbeat/state: %s", exc)
 

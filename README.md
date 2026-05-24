@@ -45,8 +45,8 @@ Four deployable processes, each with a distinct failure domain:
 
 ```mermaid
 graph TD
-    A["🗞️ Alpaca News REST API"]
-    B["📡 sentient-trader-ingestion\n(Oracle Cloud worker)\n• 30s poll loop\n• Relevance filter\n• XADD to Redis"]
+    A["🗞️ Alpaca News\nWebSocket + REST backfill"]
+    B["📡 sentient-trader-ingestion\n(Oracle Cloud worker)\n• WebSocket reconnect loop\n• REST gap backfill\n• durable store + outbox\n• dedupe before Redis"]
     C[("🔴 Valkey/Redis Stream\nmarket-news\npersistent · ordered · consumer groups")]
     D["🤖 sentient-trader-agent\n(Oracle Cloud worker)\n• XREADGROUP consumer\n• LangGraph pipeline\n• 4× Groq LLM calls\n• Alpaca paper trades"]
     E[("🟢 Supabase Postgres\ntrades + agent_config")]
@@ -54,8 +54,8 @@ graph TD
     G["📈 Alpaca\nPaper Trading API"]
     H["🛡️ sentient-trader-api\n(Oracle Cloud)\n• Supabase service DB access\n• Alpaca portfolio/orders\n• Redis rate limits"]
 
-    A -->|"poll every 30s"| B
-    B -->|"XADD"| C
+    A -->|"live stream + gap replay"| B
+    B -->|"store first, then XADD"| C
     C -->|"XREADGROUP\nat-least-once"| D
     D -->|"INSERT"| E
     D -->|"paper order"| G
@@ -77,31 +77,34 @@ The services share no in-process state. A Groq rate limit on the agent doesn't a
 Every headline that enters the system follows this exact path:
 
 ```
-1.  Alpaca News REST API
-      └─▶ ingestion/listener.py polls every 30s
-            Fetches articles published since last-seen timestamp (cursor-based, no duplicates)
+1.  Alpaca News WebSocket + REST API
+      └─▶ ingestion/listener.py streams live articles, reconnects on failure,
+            and REST-backfills from the durable cursor with a safety overlap
 
-2.  ingestion/filter.py
-      └─▶ Drops articles with no ticker symbols
-            Runs relevance check: headline must contain the ticker text or a known alias
+2.  ingestion/store.py
+      └─▶ Stores raw article payloads in Supabase, dedupes by article id,
+            normalized URL, normalized headline + ticker window, and article/ticker pair
 
-3.  ingestion/producer.py
-      └─▶ XADD "market-news" * ticker headline source published_at [summary] [article_url] [article_id]
-            Redis protocol connection to Valkey-compatible server
+3.  ingestion/filter.py + ingestion/store.py
+      └─▶ Creates durable outbox rows only for relevant article/ticker signals
 
-4.  agent/consumer.py
+4.  ingestion/producer.py
+      └─▶ Publishes outbox payloads with XADD "market-news" * ticker headline source published_at
+            [summary] [article_url] [article_id]; failed publishes stay retryable
+
+5.  agent/consumer.py
       └─▶ XREADGROUP GROUP agent-group consumer-1 COUNT 1 BLOCK 5000 STREAMS market-news >
             Blocks until a new message arrives (5s timeout, then loops)
             One message at a time — sequential processing, no parallelism hazard
 
-5.  agent/analyst.py — LangGraph state machine (see graph below)
+6.  agent/analyst.py — LangGraph state machine (see graph below)
       └─▶ check_cache → fetch_context → 4× Groq calls → assess_risk → trade/hold → log
 
-6.  agent/logger.py
+7.  agent/logger.py
       └─▶ INSERT into Supabase "trades" table
             Full trace payload is stored server-side for the dashboard API
 
-7.  frontend — React dashboard
+8.  frontend — React dashboard
       └─▶ Polls FastAPI for new trades and detail rows; the browser never talks to Valkey or server-side Supabase APIs directly
 ```
 
@@ -113,19 +116,30 @@ Every headline that enters the system follows this exact path:
 **Host:** Oracle Cloud worker
 **Entry point:** `main.py` → `NewsListener.run()`
 
-### How polling works
+### How live streaming and backfill work
 
-`listener.py` keeps a `_last_seen` timestamp initialized to "now minus 1 minute" on startup. Every 30 seconds it calls:
+`listener.py` uses Alpaca's live news WebSocket for low-latency capture. On startup and after every stream disconnect, it also calls Alpaca's REST news endpoint from the last durable cursor minus a safety overlap. Dedupe makes that overlap safe: already-seen articles are recorded as duplicate events and are not published again.
 
-```python
-NewsRequest(start=self._last_seen, sort="asc", limit=50)
+The ingestion flow is store-first:
+
+```text
+Alpaca article -> normalize -> Supabase raw_news_articles -> dedupe -> news_outbox -> Redis XADD
 ```
 
-`sort="asc"` returns oldest-first so the cursor advances in order. After processing each article, `_last_seen` is bumped to `article.created_at + 1 second`. Alpaca's `start` parameter is inclusive, so the +1s prevents re-fetching the boundary article on the next poll.
+If Redis is unavailable, the article remains in `news_outbox` and the retry thread republishes it later.
 
 ### Relevance filter
 
-`filter.py` implements a fast in-process relevance check. An article passes if the ticker text appears in the headline (case-insensitive). Articles with no `symbols` field are dropped before the filter runs. Multi-ticker articles only produce one stream message (the first matching ticker) to prevent the same article from triggering parallel analyses.
+`filter.py` implements a fast in-process relevance check. Articles with no `symbols` field are dropped. A symbol creates an outbox row only when the ticker text appears in the headline or the headline contains high-signal market-moving language.
+
+### Ingestion dedupe
+
+The ingestion service suppresses duplicate publishes using four conservative rules:
+
+- exact `provider + source_article_id`
+- same normalized URL hash
+- same normalized headline + same ticker within the configured window
+- same stored article + same ticker outbox pair
 
 ### What gets published
 
@@ -141,7 +155,7 @@ Each Redis stream entry contains:
 | `article_url`  | Alpaca `url`                       | When available |
 | `article_id`   | Alpaca `id`                        | When available |
 
-The stream is capped at 1,000 entries via `XADD MAXLEN ~` (approximate trimming for efficiency). This keeps storage bounded.
+The stream is capped at 1,000 entries by default via `XADD MAXLEN ~` (configurable with `REDIS_STREAM_MAX_LEN`). Supabase is the durable replay source; Redis is the hot queue.
 
 ### Simulated signals
 
@@ -480,12 +494,14 @@ Submits to `/simulate` on FastAPI. The backend API rate-limits the user and publ
 
 ## Persistence Layer
 
-| Store         | Technology                        | Used for                                                              |
-| ------------- | --------------------------------- | --------------------------------------------------------------------- |
-| Message bus   | Valkey/Redis Stream `market-news` | Durable ordered queue between ingestion and agent (max 1,000 entries) |
-| Deduplication | Valkey/Redis (same instance)      | SHA-256 headline hash with 5-min TTL — `HeadlineCache`                |
-| Signal log    | Supabase `trades` table           | Every decision summary, linked to full Decision Core trace storage    |
-| Config        | Supabase `agent_config` table     | Single row (id=1) — all trading parameters, editable via Settings UI  |
+| Store            | Technology                        | Used for                                                             |
+| ---------------- | --------------------------------- | -------------------------------------------------------------------- |
+| Raw news archive | Supabase `raw_news_articles`      | Durable source payloads, normalized fields, dedupe links             |
+| Ingestion outbox | Supabase `news_outbox`            | Retryable Redis publish queue                                        |
+| Message bus      | Valkey/Redis Stream `market-news` | Hot ordered queue between ingestion and agent                        |
+| Agent cache      | Valkey/Redis                      | Last-mile duplicate LLM suppression with `HeadlineCache`             |
+| Signal log       | Supabase `trades` table           | Every decision summary, linked to full Decision Core trace storage   |
+| Config           | Supabase `agent_config` table     | Single row (id=1) — all trading parameters, editable via Settings UI |
 
 ### Supabase `trades` table schema
 
@@ -575,13 +591,17 @@ sentient-trader/
 │   │
 │   ├── ingestion/
 │   │   ├── main.py          # Entry point — starts NewsListener
-│   │   ├── listener.py      # 30s poll loop, cursor-based dedup, publishes to Redis
+│   │   ├── listener.py      # WebSocket loop, REST backfill, outbox retry
+│   │   ├── backfill.py      # Alpaca REST gap recovery
+│   │   ├── store.py         # Supabase raw article store, dedupe, outbox
+│   │   ├── models.py        # Article normalization and hash helpers
+│   │   ├── health.py        # Redis-backed ingestion health state
 │   │   ├── filter.py        # Ticker relevance filter (keyword matching)
 │   │   ├── producer.py      # RedisStreamProducer — XADD to Redis Stream
 │   │   ├── requirements.txt
 │   │   └── Dockerfile
 │   │
-│   └── agent/
+│   ├── agent/
 │       ├── main.py          # Entry point — reload config, build graph, start consumer
 │       ├── analyst.py       # Full LangGraph graph: all nodes, ModelRouter, AI committee
 │       ├── consumer.py      # XREADGROUP consumer loop — one message at a time
@@ -592,6 +612,9 @@ sentient-trader/
 │       ├── schemas.py       # Pydantic models: NewsMessage, PersonaAnalysis, TradeAnalysis, etc.
 │       ├── requirements.txt
 │       └── Dockerfile
+│   │
+│   └── shared/
+│       └── worker_health.py # Shared Redis worker health helpers
 │
 ├── frontend/
 │   ├── index.html                       # Vite HTML shell
@@ -616,17 +639,7 @@ sentient-trader/
 │
 ├── supabase/
 │   └── migrations/
-│       ├── 001_initial_schema.sql         # trades table + indexes + RLS
-│       ├── 002_add_news_references.sql    # article_source, article_url, article_id
-│       ├── 003_add_committee_debate.sql   # legacy committee_debate JSONB column
-│       ├── 004_add_agent_config.sql       # agent_config table + seed default row
-│       ├── 005_agent_config_write_policy.sql  # anon UPDATE RLS policy
-│       ├── 006_fix_agent_config_rls.sql   # tighten Settings write policy
-│       ├── 007_add_model_to_trades.sql     # legacy synthesis model column
-│       ├── 008_decision_trace_jsonb.sql    # decision_trace JSONB + legacy backfill
-│       ├── 009_split_decision_traces.sql   # move heavy trace payloads out of trades
-│       ├── 010_slim_trades_realtime_payload.sql
-│       └── 011_create_sentient_trader_schema.sql
+│       └── 001_current_schema.sql # current sentient_trader schema baseline
 │
 └── README.md
 ```
@@ -648,7 +661,7 @@ sentient-trader/
 
 ### 1. Apply Supabase migrations
 
-Run all files in `supabase/migrations/` in order via the Supabase SQL Editor.
+Run `supabase/migrations/001_current_schema.sql` via the Supabase SQL Editor.
 
 ### 2. Agent service
 
@@ -663,6 +676,8 @@ export REDIS_HOST=127.0.0.1
 export REDIS_PORT=6379
 export REDIS_DB=0
 export REDIS_STREAM_KEY=market-news          # default
+export WORKER_HEALTH_KEY=sentient:workers:health
+export AGENT_WORKER_NAME=agent
 export ALPACA_API_KEY=...
 export ALPACA_SECRET_KEY=...
 export GROQ_API_KEY=...
@@ -676,11 +691,16 @@ python main.py
 cd backend/ingestion
 pip install -r requirements.txt
 
-# Required env vars (same Redis + Alpaca keys as above):
+# Required env vars:
+export SUPABASE_URL=https://xxx.supabase.co
+export SUPABASE_SERVICE_ROLE_KEY=...
+export SUPABASE_DB_SCHEMA=sentient_trader
 export REDIS_HOST=127.0.0.1
 export REDIS_PORT=6379
 export REDIS_DB=0
 export REDIS_STREAM_KEY=market-news
+export WORKER_HEALTH_KEY=sentient:workers:health
+export INGESTION_WORKER_NAME=ingestion
 export ALPACA_API_KEY=...
 export ALPACA_SECRET_KEY=...
 
@@ -760,11 +780,18 @@ Open the dashboard → Signal Injector panel → enter a ticker and headline →
 # backend/agent additionally needs:
   SUPABASE_URL=...
   SUPABASE_SERVICE_ROLE_KEY=...
+  WORKER_HEALTH_KEY=sentient:workers:health
+  AGENT_WORKER_NAME=agent
   ALPACA_API_KEY=...
   ALPACA_SECRET_KEY=...
   GROQ_API_KEY=...
 
 # backend/ingestion additionally needs:
+  SUPABASE_URL=...
+  SUPABASE_SERVICE_ROLE_KEY=...
+  SUPABASE_DB_SCHEMA=sentient_trader
+  WORKER_HEALTH_KEY=sentient:workers:health
+  INGESTION_WORKER_NAME=ingestion
   ALPACA_API_KEY=...
   ALPACA_SECRET_KEY=...
 ```
