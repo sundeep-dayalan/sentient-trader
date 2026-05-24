@@ -21,8 +21,16 @@ def env_float(name: str, default: float) -> float:
         return default
 
 
+def env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 PROVIDER = os.environ.get("INGESTION_PROVIDER", "alpaca")
 WORKER_NAME = os.environ.get("INGESTION_WORKER_NAME", "ingestion")
+LIVE_ENABLED = env_bool("INGESTION_LIVE_ENABLED", True)
 
 ALPACA_NEWS_BASE_URL = os.environ.get(
     "ALPACA_NEWS_BASE_URL",

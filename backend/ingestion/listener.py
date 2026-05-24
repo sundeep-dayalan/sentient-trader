@@ -171,6 +171,20 @@ class NewsListener:
         outbox_thread.start()
         log.info("Started outbox retry thread.")
 
+        if not config.LIVE_ENABLED:
+            self._health.write(
+                status="healthy",
+                phase="live_paused",
+                detail="Live Alpaca ingestion disabled by INGESTION_LIVE_ENABLED=false",
+                stream_connected=False,
+            )
+            log.warning(
+                "Live ingestion is disabled; websocket and automatic backfill will not run."
+            )
+            while not self._stop.is_set():
+                self._stop.wait(config.HEARTBEAT_INTERVAL_SECONDS)
+            return
+
         self._run_backfill(
             reason="startup",
             lookback_seconds=config.BACKFILL_STARTUP_LOOKBACK_SECONDS,

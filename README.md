@@ -724,6 +724,7 @@ export REDIS_DB=0
 export REDIS_STREAM_KEY=market-news
 export WORKER_HEALTH_KEY=sentient:workers:health
 export INGESTION_WORKER_NAME=ingestion
+export INGESTION_LIVE_ENABLED=true
 export ALPACA_API_KEY=...
 export ALPACA_SECRET_KEY=...
 export ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
@@ -735,6 +736,19 @@ export TICKER_DIRECTORY_REFRESH_CHECK_SECONDS=60
 export TICKER_PUBLISH_SCORE_THRESHOLD=80
 
 python main.py
+```
+
+Historical replay for reliability testing:
+
+```bash
+# Optional: pause the normal live worker while replaying.
+export INGESTION_LIVE_ENABLED=false
+
+# Fetch and count only; does not write DB or Redis.
+python replay_historical.py --hours 1 --dry-run
+
+# Real replay through the normal ingestion path.
+python replay_historical.py --days 10 --max-pages 300 --confirm-replay
 ```
 
 ### 4. Backend API
@@ -836,6 +850,7 @@ Open the dashboard → Signal Injector panel → enter a ticker and headline →
   SUPABASE_DB_SCHEMA=sentient_trader
   WORKER_HEALTH_KEY=sentient:workers:health
   INGESTION_WORKER_NAME=ingestion
+  INGESTION_LIVE_ENABLED=true
   ALPACA_API_KEY=...
   ALPACA_SECRET_KEY=...
   ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets

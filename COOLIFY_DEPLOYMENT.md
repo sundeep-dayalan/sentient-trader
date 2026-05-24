@@ -67,6 +67,7 @@ REDIS_USERNAME=
 REDIS_PASSWORD=
 WORKER_HEALTH_KEY=sentient:workers:health
 INGESTION_WORKER_NAME=ingestion
+INGESTION_LIVE_ENABLED=true
 
 SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=...
@@ -84,6 +85,8 @@ TICKER_PUBLISH_SCORE_THRESHOLD=80
 ```
 
 Optional ticker nicknames can live in Redis, not code. Example: `HSET sentient:ticker:alias-overrides GOOG '["google"]'` and restart ingestion, or wait for the next ticker-directory refresh.
+
+For historical replay testing, set `INGESTION_LIVE_ENABLED=false` and restart ingestion. The worker stays healthy and retries pending outbox rows, but it will not open Alpaca WebSocket or run automatic startup/reconnect backfills.
 
 ### Service C: `sentient-trader-api`
 
