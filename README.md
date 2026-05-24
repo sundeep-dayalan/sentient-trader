@@ -726,6 +726,13 @@ export WORKER_HEALTH_KEY=sentient:workers:health
 export INGESTION_WORKER_NAME=ingestion
 export ALPACA_API_KEY=...
 export ALPACA_SECRET_KEY=...
+export ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
+export TICKER_META_HASH_KEY=sentient:ticker:meta
+export TICKER_DIRECTORY_STATE_KEY=sentient:ticker:directory:state
+export TICKER_ALIAS_OVERRIDES_KEY=sentient:ticker:alias-overrides
+export TICKER_DIRECTORY_REFRESH_SECONDS=86400
+export TICKER_DIRECTORY_REFRESH_CHECK_SECONDS=60
+export TICKER_PUBLISH_SCORE_THRESHOLD=80
 
 python main.py
 ```
@@ -831,7 +838,16 @@ Open the dashboard → Signal Injector panel → enter a ticker and headline →
   INGESTION_WORKER_NAME=ingestion
   ALPACA_API_KEY=...
   ALPACA_SECRET_KEY=...
+  ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
+  TICKER_META_HASH_KEY=sentient:ticker:meta
+  TICKER_DIRECTORY_STATE_KEY=sentient:ticker:directory:state
+  TICKER_ALIAS_OVERRIDES_KEY=sentient:ticker:alias-overrides
+  TICKER_DIRECTORY_REFRESH_SECONDS=86400
+  TICKER_DIRECTORY_REFRESH_CHECK_SECONDS=60
+  TICKER_PUBLISH_SCORE_THRESHOLD=80
 ```
+
+Optional ticker nicknames live in Redis. For example, `HSET sentient:ticker:alias-overrides GOOG '["google"]'` lets ingestion treat "Google" as a GOOG/GOOGL alias without hardcoding that nickname in the app.
 
 ### Frontend (Netlify)
 

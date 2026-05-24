@@ -74,7 +74,16 @@ SUPABASE_DB_SCHEMA=sentient_trader
 
 ALPACA_API_KEY=...
 ALPACA_SECRET_KEY=...
+ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
+TICKER_META_HASH_KEY=sentient:ticker:meta
+TICKER_DIRECTORY_STATE_KEY=sentient:ticker:directory:state
+TICKER_ALIAS_OVERRIDES_KEY=sentient:ticker:alias-overrides
+TICKER_DIRECTORY_REFRESH_SECONDS=86400
+TICKER_DIRECTORY_REFRESH_CHECK_SECONDS=60
+TICKER_PUBLISH_SCORE_THRESHOLD=80
 ```
+
+Optional ticker nicknames can live in Redis, not code. Example: `HSET sentient:ticker:alias-overrides GOOG '["google"]'` and restart ingestion, or wait for the next ticker-directory refresh.
 
 ### Service C: `sentient-trader-api`
 

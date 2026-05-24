@@ -133,7 +133,7 @@ def main() -> None:
                 "error": "expired_signal",
             },
         )
-        cache.mark_seen(news.headline)
+        cache.mark_seen(news.headline, ticker=news.ticker, article_id=news.article_id)
 
     # Start consuming — blocks forever
     log.info("Agent ready. Waiting for market news from Redis...")

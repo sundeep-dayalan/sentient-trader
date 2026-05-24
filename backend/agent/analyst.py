@@ -324,9 +324,14 @@ def _append_llm_operation(
 def _make_check_cache_node(cache: HeadlineCache):
     def check_cache(state: AgentState) -> dict:
         """Check Redis before spending any API quota on this headline."""
-        cached = cache.is_duplicate(state["news"].headline)
+        news = state["news"]
+        cached = cache.is_duplicate(
+            news.headline,
+            ticker=news.ticker,
+            article_id=news.article_id,
+        )
         if cached:
-            log.info("Cache HIT — skipping duplicate: %s", state["news"].headline[:60])
+            log.info("Cache HIT — skipping duplicate: %s %s", news.ticker, news.headline[:60])
         return {"is_cached": cached}
 
     return check_cache
@@ -1208,7 +1213,7 @@ def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
                 article_id=news.article_id,
                 decision_trace=_build_decision_trace(state),
             )
-            cache.mark_seen(news.headline)
+            cache.mark_seen(news.headline, ticker=news.ticker, article_id=news.article_id)
             return {"error": err}
 
         a = state["analysis"]
@@ -1229,7 +1234,7 @@ def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
             article_id=news.article_id,
             decision_trace=_build_decision_trace(state),
         )
-        cache.mark_seen(news.headline)
+        cache.mark_seen(news.headline, ticker=news.ticker, article_id=news.article_id)
 
         return {"error": None}
 

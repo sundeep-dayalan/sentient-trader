@@ -18,11 +18,11 @@ from alpaca.data.live import NewsDataStream
 
 import config
 from backfill import AlpacaNewsBackfiller, start_from_cursor
-from filter import is_relevant
 from health import IngestionHealth
 from models import normalize_article, utc_now
 from producer import RedisStreamProducer
 from store import IngestionStore
+from ticker_directory import TickerDirectory
 
 log = logging.getLogger("ingestion.listener")
 
@@ -40,8 +40,15 @@ class NewsListener:
         self._store = IngestionStore()
         self._backfiller = AlpacaNewsBackfiller(self._api_key, self._secret_key)
         self._health = IngestionHealth(self._producer.redis)
+        self._ticker_directory = TickerDirectory(
+            self._producer.redis,
+            self._api_key,
+            self._secret_key,
+        )
         self._stop = threading.Event()
 
+        self._ticker_directory.refresh_if_needed()
+        self._health.write(ticker_directory_assets=self._ticker_directory.asset_count)
         log.info("News streamer initialized.")
 
     async def _news_handler(self, article) -> None:
@@ -59,11 +66,7 @@ class NewsListener:
             return
 
         self._health.mark_article_seen()
-        relevant_tickers = [
-            ticker
-            for ticker in normalized.symbols
-            if is_relevant(normalized.headline, ticker)
-        ]
+        relevant_tickers = self._ticker_directory.select_relevant_tickers(normalized)
 
         try:
             result = self._store.ingest_article(
