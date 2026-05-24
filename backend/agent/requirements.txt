@@ -10,3 +10,5 @@ supabase==2.7.4
 redis==5.0.8
 websockets==15.0.1
 python-dotenv==1.2.2
+langsmith==0.8.3
+

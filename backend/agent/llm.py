@@ -273,10 +273,27 @@ def create_llm_client() -> Any:
     Swap this function's body to change providers — the rest of the
     agent pipeline only calls ``client.chat.completions.create()``.
     """
+    groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
+
+    # Optionally wrap with LangSmith tracing if configured in environment
+    if os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGSMITH_TRACING") == "true":
+        try:
+            from langsmith.wrappers import wrap_openai
+            class DummyCompletions:
+                def create(self, *args, **kwargs):
+                    pass
+            # Patch dummy completions so wrap_openai doesn't crash on Groq client
+            groq_client.completions = DummyCompletions()
+            groq_client = wrap_openai(groq_client)
+            log.info("ModelRouter: LangSmith tracing enabled for Groq client.")
+        except ImportError:
+            log.warning("ModelRouter: langsmith package is not installed; skipping LLM tracing.")
+
     return instructor.from_groq(
-        Groq(api_key=os.environ["GROQ_API_KEY"]),
+        groq_client,
         mode=instructor.Mode.JSON,
     )
+
 
 
 # ── Error Sanitisation ──────────────────────────────────────────────────────

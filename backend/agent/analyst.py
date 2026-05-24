@@ -450,7 +450,7 @@ def _make_pre_screen_node():
         score = quality.get("score", 0.0)
 
         if isinstance(score, (int, float)) and score >= 0.48:
-            return {}
+            return {"article_quality": quality}
 
         metadata = _quality_metadata(quality)
         grade = quality.get("grade", "LOW")
