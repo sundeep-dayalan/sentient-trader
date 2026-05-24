@@ -1082,7 +1082,7 @@ def _make_assess_risk_node():
 
 def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
     def execute_trade(state: AgentState) -> dict:
-        """Submit the order to Alpaca and mark the headline as seen in Redis."""
+        """Submit the order to Alpaca."""
         news = state["news"]
         action = state["analysis"].action
         plan = state.get("execution_plan") or {}
@@ -1090,7 +1090,17 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
 
         # Deterministic client_order_id prevents duplicate orders if the
         # worker crashes after placing the order but before xack (SEC-04).
-        client_order_id = hashlib.sha256(news.headline.encode()).hexdigest()[:36]
+        idempotency_seed = "|".join(
+            [
+                news.article_id or "",
+                news.article_url or "",
+                news.ticker,
+                news.published_at,
+                news.headline,
+                action,
+            ]
+        )
+        client_order_id = hashlib.sha256(idempotency_seed.encode()).hexdigest()[:36]
 
         result = trader.place_order(
             ticker=news.ticker,
@@ -1098,9 +1108,6 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
             quantity=quantity,
             client_order_id=client_order_id,
         )
-        if result.submitted:
-            cache.mark_seen(news.headline)
-
         return {
             "trade_order_id": result.order_id,
             "execution": {
@@ -1222,9 +1229,7 @@ def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
             article_id=news.article_id,
             decision_trace=_build_decision_trace(state),
         )
-
-        if not state.get("trade_order_id"):
-            cache.mark_seen(news.headline)
+        cache.mark_seen(news.headline)
 
         return {"error": None}
 

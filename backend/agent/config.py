@@ -1,8 +1,8 @@
 """
 Agent Configuration
 ====================
-Supabase is the single source of truth for all tunable parameters.
-Defaults live in migration 004 — not here.
+Supabase is the single source of truth for all trading parameters.
+Defaults live in the current Supabase schema baseline — not here.
 
 reload_from_supabase() is called once at startup (main.py) and populates
 all module-level variables below. If Supabase is unreachable, startup fails
@@ -13,6 +13,7 @@ Secrets (API keys) are NOT here — those stay in .env.
 
 import logging
 import os
+import socket
 
 log = logging.getLogger("agent.config")
 
@@ -58,11 +59,43 @@ GROQ_MIN_COMPLETION_TOKENS = int(os.environ.get("GROQ_MIN_COMPLETION_TOKENS", "1
 
 STREAM_KEY = os.environ.get("REDIS_STREAM_KEY", "market-news")
 CONSUMER_GROUP = os.environ.get("REDIS_CONSUMER_GROUP", "sentient-agent-group")
-CONSUMER_NAME = os.environ.get("REDIS_CONSUMER_NAME", "agent-worker-1")
+CONSUMER_NAME = os.environ.get("REDIS_CONSUMER_NAME") or f"agent-{socket.gethostname()}"
+CONSUMER_START_ID = os.environ.get("REDIS_CONSUMER_START_ID", "0")
 BATCH_SIZE = 10
 POLL_INTERVAL = 1.0
 ERROR_RETRY = 5.0
 REDIS_QUOTA_RETRY = int(os.environ.get("REDIS_QUOTA_RETRY", "60"))
+
+AGENT_MAX_TRADE_SIGNAL_AGE_SECONDS = int(
+    os.environ.get("AGENT_MAX_TRADE_SIGNAL_AGE_SECONDS", str(15 * 60))
+)
+AGENT_MAX_AUDIT_SIGNAL_AGE_SECONDS = int(
+    os.environ.get("AGENT_MAX_AUDIT_SIGNAL_AGE_SECONDS", str(24 * 60 * 60))
+)
+AGENT_MAX_PROCESSING_ATTEMPTS = int(
+    os.environ.get("AGENT_MAX_PROCESSING_ATTEMPTS", "3")
+)
+AGENT_RETRY_BASE_DELAY_SECONDS = int(
+    os.environ.get("AGENT_RETRY_BASE_DELAY_SECONDS", "30")
+)
+AGENT_RETRY_MAX_DELAY_SECONDS = int(
+    os.environ.get("AGENT_RETRY_MAX_DELAY_SECONDS", str(5 * 60))
+)
+AGENT_RETRY_BATCH_SIZE = int(os.environ.get("AGENT_RETRY_BATCH_SIZE", "5"))
+AGENT_PENDING_IDLE_SECONDS = int(os.environ.get("AGENT_PENDING_IDLE_SECONDS", "60"))
+AGENT_PENDING_BATCH_SIZE = int(os.environ.get("AGENT_PENDING_BATCH_SIZE", "5"))
+AGENT_RETRY_ZSET_KEY = os.environ.get(
+    "AGENT_RETRY_ZSET_KEY",
+    f"{STREAM_KEY}:agent-retry",
+)
+AGENT_RETRY_HASH_KEY = os.environ.get(
+    "AGENT_RETRY_HASH_KEY",
+    f"{STREAM_KEY}:agent-retry-payloads",
+)
+AGENT_DLQ_STREAM_KEY = os.environ.get(
+    "AGENT_DLQ_STREAM_KEY",
+    f"{STREAM_KEY}:agent-dlq",
+)
 
 # ── Agent parameters — populated by reload_from_supabase() at startup ────────
 
@@ -98,7 +131,9 @@ def reload_from_supabase() -> None:
     )
     row: dict = result.data.get("config", {}) if result.data else {}
     if not row:
-        raise RuntimeError("agent_config table is empty — run migration 004")
+        raise RuntimeError(
+            "agent_config table is empty — run supabase/migrations/001_current_schema.sql"
+        )
 
     BUY_SENTIMENT_THRESHOLD = float(row["buy_sentiment_threshold"])
     SELL_SENTIMENT_THRESHOLD = float(row["sell_sentiment_threshold"])

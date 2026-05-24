@@ -167,8 +167,10 @@ class SupabaseLogger:
                             trace_error,
                             fallback_error,
                         )
+                        raise fallback_error from trace_error
             log.info("Logged to Supabase: [%s] %s", trade_action, ticker)
         except Exception as e:
-            # Don't crash the pipeline if Supabase is momentarily unavailable.
-            # The trade already happened — we just lose the log entry this time.
+            # Durable audit logging is part of message resolution. Raise so the
+            # consumer can retry or dead-letter instead of silently ACKing.
             log.error("Failed to log trade to Supabase: %s", e)
+            raise

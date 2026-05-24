@@ -21,6 +21,8 @@ Deploy:       build and run the Dockerfile
 
 import logging
 import sys
+from datetime import datetime, timezone
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -83,16 +85,60 @@ def main() -> None:
             "error": None,
             "is_simulated": news.is_simulated,
         }
-        try:
-            graph.invoke(initial_state)
-        except Exception as e:
-            # Catch-all so one bad message never kills the consumer loop
-            log.error("Graph invocation failed for [%s]: %s", news.ticker, e)
+        graph.invoke(initial_state)
+
+    def log_expired_news(news: NewsMessage, metadata: dict[str, Any]) -> None:
+        """Record stale news as an explicit HOLD without spending LLM budget."""
+        age = float(metadata.get("age_seconds") or 0)
+        reason = (
+            f"Signal expired before analysis. Article age was {int(age)}s, "
+            f"above the {metadata.get('max_trade_age_seconds')}s trading window."
+        )
+        db.log_trade(
+            ticker=news.ticker,
+            headline=news.headline,
+            sentiment_score=0.0,
+            confidence_score=0.0,
+            reasoning=reason,
+            trade_action="HOLD",
+            is_simulated=news.is_simulated,
+            article_source=news.source,
+            article_url=news.article_url,
+            article_id=news.article_id,
+            decision_trace={
+                "schema_version": 2,
+                "pipeline": "decision_core",
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "news": news.model_dump(),
+                "market_context": None,
+                "article_quality": None,
+                "llm_operations": [],
+                "committee_debate": [],
+                "portfolio_manager_decision": None,
+                "risk_gate": {
+                    "step": "freshness_gate",
+                    "should_trade": False,
+                    "reason": reason,
+                    "metadata": metadata,
+                },
+                "execution": {
+                    "step": "execute_trade",
+                    "submitted": False,
+                    "ticker": news.ticker,
+                    "action": "HOLD",
+                    "quantity": 0,
+                    "order_id": None,
+                    "reason": "No Alpaca order submitted for expired signal.",
+                },
+                "error": "expired_signal",
+            },
+        )
+        cache.mark_seen(news.headline)
 
     # Start consuming — blocks forever
     log.info("Agent ready. Waiting for market news from Redis...")
     consumer = RedisStreamConsumer()
-    consumer.start(on_message=process_news)
+    consumer.start(on_message=process_news, on_expired=log_expired_news)
 
 
 if __name__ == "__main__":

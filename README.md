@@ -48,7 +48,7 @@ graph TD
     A["🗞️ Alpaca News\nWebSocket + REST backfill"]
     B["📡 sentient-trader-ingestion\n(Oracle Cloud worker)\n• WebSocket reconnect loop\n• REST gap backfill\n• durable store + outbox\n• dedupe before Redis"]
     C[("🔴 Valkey/Redis Stream\nmarket-news\npersistent · ordered · consumer groups")]
-    D["🤖 sentient-trader-agent\n(Oracle Cloud worker)\n• XREADGROUP consumer\n• LangGraph pipeline\n• 4× Groq LLM calls\n• Alpaca paper trades"]
+    D["🤖 sentient-trader-agent\n(Oracle Cloud worker)\n• XREADGROUP + pending rescue\n• freshness gate + retry/DLQ\n• LangGraph committee\n• Alpaca paper trades"]
     E[("🟢 Supabase Postgres\ntrades + agent_config")]
     F["🖥️ React Dashboard\n(Netlify)\n• Live signal feed\n• PnL chart\n• Signal Injector\n• Settings"]
     G["📈 Alpaca\nPaper Trading API"]
@@ -93,9 +93,9 @@ Every headline that enters the system follows this exact path:
             [summary] [article_url] [article_id]; failed publishes stay retryable
 
 5.  agent/consumer.py
-      └─▶ XREADGROUP GROUP agent-group consumer-1 COUNT 1 BLOCK 5000 STREAMS market-news >
-            Blocks until a new message arrives (5s timeout, then loops)
-            One message at a time — sequential processing, no parallelism hazard
+      └─▶ XREADGROUP reads new entries, XAUTOCLAIM rescues idle pending entries,
+            stale-news freshness gates prevent late trades, and failed analysis
+            moves to an independent retry queue or DLQ instead of blocking fresh news
 
 6.  agent/analyst.py — LangGraph state machine (see graph below)
       └─▶ check_cache → fetch_context → 4× Groq calls → assess_risk → trade/hold → log
@@ -167,7 +167,7 @@ The frontend's Signal Injector (`POST /simulate` on FastAPI) bypasses ingestion 
 
 **Location:** `backend/agent/`  
 **Host:** Oracle Cloud worker
-**Entry point:** `main.py` → `config.reload_from_supabase()` → `build_agent_graph()` → `ConsumerLoop.run()`
+**Entry point:** `main.py` → `config.reload_from_supabase()` → `build_agent_graph()` → `RedisStreamConsumer.start()`
 
 ### Startup sequence
 
@@ -177,10 +177,21 @@ main.py
   2. logging.basicConfig(...)              # configure before any imports that log
   3. config.reload_from_supabase()         # fetch agent_config row — crash loudly on failure
   4. graph = build_agent_graph(...)        # compile LangGraph, init Groq client + ModelRouter
-  5. ConsumerLoop(graph).run()             # block on Redis stream forever
+  5. RedisStreamConsumer.start(...)        # consume Redis stream forever
 ```
 
 `config.reload_from_supabase()` is the only place trading parameters are loaded. If the Supabase row is missing or the connection fails, the process raises `RuntimeError` and exits — it never silently runs on hardcoded defaults.
+
+### Agent reliability gates
+
+The agent resolves every Redis message into one of four durable outcomes:
+
+- **processed** — analysis/trade/hold was logged successfully, then `XACK`
+- **expired** — article is older than the trading window, so it logs a HOLD without spending LLM or order API budget
+- **retry scheduled** — temporary failure is moved to `market-news:agent-retry`, then the original stream entry is `XACK`'d so fresh news keeps flowing
+- **dead-lettered** — malformed messages, max-attempt failures, or articles beyond the audit window are written to `market-news:agent-dlq`
+
+The consumer also uses `XAUTOCLAIM` to rescue pending entries left behind by a crashed/stalled worker. Health is written through the shared worker health key (`sentient:workers:health`) with agent-specific counters for processed, expired, retried, dead-lettered, and errored messages.
 
 ---
 
@@ -499,6 +510,8 @@ Submits to `/simulate` on FastAPI. The backend API rate-limits the user and publ
 | Raw news archive | Supabase `raw_news_articles`      | Durable source payloads, normalized fields, dedupe links             |
 | Ingestion outbox | Supabase `news_outbox`            | Retryable Redis publish queue                                        |
 | Message bus      | Valkey/Redis Stream `market-news` | Hot ordered queue between ingestion and agent                        |
+| Agent retry      | Valkey sorted set + hash          | Failed analysis retries outside the hot stream                       |
+| Agent DLQ        | Valkey/Redis Stream               | Malformed, exhausted, or too-stale messages for operator inspection  |
 | Agent cache      | Valkey/Redis                      | Last-mile duplicate LLM suppression with `HeadlineCache`             |
 | Signal log       | Supabase `trades` table           | Every decision summary, linked to full Decision Core trace storage   |
 | Config           | Supabase `agent_config` table     | Single row (id=1) — all trading parameters, editable via Settings UI |
@@ -529,7 +542,7 @@ Submits to `/simulate` on FastAPI. The backend API rate-limits the user and publ
 XADD market-news * ticker TSLA headline "Tesla misses Q3..." source alpaca published_at 2026-05-10T12:00:00Z summary "Tesla reported..." article_url "https://..." article_id "12345" is_simulated false
 ```
 
-Consumer reads with `XREADGROUP` — at-least-once delivery. On success the entry is `XACK`'d. On exception the entry stays pending and will be redelivered (handled by `consumer.py`'s error recovery).
+Consumer reads with `XREADGROUP` — at-least-once delivery. On success, expiry logging, retry scheduling, or DLQ write, the entry is `XACK`'d. `XAUTOCLAIM` rescues idle pending entries left behind by a crashed/stalled worker.
 
 ---
 
@@ -672,12 +685,22 @@ pip install -r requirements.txt
 # Required env vars:
 export SUPABASE_URL=https://xxx.supabase.co
 export SUPABASE_SERVICE_ROLE_KEY=...
+export SUPABASE_DB_SCHEMA=sentient_trader
 export REDIS_HOST=127.0.0.1
 export REDIS_PORT=6379
 export REDIS_DB=0
 export REDIS_STREAM_KEY=market-news          # default
+export REDIS_CONSUMER_START_ID=0             # catch up retained stream entries on first boot
 export WORKER_HEALTH_KEY=sentient:workers:health
 export AGENT_WORKER_NAME=agent
+export AGENT_MAX_TRADE_SIGNAL_AGE_SECONDS=900
+export AGENT_MAX_AUDIT_SIGNAL_AGE_SECONDS=86400
+export AGENT_MAX_PROCESSING_ATTEMPTS=3
+export AGENT_RETRY_BASE_DELAY_SECONDS=30
+export AGENT_RETRY_MAX_DELAY_SECONDS=300
+export AGENT_RETRY_BATCH_SIZE=5
+export AGENT_PENDING_IDLE_SECONDS=60
+export AGENT_PENDING_BATCH_SIZE=5
 export ALPACA_API_KEY=...
 export ALPACA_SECRET_KEY=...
 export GROQ_API_KEY=...
@@ -780,8 +803,18 @@ Open the dashboard → Signal Injector panel → enter a ticker and headline →
 # backend/agent additionally needs:
   SUPABASE_URL=...
   SUPABASE_SERVICE_ROLE_KEY=...
+  SUPABASE_DB_SCHEMA=sentient_trader
+  REDIS_CONSUMER_START_ID=0
   WORKER_HEALTH_KEY=sentient:workers:health
   AGENT_WORKER_NAME=agent
+  AGENT_MAX_TRADE_SIGNAL_AGE_SECONDS=900
+  AGENT_MAX_AUDIT_SIGNAL_AGE_SECONDS=86400
+  AGENT_MAX_PROCESSING_ATTEMPTS=3
+  AGENT_RETRY_BASE_DELAY_SECONDS=30
+  AGENT_RETRY_MAX_DELAY_SECONDS=300
+  AGENT_RETRY_BATCH_SIZE=5
+  AGENT_PENDING_IDLE_SECONDS=60
+  AGENT_PENDING_BATCH_SIZE=5
   ALPACA_API_KEY=...
   ALPACA_SECRET_KEY=...
   GROQ_API_KEY=...
