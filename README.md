@@ -155,7 +155,7 @@ Each Redis stream entry contains:
 | `article_url`  | Alpaca `url`                       | When available |
 | `article_id`   | Alpaca `id`                        | When available |
 
-The stream is capped at 1,000 entries by default via `XADD MAXLEN ~` (configurable with `REDIS_STREAM_MAX_LEN`). Supabase is the durable replay source; Redis is the hot queue.
+The stream is capped at 1,000 entries by default via `XADD MAXLEN ~` (configurable with `REDIS_STREAM_MAX_LEN`). Supabase is the durable replay source; Redis is the hot queue. For historical replay tests, set `REDIS_STREAM_MAX_LEN` comfortably above the expected `news_outbox` count so the agent can drain the full replay before Redis trims older entries.
 
 ### Simulated signals
 

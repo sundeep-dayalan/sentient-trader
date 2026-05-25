@@ -65,7 +65,7 @@ GROQ_MODELS_URL = os.environ.get(
     "GROQ_MODELS_URL", "https://api.groq.com/openai/v1/models"
 )
 STREAM_KEY = os.environ.get("REDIS_STREAM_KEY", "market-news")
-STREAM_MAX_LEN = 1000
+STREAM_MAX_LEN = int(os.environ.get("REDIS_STREAM_MAX_LEN", "1000"))
 PAGE_SIZE = 20
 MAX_ORDER_IDS = 50
 MAX_PROMPT_LENGTH = 5000

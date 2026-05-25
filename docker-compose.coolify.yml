@@ -23,6 +23,7 @@ services:
       PORT: '${PORT:-8000}'
       CORS_ORIGINS: '${CORS_ORIGINS:-http://localhost:3000}'
       REDIS_STREAM_KEY: '${REDIS_STREAM_KEY:-market-news}'
+      REDIS_STREAM_MAX_LEN: '${REDIS_STREAM_MAX_LEN:-1000}'
       REDIS_HOST: '${REDIS_HOST:-127.0.0.1}'
       REDIS_PORT: '${REDIS_PORT:-6379}'
       REDIS_DB: '${REDIS_DB:-0}'
@@ -54,6 +55,7 @@ services:
     environment:
       PYTHONUNBUFFERED: '1'
       REDIS_STREAM_KEY: '${REDIS_STREAM_KEY:-market-news}'
+      REDIS_STREAM_MAX_LEN: '${REDIS_STREAM_MAX_LEN:-1000}'
       REDIS_HOST: '${REDIS_HOST:-127.0.0.1}'
       REDIS_PORT: '${REDIS_PORT:-6379}'
       REDIS_DB: '${REDIS_DB:-0}'
