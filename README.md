@@ -26,8 +26,9 @@ Alpaca News API → Valkey Stream → LangGraph Agent → Groq LLM Committee →
 9. [Tech Stack](#tech-stack)
 10. [Project Structure](#project-structure)
 11. [Running Locally](#running-locally)
-12. [Deployment](#deployment)
-13. [Key Design Decisions](#key-design-decisions)
+12. [Historical Replay Runbook](#historical-replay-runbook)
+13. [Deployment](#deployment)
+14. [Key Design Decisions](#key-design-decisions)
 
 ---
 
@@ -722,6 +723,7 @@ export REDIS_HOST=127.0.0.1
 export REDIS_PORT=6379
 export REDIS_DB=0
 export REDIS_STREAM_KEY=market-news
+export REDIS_STREAM_MAX_LEN=1000
 export WORKER_HEALTH_KEY=sentient:workers:health
 export INGESTION_WORKER_NAME=ingestion
 export INGESTION_LIVE_ENABLED=true
@@ -736,19 +738,6 @@ export TICKER_DIRECTORY_REFRESH_CHECK_SECONDS=60
 export TICKER_PUBLISH_SCORE_THRESHOLD=80
 
 python main.py
-```
-
-Historical replay for reliability testing:
-
-```bash
-# Optional: pause the normal live worker while replaying.
-export INGESTION_LIVE_ENABLED=false
-
-# Fetch and count only; does not write DB or Redis.
-python replay_historical.py --hours 1 --dry-run
-
-# Real replay through the normal ingestion path.
-python replay_historical.py --days 10 --max-pages 300 --confirm-replay
 ```
 
 ### 4. Backend API
@@ -768,6 +757,7 @@ export REDIS_HOST=127.0.0.1
 export REDIS_PORT=6379
 export REDIS_DB=0
 export REDIS_STREAM_KEY=market-news
+export REDIS_STREAM_MAX_LEN=1000
 export WORKER_HEALTH_KEY=sentient:workers:health
 export AGENT_WORKER_NAME=agent
 export ALPACA_API_KEY=...
@@ -800,6 +790,213 @@ Open the dashboard → Signal Injector panel → enter a ticker and headline →
 
 ---
 
+## Historical Replay Runbook
+
+Historical replay is for reliability testing. It exercises the normal ingestion
+pipeline from Alpaca REST news through normalization, durable storage, dedupe,
+ticker selection, outbox, Redis Stream, agent processing, Supabase logging, and
+optional paper order submission. It intentionally does not test the Alpaca live
+WebSocket connection.
+
+### Replay environment overrides
+
+Use these overrides before running a multi-day replay. The example values are
+for a 10-day replay.
+
+| Env var | Normal live value | Replay value | Why |
+| --- | --- | --- | --- |
+| `INGESTION_LIVE_ENABLED` | `true` | `false` | Prevent live WebSocket/backfill news from mixing with replay data. |
+| `REDIS_STREAM_MAX_LEN` | `1000` | `20000` | Redis uses `XADD MAXLEN ~`; the cap must be higher than expected `news_outbox` rows or replay entries can be trimmed before the agent reads them. |
+| `AGENT_MAX_TRADE_SIGNAL_AGE_SECONDS` | `900` | `1209600` | Lets 10-day historical articles go through the full agent/trade path instead of being logged as expired HOLDs. |
+| `AGENT_MAX_AUDIT_SIGNAL_AGE_SECONDS` | `86400` | `1209600` | Prevents older replay articles from being dead-lettered before audit logging. |
+| `REDIS_CONSUMER_START_ID` | `0` | `0` | New consumer groups should start from retained stream history. Do not use `$` for replay. |
+
+For a different replay window, set the two agent age values to at least the
+window length plus runtime cushion. For example, 14 days is `1209600` seconds.
+
+### Preflight reset
+
+Only run this against a disposable paper-trading test environment. Preserve
+`agent_config`; the agent needs it at startup.
+
+```sql
+truncate table
+  sentient_trader.trade_decision_traces,
+  sentient_trader.trades,
+  sentient_trader.news_outbox,
+  sentient_trader.news_article_symbols,
+  sentient_trader.raw_news_articles,
+  sentient_trader.ingestion_events,
+  sentient_trader.ingestion_cursors
+restart identity cascade;
+```
+
+If the Redis database is dedicated to this app, clear replay state and cache:
+
+```redis
+FLUSHDB
+```
+
+Restart/redeploy the services after changing env vars. Before replay, verify:
+
+```redis
+XLEN market-news
+XINFO GROUPS market-news
+ZCARD market-news:agent-retry
+XLEN market-news:agent-dlq
+HGET sentient:workers:health ingestion
+HGET sentient:workers:health agent
+```
+
+Expected preflight state:
+
+- `XLEN market-news` is `0`
+- retry and DLQ are `0`
+- ingestion health phase is `live_paused`
+- agent health phase is `polling`
+- ticker directory has loaded assets
+
+### Dry run
+
+Run a small dry run first. It fetches Alpaca news and prints counts without
+writing Supabase or Redis.
+
+```bash
+cd backend/ingestion
+python replay_historical.py --days 1 --dry-run
+```
+
+### Real replay
+
+Run the real replay from the ingestion container or local ingestion environment:
+
+```bash
+cd backend/ingestion
+python replay_historical.py --days 10 --max-pages 300 --confirm-replay
+```
+
+The completion summary should show nonzero `raw_news_articles`,
+`news_outbox`, `ingestion_events`, and `redis_stream`. With
+`REDIS_STREAM_MAX_LEN=20000`, `redis_stream` should be near the published
+outbox count for a 10-day replay. If it is around `1000`, the stream cap is
+still too low or the env var is not reaching the ingestion process.
+
+### During-run checks
+
+Redis:
+
+```redis
+XINFO STREAM market-news
+XINFO GROUPS market-news
+XPENDING market-news sentient-agent-group
+ZCARD market-news:agent-retry
+XLEN market-news:agent-dlq
+HGET sentient:workers:health agent
+HGET sentient:workers:health ingestion
+```
+
+Healthy signs:
+
+- `XINFO STREAM entries-added` rises with published outbox rows
+- `XINFO STREAM length` stays comfortably above `1000` for large replays
+- `lag` may rise while replay publishes faster than the agent drains
+- `pending` stays small
+- retry and DLQ remain `0`
+- agent `messages_processed` increases
+- ingestion `articles_seen` and `articles_published` increase
+
+Supabase:
+
+```sql
+select status, count(*)
+from sentient_trader.news_outbox
+group by status
+order by status;
+```
+
+During a healthy replay, `PUBLISHED` should rise and `PENDING` /
+`RETRYING` / `FAILED` should not accumulate.
+
+### Post-run checks
+
+Once the replay command finishes, ingestion is done but the agent may still be
+draining Redis. Wait for Redis lag to approach zero:
+
+```redis
+XINFO GROUPS market-news
+ZCARD market-news:agent-retry
+XLEN market-news:agent-dlq
+HGET sentient:workers:health agent
+```
+
+Then validate the database:
+
+```sql
+select status, count(*)
+from sentient_trader.news_outbox
+group by status
+order by status;
+
+select coalesce(dedupe_reason, 'not_duplicate') as dedupe_reason,
+       is_duplicate,
+       count(*)
+from sentient_trader.raw_news_articles
+group by dedupe_reason, is_duplicate
+order by count(*) desc;
+
+select 'trades_total' as metric, count(*)::bigint as value
+from sentient_trader.trades
+union all
+select 'traces_total', count(*)::bigint
+from sentient_trader.trade_decision_traces
+union all
+select 'outbox_published', count(*)::bigint
+from sentient_trader.news_outbox
+where status = 'PUBLISHED';
+
+select trade_action, count(*)
+from sentient_trader.trades
+group by trade_action
+order by count(*) desc;
+
+select count(*) as trades_without_trace
+from sentient_trader.trades t
+left join sentient_trader.trade_decision_traces d on d.trade_id = t.id
+where d.trade_id is null;
+```
+
+Expected post-run state:
+
+- all outbox rows are `PUBLISHED`
+- retry and DLQ are `0`
+- Redis group `lag` is near `0`
+- `trades_total` and `traces_total` are close to `outbox_published`
+- `trades_without_trace` is `0`
+
+If `outbox_published` is much larger than `trades_total` while `XINFO STREAM
+length` is near `1000`, Redis trimmed the replay before the agent could read it.
+Increase `REDIS_STREAM_MAX_LEN`, flush/reset, and rerun.
+
+### Revert after replay
+
+After the replay test is complete, restore normal live settings and redeploy or
+restart affected services:
+
+```env
+INGESTION_LIVE_ENABLED=true
+REDIS_STREAM_MAX_LEN=1000
+AGENT_MAX_TRADE_SIGNAL_AGE_SECONDS=900
+AGENT_MAX_AUDIT_SIGNAL_AGE_SECONDS=86400
+REDIS_CONSUMER_START_ID=0
+```
+
+If the replay database should not remain visible in the dashboard, run the
+preflight reset again after exporting any evidence you need. If the Alpaca paper
+account was used for order placement, cancel open orders and close/reset paper
+positions before returning to live ingestion.
+
+---
+
 ## Deployment
 
 ### Oracle Cloud backend services
@@ -810,6 +1007,7 @@ Open the dashboard → Signal Injector panel → enter a ticker and headline →
   REDIS_PORT=6379 \
   REDIS_DB=0 \
   REDIS_STREAM_KEY=market-news \
+  REDIS_STREAM_MAX_LEN=1000 \
   WORKER_HEALTH_KEY=sentient:workers:health
 
 # backend/api additionally needs:

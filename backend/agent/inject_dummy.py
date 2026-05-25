@@ -2,14 +2,20 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 # Add parent directory to path so we can import config/redis_client
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from redis_client import create_redis_client
 
-load_dotenv()
+# Try to find a root/parent .env file first for local development.
+# If not found (e.g. in production/Docker), it will safely fallback.
+dotenv_path = find_dotenv()
+if dotenv_path:
+    load_dotenv(dotenv_path)
+else:
+    load_dotenv()
 
 
 def inject_message(ticker: str, headline: str, summary: str = None) -> None:

@@ -10,6 +10,7 @@ function normalizeBasePath(value: string | undefined): string {
 }
 
 export default defineConfig({
+  envDir: path.resolve(__dirname, '../'),
   base: normalizeBasePath(process.env.VITE_BASE_PATH),
   plugins: [react()],
   build: {

@@ -19,13 +19,19 @@ Deploy:       build and run the Dockerfile
 import logging
 import sys
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 from listener import NewsListener
 
 # Load .env file when running locally. In production, secrets are injected
 # directly into the environment so this is a no-op.
-load_dotenv()
+# Try to find a root/parent .env file first for local development.
+# If not found (e.g. in production/Docker), it will safely fallback.
+dotenv_path = find_dotenv()
+if dotenv_path:
+    load_dotenv(dotenv_path)
+else:
+    load_dotenv()
 
 # Structured logging so the host's log aggregator can parse and search entries.
 logging.basicConfig(

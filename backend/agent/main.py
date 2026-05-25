@@ -24,10 +24,16 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 # Load environment variables first, before importing config
-load_dotenv()
+# Try to find a root/parent .env file first for local development.
+# If not found (e.g. in production/Docker), it will safely fallback.
+dotenv_path = find_dotenv()
+if dotenv_path:
+    load_dotenv(dotenv_path)
+else:
+    load_dotenv()
 
 import config
 from analyst import build_agent_graph

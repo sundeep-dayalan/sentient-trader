@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -31,7 +31,13 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from redis_client import create_redis_client
 from shared.worker_health import health_key, read_worker_state, worker_name
 
-load_dotenv()
+# Try to find a root/parent .env file first for local development.
+# If not found (e.g. in production/Docker), it will safely fallback.
+dotenv_path = find_dotenv()
+if dotenv_path:
+    load_dotenv(dotenv_path)
+else:
+    load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,

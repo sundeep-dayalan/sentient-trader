@@ -21,7 +21,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.append(str(BACKEND_DIR))
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 import config
 from backfill import AlpacaNewsBackfiller
@@ -187,7 +187,11 @@ def _run_replay(args: argparse.Namespace, start: datetime, end: datetime) -> int
 
 
 def main() -> int:
-    load_dotenv()
+    dotenv_path = find_dotenv()
+    if dotenv_path:
+        load_dotenv(dotenv_path)
+    else:
+        load_dotenv()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
