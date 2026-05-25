@@ -21,13 +21,106 @@ Implementation note:
 
 import logging
 import os
-from typing import Optional
+from typing import Any, Optional
 from uuid import uuid4
 
-from supabase import Client, create_client
-from supabase.client import ClientOptions
-
 log = logging.getLogger("agent.logger")
+
+
+def _floatish(value: Any) -> Optional[float]:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _decision_path(decision_trace: Optional[dict], trade_action: str) -> str:
+    if not isinstance(decision_trace, dict):
+        return "legacy"
+
+    risk_gate = decision_trace.get("risk_gate")
+    if isinstance(risk_gate, dict) and risk_gate.get("step") == "freshness_gate":
+        return "expired"
+
+    pm = decision_trace.get("portfolio_manager_decision")
+    if isinstance(pm, dict) and pm.get("model") == "deterministic-pre-screen":
+        return "pre_screen"
+
+    llm_operations = decision_trace.get("llm_operations")
+    if isinstance(llm_operations, list) and llm_operations:
+        return "full_debate"
+
+    if trade_action == "HOLD":
+        return "analysis_skipped"
+    return "legacy"
+
+
+def trade_observability_fields(
+    *,
+    decision_trace: Optional[dict],
+    trade_action: str,
+    order_id: Optional[str],
+) -> dict[str, Any]:
+    """
+    Derive queryable execution/quality fields from the full JSON trace.
+
+    The trace remains the complete audit record; these columns keep dashboards
+    and replay audits honest without forcing every list query to read JSONB.
+    """
+    fields: dict[str, Any] = {
+        "pm_recommendation": trade_action,
+        "decision_path": _decision_path(decision_trace, trade_action),
+    }
+    if not isinstance(decision_trace, dict):
+        return fields
+
+    risk_gate = decision_trace.get("risk_gate")
+    if isinstance(risk_gate, dict):
+        fields["risk_should_trade"] = risk_gate.get("should_trade")
+        inputs = risk_gate.get("inputs")
+        metrics = risk_gate.get("committee_metrics")
+        if isinstance(inputs, dict):
+            calibrated = _floatish(inputs.get("calibrated_confidence"))
+            if calibrated is not None:
+                fields["calibrated_confidence"] = round(calibrated, 4)
+        if isinstance(metrics, dict):
+            if "calibrated_confidence" not in fields:
+                calibrated = _floatish(metrics.get("calibrated_confidence"))
+                if calibrated is not None:
+                    fields["calibrated_confidence"] = round(calibrated, 4)
+            cap = _floatish(metrics.get("confidence_cap"))
+            if cap is not None:
+                fields["confidence_cap"] = round(cap, 4)
+        reason = risk_gate.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            fields["gate_reason"] = reason.strip()
+
+    execution = decision_trace.get("execution")
+    if isinstance(execution, dict):
+        execution_order_id = str(execution.get("order_id") or order_id or "").strip()
+        submitted = execution.get("submitted") is True
+        fields["client_order_id"] = execution.get("client_order_id")
+        fields["order_status"] = execution.get("status")
+        error = execution.get("error")
+        if isinstance(error, str) and error.strip():
+            fields["execution_error"] = error.strip()
+        if submitted and execution_order_id:
+            fields["executed_action"] = execution.get("action") or trade_action
+        elif submitted and not execution_order_id:
+            fields["order_status"] = fields.get("order_status") or "missing_order_id"
+            fields["execution_error"] = (
+                fields.get("execution_error")
+                or "Execution trace reported submitted=true but no Alpaca order_id was captured."
+            )
+
+    for key in ("processing_started_at", "processing_finished_at"):
+        value = decision_trace.get(key)
+        if isinstance(value, str) and value.strip():
+            fields[key] = value
+
+    return fields
 
 
 class SupabaseLogger:
@@ -38,7 +131,10 @@ class SupabaseLogger:
     """
 
     def __init__(self) -> None:
-        self._client: Client = create_client(
+        from supabase import create_client
+        from supabase.client import ClientOptions
+
+        self._client = create_client(
             supabase_url=os.environ["SUPABASE_URL"],
             supabase_key=os.environ["SUPABASE_SERVICE_ROLE_KEY"],
             options=ClientOptions(
@@ -74,7 +170,7 @@ class SupabaseLogger:
         is not streamed back to the agent after every write.
         """
         trade_id = str(uuid4())
-        slim_record = {
+        base_record = {
             "id": trade_id,
             "ticker": ticker,
             "headline": headline,
@@ -85,13 +181,23 @@ class SupabaseLogger:
             "quantity": quantity,
             "is_simulated": is_simulated,
         }
+        slim_record = {
+            **base_record,
+            **trade_observability_fields(
+                decision_trace=decision_trace,
+                trade_action=trade_action,
+                order_id=order_id,
+            ),
+        }
         if article_url:
             slim_record["article_url"] = article_url
 
         legacy_record = {
-            **slim_record,
+            **base_record,
             "reasoning": reasoning,
         }
+        if article_url:
+            legacy_record["article_url"] = article_url
         if article_source:
             legacy_record["article_source"] = article_source
         if article_id:

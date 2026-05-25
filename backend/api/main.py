@@ -79,13 +79,19 @@ MAX_PROMPT_LENGTH = 5000
 
 TRADE_SUMMARY_SELECT = (
     "id, created_at, ticker, headline, article_url, sentiment_score, "
-    "confidence_score, trade_action, order_id, quantity, is_simulated"
+    "confidence_score, calibrated_confidence, confidence_cap, trade_action, "
+    "pm_recommendation, risk_should_trade, executed_action, order_id, "
+    "client_order_id, order_status, execution_error, gate_reason, decision_path, "
+    "processing_started_at, processing_finished_at, quantity, is_simulated"
 )
 LEGACY_TRADE_DETAIL_SELECT = (
     f"{TRADE_SUMMARY_SELECT}, reasoning, article_source, article_id, decision_trace"
 )
 TRACE_DETAIL_SELECT = "decision_trace, reasoning, article_source, article_id"
-TRADE_STATS_SELECT = "trade_action, order_id, sentiment_score"
+TRADE_STATS_SELECT = (
+    "trade_action, pm_recommendation, executed_action, order_id, "
+    "risk_should_trade, decision_path, sentiment_score"
+)
 
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.I
@@ -319,6 +325,11 @@ def string_value(value: Any) -> str | None:
 
 
 def is_risk_gated(row: dict[str, Any]) -> bool:
+    if row.get("risk_should_trade") is False and not (
+        str(row.get("executed_action") or "").strip()
+        or str(row.get("order_id") or "").strip()
+    ):
+        return True
     trace = row.get("decision_trace")
     if isinstance(trace, dict):
         risk_gate = trace.get("risk_gate")
@@ -334,15 +345,23 @@ def is_risk_gated(row: dict[str, Any]) -> bool:
 def compute_dashboard_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
     sentiment_total = 0.0
     buy_orders = sell_orders = risk_gated = executed = 0
+    pre_screened = full_debates = 0
     for row in rows:
-        if row.get("trade_action") == "BUY":
+        recommendation = row.get("pm_recommendation") or row.get("trade_action")
+        if recommendation == "BUY":
             buy_orders += 1
-        if row.get("trade_action") == "SELL":
+        if recommendation == "SELL":
             sell_orders += 1
         if is_risk_gated(row):
             risk_gated += 1
-        if str(row.get("order_id") or "").strip():
+        if str(row.get("executed_action") or "").strip() or str(
+            row.get("order_id") or ""
+        ).strip():
             executed += 1
+        if row.get("decision_path") == "pre_screen":
+            pre_screened += 1
+        if row.get("decision_path") == "full_debate":
+            full_debates += 1
         sentiment_total += number_value(row.get("sentiment_score")) or 0
 
     return {
@@ -351,6 +370,8 @@ def compute_dashboard_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "buyOrders": buy_orders,
         "sellOrders": sell_orders,
         "riskGated": risk_gated,
+        "preScreened": pre_screened,
+        "fullDebates": full_debates,
         "avgSentiment": sentiment_total / len(rows) if rows else 0,
     }
 

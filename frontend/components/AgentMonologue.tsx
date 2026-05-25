@@ -641,7 +641,11 @@ function PersonaCard({ persona }: { persona: PersonaOpinion }) {
         <StanceBadge stance={persona.stance} />
       </div>
 
-      {(persona.evidence_quality || persona.catalyst_strength || persona.time_horizon) && (
+      {(persona.evidence_quality ||
+        persona.catalyst_strength ||
+        persona.time_horizon ||
+        persona.risk_level ||
+        persona.disqualifying_conditions?.length) && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {persona.evidence_quality && <TinyBadge label={`Evidence ${persona.evidence_quality}`} />}
           {persona.catalyst_strength && (
@@ -650,13 +654,17 @@ function PersonaCard({ persona }: { persona: PersonaOpinion }) {
           {persona.time_horizon && persona.time_horizon !== 'UNKNOWN' && (
             <TinyBadge label={persona.time_horizon} />
           )}
+          {persona.risk_level && <TinyBadge label={`Risk ${persona.risk_level}`} />}
+          {persona.disqualifying_conditions && persona.disqualifying_conditions.length > 0 && (
+            <TinyBadge label={`${persona.disqualifying_conditions.length} blocker(s)`} />
+          )}
         </div>
       )}
 
       {/* Conviction bar with tooltip */}
       <div className="mt-2.5 flex items-center gap-2">
         <div className="flex shrink-0 items-center gap-1 text-[10px] text-muted">
-          Conviction
+          {persona.risk_level ? 'Risk score' : 'Conviction'}
           <Tooltip text={TOOLTIPS.conviction} side="bottom" />
         </div>
         <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-3">

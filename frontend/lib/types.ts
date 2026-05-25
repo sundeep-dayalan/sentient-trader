@@ -16,6 +16,9 @@ export interface PersonaOpinion {
   time_horizon?: string | null;
   key_evidence?: string[];
   missing_data?: string[];
+  risk_level?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | null;
+  risk_confidence_cap?: number | null;
+  disqualifying_conditions?: string[];
 }
 
 export interface ArticleQuality {
@@ -46,6 +49,8 @@ export interface RiskGateTrace {
     thesis_quality?: string;
     cap_reasons?: string[];
     high_conviction_dissenters?: string[];
+    risk_level?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | string | null;
+    risk_disqualifying_conditions?: string[];
   };
   execution_plan?: {
     action?: string;
@@ -108,9 +113,21 @@ export interface Trade {
   article_id?: string | null;
   sentiment_score: number; // -1.0 to 1.0
   confidence_score: number; // 0.0 to 1.0
+  calibrated_confidence?: number | null; // execution confidence after caps
+  confidence_cap?: number | null;
   reasoning?: string; // loaded with full trace, not feed rows
   trade_action: 'BUY' | 'SELL' | 'HOLD';
+  pm_recommendation?: 'BUY' | 'SELL' | 'HOLD' | null;
+  risk_should_trade?: boolean | null;
+  executed_action?: 'BUY' | 'SELL' | null;
   order_id: string | null; // Alpaca order UUID — null if HOLD
+  client_order_id?: string | null;
+  order_status?: string | null;
+  execution_error?: string | null;
+  gate_reason?: string | null;
+  decision_path?: string | null;
+  processing_started_at?: string | null;
+  processing_finished_at?: string | null;
   quantity: number;
   is_simulated: boolean; // true when injected via the Simulate button
   decision_trace?: DecisionTrace | PersonaOpinion[] | null; // generic Decision Core JSONB trace
@@ -124,6 +141,8 @@ export interface DashboardStats {
   buyOrders: number;
   sellOrders: number;
   riskGated: number;
+  preScreened?: number;
+  fullDebates?: number;
   avgSentiment: number;
 }
 

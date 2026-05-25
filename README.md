@@ -1,6 +1,6 @@
 # Sentient Trader
 
-An autonomous AI trading system that reads live financial news, debates market impact across three AI personas, and executes paper trades — end to end, with zero human input in the loop.
+An autonomous paper-trading system that reads live financial news, filters weak signals, runs a sequential AI committee on tradeable catalysts, and submits Alpaca paper orders only when the calibrated risk gate clears.
 
 ```
 Alpaca News API -> Valkey Stream -> LangGraph Agent -> LLM Committee -> Alpaca Orders -> Supabase -> FastAPI -> React Dashboard
@@ -27,16 +27,17 @@ Alpaca News API -> Valkey Stream -> LangGraph Agent -> LLM Committee -> Alpaca O
 10. [Project Structure](#project-structure)
 11. [Running Locally](#running-locally)
 12. [Historical Replay Runbook](#historical-replay-runbook)
-13. [Deployment](#deployment)
-14. [Key Design Decisions](#key-design-decisions)
+13. [Controlled Proof Test](#controlled-proof-test)
+14. [Deployment](#deployment)
+15. [Key Design Decisions](#key-design-decisions)
 
 ---
 
 ## What It Does
 
-Sentient Trader monitors financial news 24/7, processes each article through a four-call AI committee that debates the market impact from three investment worldviews, then either executes a paper trade or logs a reasoned HOLD. Every decision — trade or hold — is stored in full detail and visualized in a live dashboard.
+Sentient Trader monitors financial news 24/7, stores and dedupes each article, deterministically pre-screens weak or broad headlines, then sends tradeable catalysts through a four-call AI committee. The agent submits an Alpaca paper order only when the Portfolio Manager recommendation, calibrated confidence, source quality, account state, and position-aware execution plan all clear the risk gate. Otherwise it logs a reasoned HOLD. Every decision is stored in full detail and visualized in a live dashboard.
 
-**It is not a bot that fires on keywords.** The system runs a real sequential argument: the momentum trader's opinion conditions the value investor's response, and the risk manager stress-tests both before the portfolio manager makes a final call. The full debate transcript is stored and shown in the UI.
+**It is not just a bot that fires on keywords.** Cheap deterministic filters do the first pass, and the LLM committee is reserved for signals with enough catalyst quality to justify spend. When the committee runs, the momentum trader's opinion conditions the value investor's response, the risk manager outputs a non-directional risk level plus disqualifying conditions, and the portfolio manager makes the final recommendation. The full debate transcript is stored and shown in the UI.
 
 ---
 
@@ -99,7 +100,8 @@ Every headline that enters the system follows this exact path:
             moves to an independent retry queue or DLQ instead of blocking fresh news
 
 6.  agent/analyst.py — LangGraph state machine (see graph below)
-      └─▶ check_cache → fetch_context → 4× LLM calls → assess_risk → trade/hold → log
+      └─▶ check_cache → fetch_context → deterministic pre-screen → 0 or 4 LLM calls
+            → calibrated risk gate → paper order or HOLD → log
 
 7.  agent/logger.py
       └─▶ INSERT into Supabase "trades" table
@@ -205,11 +207,13 @@ flowchart TD
     START([▶ START]) --> CC["check_cache\nSHA-256 Redis lookup"]
     CC -->|cache HIT| SKIP([⏭ END — duplicate skipped])
     CC -->|cache MISS| FC["fetch_context\nAlpaca Data API\nlive price + day change %"]
-    FC --> MA["momentum_analyst\nLLM call #1\nTrend · Price action"]
+    FC --> PS["pre_screen\nPure Python\nsource quality + catalyst score"]
+    PS -->|low quality| AR
+    PS -->|tradeable catalyst| MA["momentum_analyst\nLLM call #1\nTrend · Price action"]
     MA --> VA["value_analyst\nLLM call #2\nFundamentals · reads #1"]
-    VA --> RA["risk_analyst\nLLM call #3\nTail risk · reads #1 + #2"]
-    RA --> SY["synthesizer\nLLM call #4\nPortfolio Manager · reads all three"]
-    SY --> AR["assess_risk\nPure Python\nsentiment + confidence thresholds"]
+    VA --> RA["risk_analyst\nLLM call #3\nRisk level + blockers"]
+    RA --> SY["synthesizer\nLLM call #4\nPortfolio Manager"]
+    SY --> AR["assess_risk\nPure Python\ncalibrated confidence + execution plan"]
     AR -->|thresholds cleared| ET["execute_trade\nAlpaca paper order"]
     AR -->|HOLD| LR["log_result\nSupabase INSERT\nfull debate stored as JSONB"]
     ET --> LR
@@ -221,6 +225,7 @@ flowchart TD
     style SY fill:#f59e0b,color:#fff
     style ET fill:#22c55e,color:#fff
     style LR fill:#64748b,color:#fff
+    style PS fill:#0f766e,color:#fff
     style AR fill:#1e293b,color:#fff
 ```
 
@@ -230,12 +235,14 @@ flowchart TD
 news:             NewsMessage       # immutable input
 is_cached:        bool
 market_context:   {price, day_change_pct} | None
+article_quality:  {score, grade, category, flags} | None
 momentum_opinion: PersonaAnalysis | None
 value_opinion:    PersonaAnalysis | None
-risk_opinion:     PersonaAnalysis | None
+risk_opinion:     RiskAssessment | None
 analysis:         TradeAnalysis | None   # assembled by synthesizer
 should_trade:     bool
 trade_order_id:   str | None
+processing_started_at: str | None
 error:            str | None
 is_simulated:     bool
 ```
@@ -249,6 +256,12 @@ SHA-256 hashes the headline text and checks Redis with a 5-minute TTL. If the ha
 Calls Alpaca's Stock Snapshot endpoint for the ticker. Returns `{price, day_change_pct}` or `None` on any failure (non-standard tickers in simulate mode, market closed, network error). Fails gracefully — a missing price doesn't abort analysis, it just degrades the prompt context.
 
 The day-change context matters substantively: a +8% NVDA headline reads differently on a day where NVDA is already +8% (momentum crowded) vs. a flat day (genuine surprise).
+
+#### Node: pre_screen
+
+Before spending LLM budget, `decision_rules.evaluate_article_quality()` scores whether the article is tradeable. Usable summaries, explicit ticker mentions, and concrete catalysts increase the score; watchlists, historical-return pieces, generic radar headlines, basket headlines, and thin summaries reduce it.
+
+Rows below the execution quality floor become deterministic HOLDs with a synthetic 3x-neutral committee, `decision_path='pre_screen'`, and no LLM operations. Rows above the floor proceed to the full four-call debate. In the 3-day replay, this path handled 318/518 signals, so it is a major part of the system design rather than an implementation footnote.
 
 ---
 
@@ -305,15 +318,15 @@ sequenceDiagram
 
 #### Call #3 — Risk Manager
 
-**System prompt:** Adversarial mandate. Told to find the flaw in both prior arguments. Stress-test for tail risk, regulatory exposure, macro factors, liquidity risk.
+**System prompt:** Non-directional execution-risk mandate. Told to produce a risk level, risk score, confidence cap, and concrete disqualifying conditions using only supplied evidence.
 
 **User prompt:** Market line + headline + summary + **both prior opinions** in full. The risk manager reads the complete debate so far.
 
-**Output:** Same `PersonaAnalysis` schema.
+**Output:** `RiskAssessment` → `{risk_level: LOW|MEDIUM|HIGH|CRITICAL, risk_score: float 0–1, confidence_cap: float 0–1, disqualifying_conditions: list[str], headline_take: str, analysis: str}`
 
 #### Call #4 — Portfolio Manager (Synthesizer)
 
-**System prompt:** Weighs the committee's views. Told to consider conviction scores — a high-conviction BEARISH from risk should suppress a bullish consensus. Must resolve split decisions explicitly.
+**System prompt:** Weighs the directional views from momentum/value, then applies the risk manager's level, confidence cap, and disqualifying conditions as execution constraints. Must resolve split decisions explicitly.
 
 **User prompt:** Market line + headline + summary + **all three opinions** formatted as a debate transcript.
 
@@ -323,7 +336,7 @@ The synthesizer then assembles the final `TradeAnalysis`:
 
 ```python
 TradeAnalysis(
-    committee = [momentum_opinion, value_opinion, risk_opinion],  # full PersonaOpinion objects
+    committee = [momentum_opinion, value_opinion, risk_card],  # full PersonaOpinion objects
     sentiment  = synthesis.sentiment,
     confidence = synthesis.confidence,
     action     = synthesis.action,
@@ -453,12 +466,14 @@ Because fallback happens inside the same `call()` invocation, a risk analyst can
 ```python
 is_strong_buy  = action == "BUY"  and sentiment >= config.BUY_SENTIMENT_THRESHOLD
 is_strong_sell = action == "SELL" and sentiment <= config.SELL_SENTIMENT_THRESHOLD
-is_confident   = confidence >= config.CONFIDENCE_THRESHOLD
+is_confident   = calibrated_confidence >= effective_confidence_threshold
+quality_ok     = article_quality.score >= ARTICLE_EXECUTION_SCORE_FLOOR
+plan_ok        = execution_plan.blocked_reasons == []
 
-should_trade = (is_strong_buy or is_strong_sell) and is_confident
+should_trade = (is_strong_buy or is_strong_sell) and is_confident and quality_ok and plan_ok
 ```
 
-Requires **both** a strong directional signal AND high confidence. The synthesizer prompt is designed to produce lower confidence on split committee votes, so a 2-vs-1 debate is naturally harder to clear this gate than a unanimous one.
+Requires a strong directional recommendation, calibrated confidence, sufficient article quality, and a valid account/position-aware execution plan. Raw Portfolio Manager confidence is retained for analysis; `calibrated_confidence` is what the order gate uses.
 
 Default thresholds (seeded in Supabase, editable via Settings UI):
 
@@ -474,12 +489,13 @@ Default thresholds (seeded in Supabase, editable via Settings UI):
 
 Every unique headline that enters the graph **always produces a row in the `trades` table**, regardless of how analysis went.
 
-| Outcome                                                       | `trade_action` written | `reasoning`                               |
-| ------------------------------------------------------------- | ---------------------- | ----------------------------------------- |
-| Full debate, threshold cleared                                | `BUY` or `SELL`        | Synthesizer's reasoning text              |
-| Full debate, threshold not cleared                            | `HOLD`                 | Synthesizer's reasoning text              |
-| Partial debate (some persona calls failed), threshold cleared | `BUY` or `SELL`        | Synthesizer reasons on available opinions |
-| All LLM calls failed / all models exhausted                   | `HOLD`                 | `"Analysis skipped — <error message>"`    |
+| Outcome                                                       | Recommendation columns                       | Execution columns                         |
+| ------------------------------------------------------------- | -------------------------------------------- | ----------------------------------------- |
+| Pre-screen HOLD                                               | `trade_action=HOLD`, `decision_path=pre_screen` | `executed_action=null`, `order_id=null` |
+| Full debate, threshold cleared, Alpaca accepted               | `pm_recommendation=BUY/SELL`                 | `executed_action=BUY/SELL`, `order_id=<alpaca id>` |
+| Full debate, threshold not cleared                            | `pm_recommendation=BUY/SELL/HOLD`            | `risk_should_trade=false`, `order_id=null` |
+| Partial debate (some persona calls failed), threshold cleared | `pm_recommendation=BUY/SELL`                 | `executed_action=BUY/SELL`, `order_id=<alpaca id>` |
+| All LLM calls failed / all models exhausted                   | `trade_action=HOLD`                          | `execution_error` or trace error          |
 
 Cached (duplicate) headlines are the only case that produces no new row — they were already logged the first time through.
 
@@ -560,23 +576,85 @@ Submits to `/simulate` on FastAPI. The backend API rate-limits the user and publ
 
 ### Supabase `trades` table schema
 
-| Column             | Type          | Notes                                                                                                               |
-| ------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `id`               | `uuid`        | Primary key                                                                                                         |
-| `created_at`       | `timestamptz` | Auto                                                                                                                |
-| `ticker`           | `text`        |                                                                                                                     |
-| `headline`         | `text`        |                                                                                                                     |
-| `sentiment_score`  | `float4`      | -1.0 to 1.0                                                                                                         |
-| `confidence_score` | `float4`      | 0.0 to 1.0                                                                                                          |
-| `reasoning`        | `text`        | Synthesizer's final reasoning                                                                                       |
-| `trade_action`     | `text`        | `BUY` / `SELL` / `HOLD`                                                                                             |
-| `order_id`         | `text`        | Alpaca order ID (null if HOLD)                                                                                      |
-| `quantity`         | `int4`        | Shares ordered                                                                                                      |
-| `is_simulated`     | `bool`        | True for Signal Injector submissions                                                                                |
-| `article_source`   | `text`        | News source name                                                                                                    |
-| `article_url`      | `text`        | Link to original article                                                                                            |
-| `article_id`       | `text`        | Alpaca article ID                                                                                                   |
-| `decision_trace`   | `jsonb`       | Generic Decision Core trace: LLM inputs/outputs, committee debate, Portfolio Manager decision, risk gate, execution |
+| Column                    | Type          | Notes                                                                                                               |
+| ------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `id`                      | `uuid`        | Primary key                                                                                                         |
+| `created_at`              | `timestamptz` | Auto                                                                                                                |
+| `ticker`                  | `text`        |                                                                                                                     |
+| `headline`                | `text`        |                                                                                                                     |
+| `sentiment_score`         | `float4`      | Portfolio Manager sentiment, -1.0 to 1.0                                                                            |
+| `confidence_score`        | `float4`      | Raw Portfolio Manager confidence                                                                                    |
+| `calibrated_confidence`   | `float4`      | Confidence after deterministic caps; this is what execution uses                                                    |
+| `confidence_cap`          | `float4`      | Tightest cap applied by source quality, debate split, risk level, or market context                                 |
+| `trade_action`            | `text`        | Legacy Portfolio Manager recommendation                                                                             |
+| `pm_recommendation`       | `text`        | Explicit `BUY` / `SELL` / `HOLD` recommendation                                                                     |
+| `risk_should_trade`       | `bool`        | Final risk-gate result                                                                                              |
+| `executed_action`         | `text`        | Actual order side submitted to Alpaca, null when no order was placed                                                |
+| `order_id`                | `text`        | Alpaca order ID, null unless an order ID was captured                                                               |
+| `client_order_id`         | `text`        | Deterministic idempotency key sent to Alpaca                                                                        |
+| `order_status`            | `text`        | Alpaca order status or execution anomaly status                                                                     |
+| `execution_error`         | `text`        | Structured execution failure reason                                                                                 |
+| `gate_reason`             | `text`        | Human-readable risk-gate decision reason                                                                            |
+| `decision_path`           | `text`        | `pre_screen`, `full_debate`, `expired`, `analysis_skipped`, or legacy                                               |
+| `processing_started_at`   | `timestamptz` | Agent active-processing start                                                                                        |
+| `processing_finished_at`  | `timestamptz` | Agent active-processing finish                                                                                       |
+| `quantity`                | `int4`        | Shares ordered or planned                                                                                           |
+| `is_simulated`            | `bool`        | True for Signal Injector submissions                                                                                |
+| `article_url`             | `text`        | Link to original article                                                                                            |
+| `trade_decision_traces`   | separate row  | Full JSONB audit payload plus reasoning/source/article id                                                           |
+
+### Supabase `signal_outcomes` table
+
+`outcome_labeler.py` fills `signal_outcomes` with post-signal prices and
+returns at 15 minutes, 1 hour, and end of day. This turns future audits from
+"did the committee structure look sane?" into "did blocked or approved
+recommendations actually move in the expected direction?"
+
+```bash
+cd backend/agent
+python outcome_labeler.py --limit 250
+```
+
+Rows with no Alpaca bars, such as weekends, market holidays, invalid tickers, or
+unsupported symbols, are persisted with `label_status='NO_BARS'` and
+`label_error` instead of being retried every run. Completed rows are skipped on
+future runs; use `--force` to relabel terminal rows after fixing data or schema
+issues:
+
+```bash
+python outcome_labeler.py --limit 250 --force
+```
+
+The agent worker can also run this as a lightweight background scheduler. It is
+disabled unless explicitly enabled, so deploying new code will not start labeling
+prod rows until the env is set:
+
+```bash
+OUTCOME_LABELER_ENABLED=true
+OUTCOME_LABELER_INTERVAL_SECONDS=3600
+OUTCOME_LABELER_LIMIT=250
+OUTCOME_LABELER_RUN_ON_STARTUP=true
+SCHEDULER_RUN_TRACKING_ENABLED=true
+```
+
+If multiple agent replicas are running, enable the scheduler on only one replica
+unless duplicate idempotent labeling requests are acceptable.
+
+### Supabase `scheduler_runs` table
+
+`scheduler_runs` is generic activity tracking for background jobs. It does not
+control schedules; env vars still do that. Each run writes `RUNNING` at start,
+then updates to `SUCCESS` or `ERROR` with duration, worker name, rows processed,
+and error details when available.
+
+Useful prod check:
+
+```sql
+select scheduler_name, status, started_at, finished_at, rows_processed, error_message
+from sentient_trader.scheduler_runs
+order by started_at desc
+limit 20;
+```
 
 ### Redis Stream message format
 
@@ -721,6 +799,10 @@ Run the Supabase migration files in order via the Supabase SQL Editor:
 
 1. `supabase/migrations/001_current_schema.sql`
 2. `supabase/migrations/002_llm_provider_config.sql`
+3. `supabase/migrations/003_execution_observability.sql`
+4. `supabase/migrations/004_signal_outcomes.sql`
+5. `supabase/migrations/005_signal_outcome_status.sql`
+6. `supabase/migrations/006_scheduler_runs.sql`
 
 ### 2. Agent service
 
@@ -747,6 +829,11 @@ export AGENT_RETRY_MAX_DELAY_SECONDS=300
 export AGENT_RETRY_BATCH_SIZE=5
 export AGENT_PENDING_IDLE_SECONDS=60
 export AGENT_PENDING_BATCH_SIZE=5
+export OUTCOME_LABELER_ENABLED=false
+export OUTCOME_LABELER_INTERVAL_SECONDS=3600
+export OUTCOME_LABELER_LIMIT=250
+export OUTCOME_LABELER_RUN_ON_STARTUP=true
+export SCHEDULER_RUN_TRACKING_ENABLED=true
 export ALPACA_API_KEY=...
 export ALPACA_SECRET_KEY=...
 export GROQ_API_KEY=...
@@ -1045,6 +1132,67 @@ positions before returning to live ingestion.
 
 ---
 
+## Controlled Proof Test
+
+Run this after applying migrations and redeploying the agent/API/frontend. It is
+the proof path for the execution and observability fixes from the 3-day audit.
+
+### Local regression proof
+
+```bash
+cd backend/agent
+python3 -m unittest test_decision_rules test_execution_observability test_outcome_labeler
+```
+
+This proves locally that:
+
+- the risk manager no longer counts as a directional bearish dissenter
+- risk disqualifiers cap calibrated confidence
+- flat-account SELLs are blocked before Alpaca
+- `submitted=true` without an Alpaca `order_id` is not counted as executed
+- deterministic pre-screen rows get `decision_path='pre_screen'`
+- outcome-label math records 15m, 1h, and EOD returns
+- no-bar outcome rows are persisted and skipped unless `--force` is passed
+
+### Paper BUY-path proof
+
+Use an isolated Alpaca paper account. Temporarily lower thresholds only in the
+test environment, publish one non-simulated high-quality BUY catalyst, and verify:
+
+```sql
+select
+  ticker,
+  pm_recommendation,
+  risk_should_trade,
+  calibrated_confidence,
+  executed_action,
+  order_id,
+  client_order_id,
+  order_status,
+  execution_error,
+  decision_path,
+  processing_started_at,
+  processing_finished_at
+from sentient_trader.trades
+order by created_at desc
+limit 5;
+```
+
+Passing evidence is `risk_should_trade=true`, `executed_action='BUY'`,
+`order_id is not null`, `client_order_id is not null`, no execution error, and a
+matching Alpaca paper order in the Orders page.
+
+### Paper SELL-path proof
+
+Seed one whole-share long position in the same paper account, then run a
+controlled SELL catalyst for that ticker. Passing evidence is
+`executed_action='SELL'`, `order_id is not null`, and the position quantity
+decreases by the configured order size. If the account is flat, the expected
+result is a blocked SELL with `gate_reason` explaining that short sells are
+disabled by policy.
+
+---
+
 ## Deployment
 
 ### Oracle Cloud backend services
@@ -1086,6 +1234,11 @@ positions before returning to live ingestion.
   AGENT_RETRY_BATCH_SIZE=5
   AGENT_PENDING_IDLE_SECONDS=60
   AGENT_PENDING_BATCH_SIZE=5
+  OUTCOME_LABELER_ENABLED=false
+  OUTCOME_LABELER_INTERVAL_SECONDS=3600
+  OUTCOME_LABELER_LIMIT=250
+  OUTCOME_LABELER_RUN_ON_STARTUP=true
+  SCHEDULER_RUN_TRACKING_ENABLED=true
   ALPACA_API_KEY=...
   ALPACA_SECRET_KEY=...
   GROQ_API_KEY=...

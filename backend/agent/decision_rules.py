@@ -178,8 +178,9 @@ def guarded_system_prompt(base_prompt: str, role: str) -> str:
     """
     role_specific = {
         "risk": (
-            "As Risk Manager, do not default to BEARISH just because risks exist. "
-            "Use NEUTRAL when the risk is generic or already reflected in the source text."
+            "As Risk Manager, you are not a directional voter. Output risk level, "
+            "article-specific disqualifying conditions, and an execution confidence cap. "
+            "Do not turn generic uncertainty into a bearish market view."
         ),
         "synthesis": (
             "As Portfolio Manager, separate recommendation quality from executable order quality. "
@@ -216,11 +217,32 @@ def committee_metrics(
     if isinstance(quality, dict):
         quality = ArticleQuality(**quality)
     opinions = analysis.committee
-    total_conviction = sum(max(0.0, p.conviction) for p in opinions) or 1.0
-    bull = sum(p.conviction for p in opinions if p.stance == "BULLISH")
-    bear = sum(p.conviction for p in opinions if p.stance == "BEARISH")
-    neutral = sum(p.conviction for p in opinions if p.stance == "NEUTRAL")
-    net = sum(_stance_weight(p.stance, p.conviction) for p in opinions)
+
+    # Risk Manager v2 is not a directional voter. Exclude those neutral risk
+    # cards from debate-alignment math so risk can cap/veto execution without
+    # mechanically dragging every BUY/SELL toward HOLD.
+    directional_opinions = [
+        p
+        for p in opinions
+        if not (
+            p.name == "Risk Manager"
+            and (
+                p.risk_level is not None
+                or p.risk_confidence_cap is not None
+                or bool(p.disqualifying_conditions)
+            )
+        )
+    ] or opinions
+
+    total_conviction = (
+        sum(max(0.0, p.conviction) for p in directional_opinions) or 1.0
+    )
+    bull = sum(p.conviction for p in directional_opinions if p.stance == "BULLISH")
+    bear = sum(p.conviction for p in directional_opinions if p.stance == "BEARISH")
+    neutral = sum(
+        p.conviction for p in directional_opinions if p.stance == "NEUTRAL"
+    )
+    net = sum(_stance_weight(p.stance, p.conviction) for p in directional_opinions)
     dominant_weight = max(bull, bear, neutral)
     agreement = round(dominant_weight / total_conviction, 3)
 
@@ -229,7 +251,7 @@ def committee_metrics(
     )
     high_conviction_dissenters = [
         p.name
-        for p in opinions
+        for p in directional_opinions
         if action_sign
         and p.conviction >= 0.72
         and (
@@ -261,6 +283,27 @@ def committee_metrics(
     if high_conviction_dissenters:
         confidence_cap = min(confidence_cap, 0.72)
         cap_reasons.append("high-conviction dissenter")
+
+    risk_disqualifying_conditions: list[str] = []
+    risk_level: Optional[str] = None
+    for opinion in opinions:
+        if opinion.name != "Risk Manager":
+            continue
+        if opinion.risk_level:
+            risk_level = opinion.risk_level
+            if opinion.risk_level == "HIGH":
+                confidence_cap = min(confidence_cap, 0.72)
+                cap_reasons.append("high risk level")
+            elif opinion.risk_level == "CRITICAL":
+                confidence_cap = min(confidence_cap, 0.50)
+                cap_reasons.append("critical risk level")
+        if opinion.risk_confidence_cap is not None:
+            confidence_cap = min(confidence_cap, opinion.risk_confidence_cap)
+            cap_reasons.append("risk manager confidence cap")
+        if opinion.disqualifying_conditions:
+            risk_disqualifying_conditions.extend(opinion.disqualifying_conditions)
+            confidence_cap = min(confidence_cap, 0.58)
+            cap_reasons.append("risk disqualifying condition")
 
     day_change_pct = (market_context or {}).get("day_change_pct")
     if (
@@ -295,6 +338,8 @@ def committee_metrics(
         "calibrated_confidence": calibrated_confidence,
         "cap_reasons": cap_reasons,
         "high_conviction_dissenters": high_conviction_dissenters,
+        "risk_level": risk_level,
+        "risk_disqualifying_conditions": risk_disqualifying_conditions,
         "thesis_quality": thesis_quality,
     }
 

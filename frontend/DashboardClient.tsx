@@ -137,6 +137,19 @@ const SIGNAL_STYLE: Record<Trade['trade_action'], string> = {
   HOLD: 'border-line bg-surface-2 text-muted',
 };
 
+function recommendationFor(trade: Trade): Trade['trade_action'] {
+  return trade.pm_recommendation ?? trade.trade_action;
+}
+
+function executionBadge(trade: Trade): string {
+  if (trade.executed_action) return `${trade.executed_action} ORDER`;
+  return `${recommendationFor(trade)} REC`;
+}
+
+function displayConfidence(trade: Trade): number {
+  return trade.calibrated_confidence ?? trade.confidence_score;
+}
+
 const ORDER_STATUS_STYLE: Record<string, string> = {
   open: 'border-cyan-border bg-cyan-soft text-cyan',
   filled: 'border-positive-border bg-positive-soft text-positive',
@@ -311,9 +324,9 @@ function RecentSignalsCard({ trades, onSeeMore }: { trades: Trade[]; onSeeMore: 
                   {trade.ticker}
                 </p>
                 <span
-                  className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${SIGNAL_STYLE[trade.trade_action]}`}
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${SIGNAL_STYLE[recommendationFor(trade)]}`}
                 >
-                  {trade.trade_action}
+                  {executionBadge(trade)}
                 </span>
               </div>
               <p className="mt-1 line-clamp-1 text-xs text-[var(--dashboard-subtle)]">
@@ -322,7 +335,7 @@ function RecentSignalsCard({ trades, onSeeMore }: { trades: Trade[]; onSeeMore: 
             </div>
             <div className="text-right">
               <p className="font-mono text-sm font-semibold text-positive">
-                {(trade.confidence_score * 100).toFixed(0)}%
+                {(displayConfidence(trade) * 100).toFixed(0)}%
               </p>
               <p className="mt-1 text-[11px] text-[var(--dashboard-muted)]">
                 {timeLabel(trade.created_at)}
@@ -640,13 +653,16 @@ function AlpacaBalanceCard({
 function addTradeToStats(stats: DashboardStats, trade: Trade): DashboardStats {
   const analyzed = stats.analyzed + 1;
   const sentimentTotal = stats.avgSentiment * stats.analyzed + trade.sentiment_score;
+  const recommendation = trade.pm_recommendation ?? trade.trade_action;
 
   return {
     analyzed,
-    executed: stats.executed + (trade.order_id?.trim() ? 1 : 0),
-    buyOrders: stats.buyOrders + (trade.trade_action === 'BUY' ? 1 : 0),
-    sellOrders: stats.sellOrders + (trade.trade_action === 'SELL' ? 1 : 0),
+    executed: stats.executed + (trade.executed_action || trade.order_id?.trim() ? 1 : 0),
+    buyOrders: stats.buyOrders + (recommendation === 'BUY' ? 1 : 0),
+    sellOrders: stats.sellOrders + (recommendation === 'SELL' ? 1 : 0),
     riskGated: stats.riskGated + (isRiskGated(trade) ? 1 : 0),
+    preScreened: (stats.preScreened ?? 0) + (trade.decision_path === 'pre_screen' ? 1 : 0),
+    fullDebates: (stats.fullDebates ?? 0) + (trade.decision_path === 'full_debate' ? 1 : 0),
     avgSentiment: sentimentTotal / analyzed,
   };
 }

@@ -74,6 +74,7 @@ from schemas import (
     NewsMessage,
     PersonaAnalysis,
     PersonaOpinion,
+    RiskAssessment,
     SynthesisResult,
     TradeAnalysis,
 )
@@ -108,7 +109,7 @@ class AgentState(TypedDict):
     article_quality: Optional[dict[str, Any]]
     momentum_opinion: Optional[PersonaAnalysis]
     value_opinion: Optional[PersonaAnalysis]
-    risk_opinion: Optional[PersonaAnalysis]
+    risk_opinion: Optional[RiskAssessment]
     momentum_model: Optional[str]  # model that powered each persona
     value_model: Optional[str]
     risk_model: Optional[str]
@@ -123,6 +124,7 @@ class AgentState(TypedDict):
     execution: Optional[dict[str, Any]]
     error: Optional[str]
     is_simulated: bool
+    processing_started_at: Optional[str]
 
 
 # ── Shared Prompt Helpers ────────────────────────────────────────────────────
@@ -247,6 +249,22 @@ def _opinion_block(label: str, opinion: PersonaAnalysis) -> str:
     )
 
 
+def _risk_assessment_block(label: str, risk: RiskAssessment) -> str:
+    """Format the risk manager's non-directional assessment for prompts."""
+    blockers = (
+        "; ".join(risk.disqualifying_conditions)
+        if risk.disqualifying_conditions
+        else "none"
+    )
+    return (
+        f"{label} [risk={risk.risk_level}, score={risk.risk_score:.2f}, "
+        f"confidence_cap={risk.confidence_cap:.2f}]:\n"
+        f'  Take: "{risk.headline_take}"\n'
+        f"  Disqualifying conditions: {blockers}\n"
+        f"  Reasoning: {risk.analysis}"
+    )
+
+
 def _quality_metadata(quality: Optional[dict[str, Any]]) -> dict[str, Any]:
     """Derive storage-only quality fields without burdening the LLM schema."""
     q = quality or {}
@@ -300,6 +318,26 @@ def _to_persona_opinion(
         view=pa.headline_take,
         reasoning=pa.analysis,
         model=model,
+        **_quality_metadata(quality),
+    )
+
+
+def _to_risk_persona_opinion(
+    risk: RiskAssessment,
+    model: Optional[str] = None,
+    quality: Optional[dict[str, Any]] = None,
+) -> PersonaOpinion:
+    """Store risk as a neutral risk card instead of a directional vote."""
+    return PersonaOpinion(
+        name="Risk Manager",
+        stance="NEUTRAL",
+        conviction=risk.risk_score,
+        view=risk.headline_take,
+        reasoning=risk.analysis,
+        model=model,
+        risk_level=risk.risk_level,
+        risk_confidence_cap=risk.confidence_cap,
+        disqualifying_conditions=risk.disqualifying_conditions,
         **_quality_metadata(quality),
     )
 
@@ -775,9 +813,8 @@ def _make_risk_analyst_node(router: ModelRouter, client: Any):
     """
     LLM call #3 — the Risk Manager.
 
-    Sees both prior opinions in full. Their mandate is adversarial: find the
-    flaw in both arguments. A strong risk opinion with high conviction should
-    suppress the synthesizer's final confidence significantly.
+    Sees both prior opinions in full. The risk role is not a directional voter;
+    it identifies concrete execution risks and caps confidence when needed.
     """
 
     def risk_analyst(state: AgentState) -> dict:
@@ -800,9 +837,11 @@ def _make_risk_analyst_node(router: ModelRouter, client: Any):
             f"{_trading_context_section(state.get('market_context'))}"
             f"{quality_prompt_block(state.get('article_quality'))}"
             f"{debate_section}\n\n"
-            f"As the Risk Manager, stress-test the above conclusions for {news.ticker}. "
-            f"What concrete tail risk, regulatory exposure, or macro factor are both analysts missing? "
-            f"If the risk is generic rather than article-specific, say so and keep stance NEUTRAL."
+            f"As the Risk Manager, produce a non-directional execution risk assessment for {news.ticker}. "
+            f"Do not answer BUY, SELL, BULLISH, or BEARISH. Identify concrete tail risk, regulatory exposure, "
+            f"account/position constraint, stale-data issue, or source-quality issue that should cap or block execution. "
+            f"If risk is generic rather than article-specific, set risk_level LOW or MEDIUM and leave "
+            f"disqualifying_conditions empty."
         )
         messages = [
             {
@@ -823,20 +862,22 @@ def _make_risk_analyst_node(router: ModelRouter, client: Any):
         try:
             result, model = router.call(
                 client,
-                PersonaAnalysis,
+                RiskAssessment,
                 messages,
             )
             log.info(
-                "Risk      [%s] %s (conviction=%.2f) via %s",
+                "Risk      [%s] level=%s score=%.2f cap=%.2f blockers=%s via %s",
                 news.ticker,
-                result.stance,
-                result.conviction,
+                result.risk_level,
+                result.risk_score,
+                result.confidence_cap,
+                _log_list(result.disqualifying_conditions),
                 model,
             )
             operation = _llm_operation_trace(
                 step="risk_analyst",
                 kind="persona_analysis",
-                response_schema="PersonaAnalysis",
+                response_schema="RiskAssessment",
                 messages=messages,
                 input_payload=input_payload,
                 output=result,
@@ -853,7 +894,7 @@ def _make_risk_analyst_node(router: ModelRouter, client: Any):
             operation = _llm_operation_trace(
                 step="risk_analyst",
                 kind="persona_analysis",
-                response_schema="PersonaAnalysis",
+                response_schema="RiskAssessment",
                 messages=messages,
                 input_payload=input_payload,
                 error=sanitize_llm_error(exc),
@@ -896,11 +937,16 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
                 return f"{label}: (analysis unavailable)"
             return _opinion_block(label, op)
 
+        def risk_entry(op: Optional[RiskAssessment]) -> str:
+            if op is None:
+                return "RISK MANAGER: (analysis unavailable)"
+            return _risk_assessment_block("RISK MANAGER", op)
+
         debate_transcript = "\n\n".join(
             [
                 opinion_entry("MOMENTUM TRADER", m),
                 opinion_entry("VALUE INVESTOR", v),
-                opinion_entry("RISK MANAGER", r),
+                risk_entry(r),
             ]
         )
 
@@ -912,8 +958,9 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
             f"{quality_prompt_block(state.get('article_quality'))}\n\n"
             f"FULL COMMITTEE DEBATE:\n{debate_transcript}\n\n"
             f"As the Portfolio Manager for {news.ticker}, synthesize this debate into a final "
-            f"trade decision. Weight conviction scores — high-conviction dissenters matter. "
-            f"Acknowledge the key tension if the committee was split. "
+            f"trade decision. Weight the momentum/value directional views, then apply the Risk "
+            f"Manager's level, confidence cap, and disqualifying conditions as execution constraints. "
+            f"Acknowledge the key tension if the committee was split or risk-capped. "
             f"Recommend BUY/SELL only for concrete, source-backed catalysts; otherwise HOLD."
         )
         messages = [
@@ -962,11 +1009,29 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
                     **_quality_metadata(quality),
                 )
 
+            def safe_risk_opinion(
+                pa: Optional[RiskAssessment], mdl: Optional[str] = None
+            ) -> PersonaOpinion:
+                if pa is not None:
+                    return _to_risk_persona_opinion(pa, model=mdl, quality=quality)
+                return PersonaOpinion(
+                    name="Risk Manager",
+                    stance="NEUTRAL",
+                    conviction=0.0,
+                    view="Risk assessment unavailable.",
+                    reasoning="The risk manager LLM call failed; no risk cap beyond deterministic gates was added.",
+                    model=None,
+                    risk_level="MEDIUM",
+                    risk_confidence_cap=None,
+                    disqualifying_conditions=[],
+                    **_quality_metadata(quality),
+                )
+
             analysis = TradeAnalysis(
                 committee=[
                     safe_opinion("Momentum Trader", m, state.get("momentum_model")),
                     safe_opinion("Value Investor", v, state.get("value_model")),
-                    safe_opinion("Risk Manager", r, state.get("risk_model")),
+                    safe_risk_opinion(r, state.get("risk_model")),
                 ],
                 sentiment=synthesis.sentiment,
                 confidence=synthesis.confidence,
@@ -1316,11 +1381,14 @@ def _build_decision_trace(state: AgentState) -> dict[str, Any]:
         "execution_plan": plan,
         "reason": "No Alpaca order submitted.",
     }
+    processing_finished_at = datetime.now(timezone.utc).isoformat()
 
     return {
         "schema_version": 2,
         "pipeline": "decision_core",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "processing_started_at": state.get("processing_started_at"),
+        "processing_finished_at": processing_finished_at,
         "news": news.model_dump(),
         "market_context": state.get("market_context"),
         "article_quality": state.get("article_quality"),

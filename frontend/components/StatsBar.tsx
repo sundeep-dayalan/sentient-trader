@@ -12,6 +12,7 @@ const ACCENT_COLORS: Record<string, { value: string; dot: string }> = {
   buy: { value: 'text-positive', dot: 'bg-positive' },
   sell: { value: 'text-negative', dot: 'bg-negative' },
   hold: { value: 'text-muted', dot: 'bg-muted' },
+  prescreen: { value: 'text-warning', dot: 'bg-warning' },
   sentiment: { value: 'text-primary', dot: 'bg-cyan' },
 };
 
@@ -23,14 +24,20 @@ export default function StatsBar({ trades, stats }: StatsBarProps) {
   const statItems = [
     { key: 'analyzed', label: 'Analyzed', value: dashboardStats.analyzed, sub: 'events scanned' },
     { key: 'executed', label: 'Executed', value: dashboardStats.executed, sub: 'orders placed' },
-    { key: 'buy', label: 'Buy Signals', value: dashboardStats.buyOrders, sub: 'AI buy decisions' },
+    { key: 'buy', label: 'Buy Recs', value: dashboardStats.buyOrders, sub: 'PM recommendations' },
     {
       key: 'sell',
-      label: 'Sell Signals',
+      label: 'Sell Recs',
       value: dashboardStats.sellOrders,
-      sub: 'AI sell decisions',
+      sub: 'PM recommendations',
     },
-    { key: 'hold', label: 'Held Signals', value: dashboardStats.riskGated, sub: 'risk gated' },
+    { key: 'hold', label: 'Gated/Held', value: dashboardStats.riskGated, sub: 'no order sent' },
+    {
+      key: 'prescreen',
+      label: 'Pre-screened',
+      value: dashboardStats.preScreened ?? 0,
+      sub: 'LLM skipped',
+    },
     {
       key: 'sentiment',
       label: 'Avg Sentiment',

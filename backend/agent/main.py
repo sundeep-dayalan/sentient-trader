@@ -40,6 +40,10 @@ from analyst import build_agent_graph
 from cache import HeadlineCache
 from consumer import RedisStreamConsumer
 from logger import SupabaseLogger
+from outcome_scheduler import (
+    default_scheduler_run_tracker,
+    start_outcome_labeler_scheduler,
+)
 from schemas import NewsMessage
 from trader import AlpacaTrader
 
@@ -67,9 +71,11 @@ def main() -> None:
 
     # Compile the LangGraph state machine once — reused for every message
     graph = build_agent_graph(cache=cache, trader=trader, db=db)
+    start_outcome_labeler_scheduler(run_tracker=default_scheduler_run_tracker())
 
     def process_news(news: NewsMessage) -> None:
         """Run one news article through the full agent graph."""
+        processing_started_at = datetime.now(timezone.utc).isoformat()
         try:
             if config.reload_from_supabase_if_stale():
                 log.info("Agent config hot-reloaded before processing %s", news.ticker)
@@ -99,11 +105,13 @@ def main() -> None:
             "execution": None,
             "error": None,
             "is_simulated": news.is_simulated,
+            "processing_started_at": processing_started_at,
         }
         graph.invoke(initial_state)
 
     def log_expired_news(news: NewsMessage, metadata: dict[str, Any]) -> None:
         """Record stale news as an explicit HOLD without spending LLM budget."""
+        processing_started_at = datetime.now(timezone.utc).isoformat()
         age = float(metadata.get("age_seconds") or 0)
         reason = (
             f"Signal expired before analysis. Article age was {int(age)}s, "
@@ -124,6 +132,8 @@ def main() -> None:
                 "schema_version": 2,
                 "pipeline": "decision_core",
                 "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "processing_started_at": processing_started_at,
+                "processing_finished_at": datetime.now(timezone.utc).isoformat(),
                 "news": news.model_dump(),
                 "market_context": None,
                 "article_quality": None,

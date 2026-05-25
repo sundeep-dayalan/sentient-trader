@@ -16,12 +16,23 @@ Design choices:
 import logging
 import os
 from dataclasses import asdict, dataclass
+from types import SimpleNamespace
 from typing import Optional
 
-from alpaca.common.exceptions import APIError
-from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.trading.requests import MarketOrderRequest
+try:
+    from alpaca.common.exceptions import APIError
+    from alpaca.trading.client import TradingClient
+    from alpaca.trading.enums import OrderSide, TimeInForce
+    from alpaca.trading.requests import MarketOrderRequest
+except ModuleNotFoundError:
+    APIError = Exception  # type: ignore[assignment]
+    TradingClient = None  # type: ignore[assignment]
+    OrderSide = SimpleNamespace(BUY="buy", SELL="sell")
+    TimeInForce = SimpleNamespace(DAY="day")
+
+    class MarketOrderRequest:  # type: ignore[no-redef]
+        def __init__(self, **kwargs) -> None:
+            self.__dict__.update(kwargs)
 
 import config
 
@@ -63,6 +74,10 @@ class AlpacaTrader:
 
     def __init__(self) -> None:
         self._dry_run = os.environ.get("MOCK_ALPACA", "false").lower() == "true"
+        if TradingClient is None:
+            raise RuntimeError(
+                "alpaca-py is not installed. Install backend/agent requirements before running the agent."
+            )
         self._client = TradingClient(
             api_key=os.environ["ALPACA_API_KEY"],
             secret_key=os.environ["ALPACA_SECRET_KEY"],
@@ -120,18 +135,49 @@ class AlpacaTrader:
 
         try:
             order = self._client.submit_order(order_data=order_request)
+            order_id = str(getattr(order, "id", "") or "")
+            status = str(getattr(order, "status", "") or "")
+            lookup_error: Optional[str] = None
+
+            if not order_id and client_order_id:
+                try:
+                    order = self._client.get_order_by_client_id(client_order_id)
+                    order_id = str(getattr(order, "id", "") or "")
+                    status = str(getattr(order, "status", "") or status or "")
+                except Exception as exc:
+                    lookup_error = str(exc)
+
+            if not order_id:
+                error = "Alpaca order submission returned no order_id."
+                if lookup_error:
+                    error = f"{error} Lookup by client_order_id failed: {lookup_error}"
+                log.error(
+                    "Order submission for %s %s returned no Alpaca order_id "
+                    "(client_order_id=%s status=%s)",
+                    action,
+                    ticker,
+                    client_order_id,
+                    status or "unknown",
+                )
+                return OrderResult(
+                    submitted=False,
+                    client_order_id=client_order_id,
+                    status=status or None,
+                    error=error,
+                )
+
             log.info(
                 "Order submitted: %s %d %s → order_id=%s",
                 action,
                 qty,
                 ticker,
-                order.id,
+                order_id,
             )
             return OrderResult(
                 submitted=True,
-                order_id=str(order.id),
+                order_id=order_id,
                 client_order_id=client_order_id,
-                status=str(getattr(order, "status", "") or ""),
+                status=status,
             )
 
         except APIError as e:

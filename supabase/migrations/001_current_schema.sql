@@ -24,7 +24,19 @@ CREATE TABLE IF NOT EXISTS sentient_trader.trades (
     confidence_score FLOAT4      NOT NULL,
     trade_action     TEXT        NOT NULL
                      CHECK (trade_action IN ('BUY', 'SELL', 'HOLD')),
+    pm_recommendation TEXT       CHECK (pm_recommendation IN ('BUY', 'SELL', 'HOLD')),
+    calibrated_confidence FLOAT4,
+    confidence_cap   FLOAT4,
+    risk_should_trade BOOLEAN,
+    executed_action  TEXT        CHECK (executed_action IN ('BUY', 'SELL')),
     order_id         TEXT,
+    client_order_id  TEXT,
+    order_status     TEXT,
+    execution_error  TEXT,
+    gate_reason      TEXT,
+    decision_path    TEXT,
+    processing_started_at TIMESTAMPTZ,
+    processing_finished_at TIMESTAMPTZ,
     quantity         INT4        NOT NULL    DEFAULT 1,
     article_url      TEXT,
     is_simulated     BOOLEAN     NOT NULL    DEFAULT false
@@ -39,6 +51,17 @@ CREATE INDEX IF NOT EXISTS idx_sentient_trader_trades_ticker
 CREATE INDEX IF NOT EXISTS idx_sentient_trader_trades_is_simulated
     ON sentient_trader.trades (is_simulated);
 
+CREATE INDEX IF NOT EXISTS idx_sentient_trader_trades_decision_path
+    ON sentient_trader.trades (decision_path);
+
+CREATE INDEX IF NOT EXISTS idx_sentient_trader_trades_executed_action
+    ON sentient_trader.trades (executed_action)
+    WHERE executed_action IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_sentient_trader_trades_client_order_id
+    ON sentient_trader.trades (client_order_id)
+    WHERE client_order_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS sentient_trader.trade_decision_traces (
     trade_id       UUID        PRIMARY KEY REFERENCES sentient_trader.trades(id) ON DELETE CASCADE,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -47,6 +70,54 @@ CREATE TABLE IF NOT EXISTS sentient_trader.trade_decision_traces (
     article_source TEXT,
     article_id     TEXT
 );
+
+CREATE TABLE IF NOT EXISTS sentient_trader.signal_outcomes (
+    trade_id          UUID PRIMARY KEY REFERENCES sentient_trader.trades(id) ON DELETE CASCADE,
+    ticker            TEXT        NOT NULL,
+    signal_at         TIMESTAMPTZ NOT NULL,
+    signal_price      FLOAT8,
+    price_15m         FLOAT8,
+    return_15m        FLOAT8,
+    price_1h          FLOAT8,
+    return_1h         FLOAT8,
+    price_eod         FLOAT8,
+    return_eod        FLOAT8,
+    label_status      TEXT        NOT NULL DEFAULT 'LABELED'
+                      CHECK (label_status IN ('LABELED', 'PARTIAL', 'NO_BARS', 'ERROR')),
+    label_error       TEXT,
+    label_attempts    INT4        NOT NULL DEFAULT 0,
+    last_attempt_at   TIMESTAMPTZ,
+    labeled_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sentient_trader_signal_outcomes_ticker
+    ON sentient_trader.signal_outcomes (ticker);
+
+CREATE INDEX IF NOT EXISTS idx_sentient_trader_signal_outcomes_signal_at
+    ON sentient_trader.signal_outcomes (signal_at DESC);
+
+CREATE TABLE IF NOT EXISTS sentient_trader.scheduler_runs (
+    id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    scheduler_name   TEXT        NOT NULL,
+    status           TEXT        NOT NULL DEFAULT 'RUNNING'
+                     CHECK (status IN ('RUNNING', 'SUCCESS', 'ERROR')),
+    started_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at      TIMESTAMPTZ,
+    duration_ms      INT4,
+    rows_processed   INT4,
+    worker_name      TEXT,
+    error_message    TEXT,
+    metadata         JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sentient_trader_scheduler_runs_name_started
+    ON sentient_trader.scheduler_runs (scheduler_name, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_sentient_trader_scheduler_runs_status_started
+    ON sentient_trader.scheduler_runs (status, started_at DESC);
 
 -- =============================================================================
 -- Agent Configuration
@@ -172,6 +243,8 @@ CREATE TABLE IF NOT EXISTS sentient_trader.ingestion_cursors (
 
 ALTER TABLE sentient_trader.trades ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sentient_trader.trade_decision_traces ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sentient_trader.signal_outcomes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sentient_trader.scheduler_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sentient_trader.agent_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sentient_trader.raw_news_articles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sentient_trader.news_article_symbols ENABLE ROW LEVEL SECURITY;
@@ -191,6 +264,20 @@ CREATE POLICY "Public read access on trade_decision_traces"
     ON sentient_trader.trade_decision_traces
     FOR SELECT
     TO anon, authenticated
+    USING (true);
+
+DROP POLICY IF EXISTS "Public read access on signal_outcomes" ON sentient_trader.signal_outcomes;
+CREATE POLICY "Public read access on signal_outcomes"
+    ON sentient_trader.signal_outcomes
+    FOR SELECT
+    TO anon, authenticated
+    USING (true);
+
+DROP POLICY IF EXISTS "Authenticated read access on scheduler_runs" ON sentient_trader.scheduler_runs;
+CREATE POLICY "Authenticated read access on scheduler_runs"
+    ON sentient_trader.scheduler_runs
+    FOR SELECT
+    TO authenticated
     USING (true);
 
 DROP POLICY IF EXISTS "Public read on agent_config" ON sentient_trader.agent_config;
@@ -231,6 +318,8 @@ CREATE POLICY "Public read access on ingestion_events"
 
 GRANT SELECT ON sentient_trader.trades TO anon, authenticated;
 GRANT SELECT ON sentient_trader.trade_decision_traces TO anon, authenticated;
+GRANT SELECT ON sentient_trader.signal_outcomes TO anon, authenticated;
+GRANT SELECT ON sentient_trader.scheduler_runs TO authenticated;
 GRANT SELECT ON sentient_trader.agent_config TO anon, authenticated;
 GRANT UPDATE ON sentient_trader.agent_config TO authenticated;
 GRANT SELECT ON sentient_trader.raw_news_articles TO anon, authenticated;

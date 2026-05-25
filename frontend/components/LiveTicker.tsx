@@ -8,6 +8,26 @@ const ACTION_STYLE: Record<string, string> = {
   HOLD: 'bg-surface-2 text-muted border-line',
 };
 
+function recommendationFor(trade: Trade): Trade['trade_action'] {
+  return trade.pm_recommendation ?? trade.trade_action;
+}
+
+function executionBadge(trade: Trade): string {
+  if (trade.executed_action) return `${trade.executed_action} ORDER`;
+  return `${recommendationFor(trade)} REC`;
+}
+
+function displayConfidence(trade: Trade): number {
+  return trade.calibrated_confidence ?? trade.confidence_score;
+}
+
+function decisionPathLabel(path?: string | null): string | null {
+  if (path === 'pre_screen') return 'PRE-SCREEN';
+  if (path === 'full_debate') return 'FULL DEBATE';
+  if (path === 'expired') return 'EXPIRED';
+  return null;
+}
+
 interface LiveTickerProps {
   trades: Trade[];
   newIds: Set<string>;
@@ -104,6 +124,7 @@ export default function LiveTicker({
 
         {visibleTrades.map((trade) => {
           const articleUrl = safeArticleUrl(trade.article_url);
+          const pathLabel = decisionPathLabel(trade.decision_path);
 
           return (
             <div
@@ -129,10 +150,15 @@ export default function LiveTicker({
               <div className="mb-2.5 flex items-center gap-2">
                 <span className="font-mono text-[13px] font-bold text-accent">{trade.ticker}</span>
                 <span
-                  className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${ACTION_STYLE[trade.trade_action]}`}
+                  className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${ACTION_STYLE[recommendationFor(trade)]}`}
                 >
-                  {trade.trade_action}
+                  {executionBadge(trade)}
                 </span>
+                {pathLabel && (
+                  <span className="rounded-full border border-line bg-surface px-2 py-0.5 text-[10px] font-semibold text-muted">
+                    {pathLabel}
+                  </span>
+                )}
                 {trade.is_simulated && (
                   <span className="rounded-full border border-warning-border bg-warning-soft px-2 py-0.5 text-[10px] font-semibold text-warning">
                     SIM
@@ -180,7 +206,7 @@ export default function LiveTicker({
                 <div className="flex items-center gap-1 rounded-lg border border-line bg-surface px-2.5 py-1 text-[11px]">
                   <span className="text-muted">conf</span>
                   <span className="font-mono font-semibold text-accent">
-                    {(trade.confidence_score * 100).toFixed(0)}%
+                    {(displayConfidence(trade) * 100).toFixed(0)}%
                   </span>
                 </div>
               </div>

@@ -135,6 +135,52 @@ class PersonaAnalysis(BaseModel):
         return _coerce_unit_float(value, default=0.0)
 
 
+class RiskAssessment(BaseModel):
+    """
+    Structured output for the risk manager.
+
+    The risk role is intentionally not a directional voter. It provides a risk
+    level, concrete disqualifying conditions, and a confidence cap that the
+    deterministic gate can apply to the Portfolio Manager's recommendation.
+    """
+
+    risk_level: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"] = Field(
+        description="Severity of article-specific execution risk",
+    )
+    risk_score: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="0.0 = negligible risk, 1.0 = existential/disqualifying risk",
+    )
+    confidence_cap: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Maximum execution confidence allowed after risk review",
+    )
+    disqualifying_conditions: list[str] = Field(
+        default_factory=list,
+        description="Concrete reasons to block execution; empty when none apply",
+    )
+    analysis: str = Field(
+        description="2-3 sentences explaining the risk assessment using only supplied facts",
+    )
+    headline_take: str = Field(
+        description="ONE sentence summarizing the most important execution risk",
+    )
+
+    @field_validator("risk_level", mode="before")
+    @classmethod
+    def _normalize_risk_level(cls, value: object) -> str:
+        return _coerce_choice(
+            value, {"LOW", "MEDIUM", "HIGH", "CRITICAL"}, "MEDIUM"
+        )
+
+    @field_validator("risk_score", "confidence_cap", mode="before")
+    @classmethod
+    def _normalize_unit_fields(cls, value: object) -> float:
+        return _coerce_unit_float(value, default=0.0)
+
+
 class SynthesisResult(BaseModel):
     """
     Structured output from the synthesizer's LLM call.
@@ -232,6 +278,9 @@ class PersonaOpinion(BaseModel):
     time_horizon: Optional[str] = None
     key_evidence: list[str] = Field(default_factory=list)
     missing_data: list[str] = Field(default_factory=list)
+    risk_level: Optional[Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]] = None
+    risk_confidence_cap: Optional[float] = None
+    disqualifying_conditions: list[str] = Field(default_factory=list)
 
 
 class TradeAnalysis(BaseModel):
