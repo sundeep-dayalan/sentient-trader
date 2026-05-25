@@ -17,6 +17,7 @@ interface LiveTickerProps {
   isLoadingMore: boolean;
   hasMore: boolean;
   previewLimit?: number;
+  totalCount?: number;
 }
 
 export default function LiveTicker({
@@ -28,6 +29,7 @@ export default function LiveTicker({
   isLoadingMore,
   hasMore,
   previewLimit,
+  totalCount,
 }: LiveTickerProps) {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const visibleTrades = previewLimit ? trades.slice(0, previewLimit) : trades;
@@ -65,7 +67,11 @@ export default function LiveTicker({
             </div>
           </div>
           <span className="rounded-full bg-[var(--dashboard-control)] px-3 py-1 text-[11px] font-semibold text-[var(--dashboard-subtle)]">
-            {isPreview ? `${visibleTrades.length} latest` : `${trades.length} events`}
+            {isPreview 
+              ? `${visibleTrades.length} latest` 
+              : totalCount !== undefined 
+                ? `${totalCount} events` 
+                : `${trades.length} events`}
           </span>
         </div>
       </div>

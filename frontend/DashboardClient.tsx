@@ -1325,12 +1325,13 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
             {/* Page header strip */}
             {activeView !== 'Dashboard' && (
-              <section className="glass-panel flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-2xl px-5 py-4">
-                <div>
-                  <h1 className="text-2xl font-bold leading-tight text-[var(--dashboard-text)]">
+              <section className="glass-panel flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-2xl px-5 py-3.5">
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-xl font-bold text-[var(--dashboard-text)]">
                     {activeView}
                   </h1>
-                  <p className="mt-1 text-sm text-[var(--dashboard-subtle)]">
+                  <span className="hidden h-4 w-[1px] bg-[var(--dashboard-divider)] md:inline-block" />
+                  <p className="text-xs text-[var(--dashboard-subtle)]">
                     {viewSubtitle[activeView] ?? 'View coming online.'}
                   </p>
                 </div>
@@ -1391,6 +1392,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                   onLoadMore={loadMore}
                   isLoadingMore={isLoadingMore}
                   hasMore={hasMore}
+                  totalCount={dashboardStats?.analyzed}
                 />
                 <AgentMonologue
                   trade={selectedTrade}
