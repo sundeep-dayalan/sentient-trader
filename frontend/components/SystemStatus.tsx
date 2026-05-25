@@ -19,7 +19,7 @@ interface StatusData {
 const SERVICES: { key: ServiceKey; label: string }[] = [
   { key: 'alpaca', label: 'Alpaca' },
   { key: 'supabase', label: 'Supabase' },
-  { key: 'groq', label: 'Groq' },
+  { key: 'groq', label: 'LLM' },
   { key: 'redis', label: 'Redis' },
   { key: 'agent', label: 'Agent' },
 ];

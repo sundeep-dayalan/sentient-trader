@@ -11,7 +11,7 @@ This service runs forever as a background worker:
 
 The full round-trip per headline is typically 300-600ms:
   - Redis cache check:  ~10ms
-  - Groq inference:     ~250ms
+  - LLM inference:      provider-dependent
   - Alpaca order:       ~150ms  (only when a trade is triggered)
   - Supabase insert:    ~100ms
 

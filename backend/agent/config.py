@@ -19,22 +19,10 @@ log = logging.getLogger("agent.config")
 
 # ── Infrastructure — deployment-level, not stored in Supabase ────────────────
 
-# Model selection policy.
-#
-# By default the ModelRouter discovers Groq's active models at startup and ranks
-# them with a local policy: active + text/chat-shaped + enough context, excluding
-# audio, guard, safeguard, TTS, and compound/agentic systems. If you need to force
-# a preference order, set GROQ_MODEL_PINNED_ORDER to a comma-separated list; those
-# models are tried first when active, and auto-ranked models fill in after them.
-GROQ_MODEL_PINNED_ORDER: list[str] = [
-    model.strip()
-    for model in os.environ.get("GROQ_MODEL_PINNED_ORDER", "").split(",")
-    if model.strip()
-]
-
 # Used only when Groq's /models discovery is unavailable. Normal operation is
-# auto-ranked from the live endpoint; this keeps the agent functional if model
-# discovery is temporarily forbidden/down.
+# auto-ranked from the live endpoint. Groq Always Free intentionally does not
+# allow operator-selected model IDs; the router uses whichever free active model
+# is most suitable at runtime.
 GROQ_MODEL_DISCOVERY_FALLBACK: list[str] = [
     "openai/gpt-oss-120b",
     "qwen/qwen3-32b",
@@ -43,9 +31,6 @@ GROQ_MODEL_DISCOVERY_FALLBACK: list[str] = [
     "openai/gpt-oss-20b",
     "llama-3.1-8b-instant",
 ]
-
-# Backward-compatible alias used by older imports/tests. Empty means "auto-rank".
-MODEL_CASCADE: list[str] = GROQ_MODEL_PINNED_ORDER
 
 GROQ_MODELS_URL = os.environ.get(
     "GROQ_MODELS_URL",
@@ -103,7 +88,7 @@ BUY_SENTIMENT_THRESHOLD: float
 SELL_SENTIMENT_THRESHOLD: float
 CONFIDENCE_THRESHOLD: float
 ORDER_QTY: int
-MODEL_OVERRIDE: str | None
+LLM_PROVIDER_CONFIG: dict
 
 MOMENTUM_SYSTEM_PROMPT: str
 VALUE_SYSTEM_PROMPT: str
@@ -113,7 +98,7 @@ SYNTHESIS_SYSTEM_PROMPT: str
 
 def reload_from_supabase() -> None:
     global BUY_SENTIMENT_THRESHOLD, SELL_SENTIMENT_THRESHOLD, CONFIDENCE_THRESHOLD
-    global ORDER_QTY, MODEL_OVERRIDE
+    global ORDER_QTY, LLM_PROVIDER_CONFIG
     global MOMENTUM_SYSTEM_PROMPT, VALUE_SYSTEM_PROMPT, RISK_SYSTEM_PROMPT, SYNTHESIS_SYSTEM_PROMPT
 
     from supabase import create_client
@@ -139,7 +124,7 @@ def reload_from_supabase() -> None:
     SELL_SENTIMENT_THRESHOLD = float(row["sell_sentiment_threshold"])
     CONFIDENCE_THRESHOLD = float(row["confidence_threshold"])
     ORDER_QTY = int(row["order_qty"])
-    MODEL_OVERRIDE = row.get("model_override") or None
+    LLM_PROVIDER_CONFIG = row.get("llm_provider") or {"type": "groq-always-free"}
 
     MOMENTUM_SYSTEM_PROMPT = row["momentum_system_prompt"]
     VALUE_SYSTEM_PROMPT = row["value_system_prompt"]
@@ -147,10 +132,10 @@ def reload_from_supabase() -> None:
     SYNTHESIS_SYSTEM_PROMPT = row["synthesis_system_prompt"]
 
     log.info(
-        "Config loaded — buy=%.2f  sell=%.2f  confidence=%.2f  qty=%d  model=%s",
+        "Config loaded — buy=%.2f  sell=%.2f  confidence=%.2f  qty=%d  llm_provider=%s",
         BUY_SENTIMENT_THRESHOLD,
         SELL_SENTIMENT_THRESHOLD,
         CONFIDENCE_THRESHOLD,
         ORDER_QTY,
-        MODEL_OVERRIDE or "cascade",
+        LLM_PROVIDER_CONFIG.get("type", "groq-always-free"),
     )

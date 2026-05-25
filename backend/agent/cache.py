@@ -6,7 +6,7 @@ Prevents duplicate LLM calls for the same article/ticker pair.
 The problem it solves:
   News aggregators re-syndicate the same story across multiple sources.
   Without a cache, "NVIDIA beats earnings" from Reuters, Bloomberg, and
-  CNBC would trigger three separate Groq API calls — same information,
+  CNBC would trigger three separate LLM provider calls — same information,
   triple the cost and latency.
 
 How it works:

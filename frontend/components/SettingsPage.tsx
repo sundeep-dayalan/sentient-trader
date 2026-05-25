@@ -12,9 +12,29 @@ interface ModelTier {
   quality: 'high' | 'mid' | 'fallback';
 }
 
+interface OpenRouterModelConfig {
+  priority: number;
+  id: string;
+  temperature: number;
+  top_p: number;
+}
+
+interface LLMProviderConfig {
+  type: 'groq-always-free' | 'openrouter';
+  base_url?: string;
+  routing?: {
+    strategy?: string;
+    max_wait_seconds: number;
+    default_cooldown_seconds: number;
+    key_status_check_interval_seconds: number;
+  };
+  models?: OpenRouterModelConfig[];
+}
+
 interface AgentConfig {
   thresholds: { buy_sentiment: number; sell_sentiment: number; confidence: number };
   execution: { order_qty: number };
+  llm_provider: LLMProviderConfig;
   model: { cascade: ModelTier[]; override: string | null };
   prompts: { momentum: string; value: string; risk: string; synthesis: string };
   consumer: { batch_size: number; poll_interval: number; error_retry: number };
@@ -28,6 +48,20 @@ const TABS = [
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
+
+const DEFAULT_OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+const DEFAULT_OPENROUTER_ROUTING = {
+  strategy: 'ordered_fallback',
+  max_wait_seconds: 600,
+  default_cooldown_seconds: 60,
+  key_status_check_interval_seconds: 300,
+};
+const DEFAULT_OPENROUTER_MODEL = {
+  priority: 1,
+  id: 'openai/gpt-4o-mini',
+  temperature: 0.7,
+  top_p: 0.7,
+};
 
 // ── Root component ────────────────────────────────────────────────────────────
 
@@ -142,6 +176,69 @@ function AgentConfigTab({
   };
 
   const isEditing = (section: string) => editing === section;
+  const provider = draft.llm_provider;
+  const openRouterModels = provider.models ?? [];
+  const openRouterRouting = provider.routing ?? DEFAULT_OPENROUTER_ROUTING;
+
+  const setProviderType = (type: LLMProviderConfig['type']) => {
+    setDraft((d) => ({
+      ...d,
+      llm_provider:
+        type === 'groq-always-free'
+          ? { type: 'groq-always-free' }
+          : {
+              type: 'openrouter',
+              base_url: d.llm_provider.base_url || DEFAULT_OPENROUTER_BASE_URL,
+              routing: d.llm_provider.routing || DEFAULT_OPENROUTER_ROUTING,
+              models:
+                d.llm_provider.models && d.llm_provider.models.length > 0
+                  ? d.llm_provider.models
+                  : [DEFAULT_OPENROUTER_MODEL],
+            },
+    }));
+  };
+
+  const updateOpenRouterModel = (index: number, patch: Partial<OpenRouterModelConfig>) => {
+    setDraft((d) => {
+      const models = [...(d.llm_provider.models ?? [DEFAULT_OPENROUTER_MODEL])];
+      models[index] = { ...models[index], ...patch };
+      return { ...d, llm_provider: { ...d.llm_provider, models } };
+    });
+  };
+
+  const addOpenRouterModel = () => {
+    setDraft((d) => {
+      const models = d.llm_provider.models ?? [];
+      const maxPriority = Math.max(0, ...models.map((model) => model.priority));
+      return {
+        ...d,
+        llm_provider: {
+          ...d.llm_provider,
+          models: [
+            ...models,
+            {
+              ...DEFAULT_OPENROUTER_MODEL,
+              priority: maxPriority + 1,
+              id: '',
+            },
+          ],
+        },
+      };
+    });
+  };
+
+  const removeOpenRouterModel = (index: number) => {
+    setDraft((d) => {
+      const models = (d.llm_provider.models ?? []).filter((_, i) => i !== index);
+      return {
+        ...d,
+        llm_provider: {
+          ...d.llm_provider,
+          models: models.length ? models : [DEFAULT_OPENROUTER_MODEL],
+        },
+      };
+    });
+  };
 
   return (
     <div className="max-w-2xl space-y-8">
@@ -240,43 +337,195 @@ function AgentConfigTab({
 
       <Divider />
 
-      {/* ── Model Cascade ── */}
+      {/* ── LLM Provider ── */}
       <Section
-        title="Model Cascade"
-        description="Models are tried in quality order. Daily-exhausted tiers are skipped automatically — each model's quota bucket is independent."
-        isEditing={isEditing('model')}
+        title="LLM Provider"
+        description="Choose one provider. The router records the exact model used for every LLM operation in each signal trace."
+        isEditing={isEditing('llm-provider')}
         saving={saving}
         saveError={saveErr}
-        onEdit={canEdit ? () => openEdit('model') : undefined}
+        onEdit={canEdit ? () => openEdit('llm-provider') : undefined}
         onCancel={cancelEdit}
-        onSave={() => save('model')}
+        onSave={() => save('llm-provider')}
         readOnly={!canEdit}
       >
-        {/* Cascade is always read-only — order is set in code */}
-        <div className="mb-4 space-y-2">
-          {config.model.cascade.map((tier, i) => (
-            <ModelTierRow key={tier.id} tier={tier} index={i + 1} />
-          ))}
-        </div>
+        {isEditing('llm-provider') ? (
+          <div className="space-y-4">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-primary">Provider</label>
+              <select
+                value={provider.type}
+                onChange={(event) =>
+                  setProviderType(event.target.value as LLMProviderConfig['type'])
+                }
+                className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-primary outline-none transition focus:border-accent-border focus:ring-1 focus:ring-accent/20"
+              >
+                <option value="groq-always-free">Groq Always Free</option>
+                <option value="openrouter">OpenRouter</option>
+              </select>
+              <p className="mt-1 text-[11px] text-muted">
+                Groq auto-discovers free models. OpenRouter uses the ordered list below.
+              </p>
+            </div>
 
-        {isEditing('model') ? (
-          <TextField
-            label="Model override"
-            hint="Enter a Groq model ID to bypass the cascade, or leave empty to use the cascade."
-            placeholder="e.g. llama-3.1-8b-instant  (empty = use cascade)"
-            value={draft.model.override ?? ''}
-            onChange={(v) =>
-              setDraft((d) => ({ ...d, model: { ...d.model, override: v || null } }))
-            }
-          />
+            {provider.type === 'openrouter' && (
+              <div className="space-y-4">
+                <TextField
+                  label="OpenRouter base URL"
+                  hint="OpenAI-compatible endpoint used by the OpenAI SDK."
+                  placeholder={DEFAULT_OPENROUTER_BASE_URL}
+                  value={provider.base_url ?? DEFAULT_OPENROUTER_BASE_URL}
+                  onChange={(v) =>
+                    setDraft((d) => ({
+                      ...d,
+                      llm_provider: { ...d.llm_provider, base_url: v },
+                    }))
+                  }
+                />
+                <div className="grid gap-4 md:grid-cols-3">
+                  <NumberField
+                    label="Max wait seconds"
+                    hint="If all models are cooling down, wait up to this long."
+                    value={openRouterRouting.max_wait_seconds}
+                    min={1}
+                    max={1800}
+                    step={30}
+                    onChange={(v) =>
+                      setDraft((d) => ({
+                        ...d,
+                        llm_provider: {
+                          ...d.llm_provider,
+                          routing: { ...openRouterRouting, max_wait_seconds: v },
+                        },
+                      }))
+                    }
+                  />
+                  <NumberField
+                    label="Default cooldown"
+                    hint="Fallback cooldown when the provider omits reset headers."
+                    value={openRouterRouting.default_cooldown_seconds}
+                    min={1}
+                    max={600}
+                    step={15}
+                    onChange={(v) =>
+                      setDraft((d) => ({
+                        ...d,
+                        llm_provider: {
+                          ...d.llm_provider,
+                          routing: { ...openRouterRouting, default_cooldown_seconds: v },
+                        },
+                      }))
+                    }
+                  />
+                  <NumberField
+                    label="Key check interval"
+                    hint="How often the agent refreshes /key credit status."
+                    value={openRouterRouting.key_status_check_interval_seconds}
+                    min={30}
+                    max={3600}
+                    step={30}
+                    onChange={(v) =>
+                      setDraft((d) => ({
+                        ...d,
+                        llm_provider: {
+                          ...d.llm_provider,
+                          routing: {
+                            ...openRouterRouting,
+                            key_status_check_interval_seconds: v,
+                          },
+                        },
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold text-primary">OpenRouter models</h3>
+                    <button
+                      type="button"
+                      onClick={addOpenRouterModel}
+                      className="rounded-lg border border-line bg-surface px-3 py-1.5 text-xs font-medium text-secondary hover:border-accent-border hover:text-primary transition-colors"
+                    >
+                      Add model
+                    </button>
+                  </div>
+                  {openRouterModels.map((model, index) => (
+                    <div key={`${model.priority}-${index}`} className="rounded-xl border border-line p-3">
+                      <div className="grid gap-3 md:grid-cols-[88px_1fr_110px_110px_auto] md:items-end">
+                        <CompactNumberField
+                          label="Priority"
+                          hint="Lower runs first"
+                          value={model.priority}
+                          min={1}
+                          max={20}
+                          step={1}
+                          onChange={(v) => updateOpenRouterModel(index, { priority: v })}
+                        />
+                        <TextField
+                          label="Model ID"
+                          hint="Example: openai/gpt-4o-mini or a :free model."
+                          placeholder="openai/gpt-4o-mini"
+                          value={model.id}
+                          onChange={(v) => updateOpenRouterModel(index, { id: v })}
+                        />
+                        <CompactNumberField
+                          label="Temperature"
+                          hint="0.0 to 2.0"
+                          value={model.temperature}
+                          min={0}
+                          max={2}
+                          step={0.1}
+                          onChange={(v) => updateOpenRouterModel(index, { temperature: v })}
+                        />
+                        <CompactNumberField
+                          label="Top P"
+                          hint="0.0 to 1.0"
+                          value={model.top_p}
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          onChange={(v) => updateOpenRouterModel(index, { top_p: v })}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeOpenRouterModel(index)}
+                          className="rounded-lg border border-line bg-surface px-3 py-2 text-xs font-medium text-secondary hover:border-negative-border hover:text-negative transition-colors"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         ) : (
-          <div className="divide-y divide-line rounded-xl border border-line">
-            <ReadRow
-              label="Override"
-              value={config.model.override ?? '— using cascade'}
-              mono={!!config.model.override}
-              badge={config.model.override ? 'active' : undefined}
-            />
+          <div className="space-y-3">
+            <div className="divide-y divide-line rounded-xl border border-line">
+              <ReadRow
+                label="Active provider"
+                value={
+                  config.llm_provider.type === 'openrouter'
+                    ? 'OpenRouter'
+                    : 'Groq Always Free'
+                }
+                badge="active"
+              />
+              {config.llm_provider.type === 'openrouter' && (
+                <ReadRow
+                  label="Base URL"
+                  value={config.llm_provider.base_url ?? DEFAULT_OPENROUTER_BASE_URL}
+                  mono
+                />
+              )}
+            </div>
+            <div className="space-y-2">
+              {config.model.cascade.map((tier, i) => (
+                <ModelTierRow key={`${tier.id}-${i}`} tier={tier} index={i + 1} />
+              ))}
+            </div>
           </div>
         )}
       </Section>
@@ -461,6 +710,40 @@ function NumberField({
           className="flex-1 accent-accent"
         />
       </div>
+      <p className="mt-1 text-[11px] text-muted">{hint}</p>
+    </div>
+  );
+}
+
+function CompactNumberField({
+  label,
+  hint,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-semibold text-primary">{label}</label>
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        className="w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-sm text-primary outline-none transition focus:border-accent-border focus:ring-1 focus:ring-accent/20"
+      />
       <p className="mt-1 text-[11px] text-muted">{hint}</p>
     </div>
   );

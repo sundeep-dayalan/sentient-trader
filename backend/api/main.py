@@ -3,7 +3,7 @@ Sentient Trader backend API.
 
 This service runs inside Oracle Cloud near private Valkey/Redis. The React
 frontend calls this API over HTTPS with the user's Supabase access token.
-All database, Alpaca, Groq, Redis, and admin operations live here.
+All database, Alpaca, LLM-provider, Redis, and admin operations live here.
 """
 
 from __future__ import annotations
@@ -70,6 +70,7 @@ ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.ma
 GROQ_MODELS_URL = os.environ.get(
     "GROQ_MODELS_URL", "https://api.groq.com/openai/v1/models"
 )
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 STREAM_KEY = os.environ.get("REDIS_STREAM_KEY", "market-news")
 STREAM_MAX_LEN = int(os.environ.get("REDIS_STREAM_MAX_LEN", "1000"))
 PAGE_SIZE = 20
@@ -510,6 +511,113 @@ def fallback_auto_cascade() -> list[dict[str, str]]:
     ]
 
 
+def default_llm_provider_config() -> dict[str, Any]:
+    return {"type": "groq-always-free"}
+
+
+def normalize_llm_provider_config(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict) or not raw:
+        return default_llm_provider_config()
+
+    provider_type = str(raw.get("type") or "groq-always-free").strip().lower()
+    if provider_type == "groq-always-free":
+        return default_llm_provider_config()
+    if provider_type != "openrouter":
+        raise HTTPException(
+            status_code=400,
+            detail="llm_provider.type must be groq-always-free or openrouter",
+        )
+
+    base_url = str(raw.get("base_url") or DEFAULT_OPENROUTER_BASE_URL).strip()
+    if not base_url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="llm_provider.base_url must be a URL")
+
+    routing_raw = raw.get("routing") if isinstance(raw.get("routing"), dict) else {}
+
+    def positive_float(key: str, default: float) -> float:
+        value = routing_raw.get(key)
+        try:
+            parsed = float(value if value not in (None, "") else default)
+        except (TypeError, ValueError):
+            parsed = default
+        if parsed <= 0:
+            raise HTTPException(
+                status_code=400, detail=f"llm_provider.routing.{key} must be positive"
+            )
+        return parsed
+
+    models_raw = raw.get("models")
+    if not isinstance(models_raw, list) or not models_raw:
+        raise HTTPException(
+            status_code=400, detail="openrouter provider requires at least one model"
+        )
+
+    seen_priorities: set[int] = set()
+    seen_ids: set[str] = set()
+    models: list[dict[str, Any]] = []
+    for index, item in enumerate(models_raw, start=1):
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="each model must be an object")
+        try:
+            priority = int(item.get("priority", item.get("preference", index)))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="model priority must be an integer")
+        if priority < 1 or priority in seen_priorities:
+            raise HTTPException(
+                status_code=400, detail="model priorities must be unique positive integers"
+            )
+        seen_priorities.add(priority)
+
+        model_id = str(item.get("id") or item.get("model") or "").strip()
+        if not model_id or model_id in seen_ids:
+            raise HTTPException(
+                status_code=400, detail="model ids must be present and unique"
+            )
+        seen_ids.add(model_id)
+
+        try:
+            temperature = float(item.get("temperature", 0.7))
+            top_p = float(item.get("top_p", 0.7))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400, detail="temperature and top_p must be numbers"
+            )
+        if not 0 <= temperature <= 2:
+            raise HTTPException(
+                status_code=400, detail="model temperature must be between 0 and 2"
+            )
+        if not 0 <= top_p <= 1:
+            raise HTTPException(
+                status_code=400, detail="model top_p must be between 0 and 1"
+            )
+
+        models.append(
+            {
+                "priority": priority,
+                "id": model_id,
+                "temperature": temperature,
+                "top_p": top_p,
+            }
+        )
+
+    models.sort(key=lambda model: (model["priority"], model["id"]))
+    return {
+        "type": "openrouter",
+        "base_url": base_url.rstrip("/"),
+        "routing": {
+            "strategy": "ordered_fallback",
+            "max_wait_seconds": positive_float("max_wait_seconds", 600),
+            "default_cooldown_seconds": positive_float(
+                "default_cooldown_seconds", 60
+            ),
+            "key_status_check_interval_seconds": positive_float(
+                "key_status_check_interval_seconds", 300
+            ),
+        },
+        "models": models,
+    }
+
+
 def get_model_cascade() -> list[dict[str, str]]:
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
@@ -676,6 +784,21 @@ def agent_config() -> dict[str, Any]:
         raise HTTPException(
             status_code=500, detail="Failed to load agent configuration."
         )
+    llm_provider = normalize_llm_provider_config(row.get("llm_provider"))
+    model_cascade = (
+        get_model_cascade()
+        if llm_provider["type"] == "groq-always-free"
+        else [
+            {
+                "id": model["id"],
+                "label": format_model_label(model["id"]),
+                "reqDay": f"Priority {model['priority']}",
+                "tpm": f"temperature={model['temperature']} top_p={model['top_p']}",
+                "quality": "high" if index == 0 else "mid" if index < 3 else "fallback",
+            }
+            for index, model in enumerate(llm_provider.get("models", []))
+        ]
+    )
     return {
         "thresholds": {
             "buy_sentiment": row.get("buy_sentiment_threshold"),
@@ -683,9 +806,10 @@ def agent_config() -> dict[str, Any]:
             "confidence": row.get("confidence_threshold"),
         },
         "execution": {"order_qty": row.get("order_qty")},
+        "llm_provider": llm_provider,
         "model": {
-            "cascade": get_model_cascade(),
-            "override": row.get("model_override"),
+            "cascade": model_cascade,
+            "override": None,
         },
         "prompts": {
             "momentum": row.get("momentum_system_prompt"),
@@ -708,6 +832,9 @@ def update_agent_config(
         body.get("execution") if isinstance(body.get("execution"), dict) else None
     )
     model = body.get("model") if isinstance(body.get("model"), dict) else None
+    llm_provider = (
+        body.get("llm_provider") if isinstance(body.get("llm_provider"), dict) else None
+    )
     prompts = body.get("prompts") if isinstance(body.get("prompts"), dict) else None
 
     if thresholds:
@@ -752,8 +879,9 @@ def update_agent_config(
             patch["confidence_threshold"] = thresholds["confidence"]
     if execution and execution.get("order_qty") is not None:
         patch["order_qty"] = execution["order_qty"]
-    if model is not None:
-        patch["model_override"] = model.get("override")
+    if llm_provider is not None:
+        patch["llm_provider"] = normalize_llm_provider_config(llm_provider)
+        patch["model_override"] = None
     if prompts:
         if prompts.get("momentum"):
             patch["momentum_system_prompt"] = prompts["momentum"]
@@ -1038,7 +1166,7 @@ def status() -> dict[str, Any]:
         )
         details["groq"] = (agent_state or {}).get(
             "groq_detail"
-        ) or "Backend agent has not published Groq provider status yet."
+        ) or "Backend agent has not published LLM provider status yet."
         agent_status: ServiceStatus = "unknown"
         last_heartbeat_at = None
 
@@ -1100,7 +1228,7 @@ def status() -> dict[str, Any]:
             "Agent status depends on Redis worker health, which could not be read."
         )
         details["groq"] = (
-            "Groq status depends on backend agent worker state, which could not be read from Redis."
+            "LLM provider status depends on backend agent worker state, which could not be read from Redis."
         )
 
     return {

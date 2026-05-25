@@ -3,7 +3,7 @@
 An autonomous AI trading system that reads live financial news, debates market impact across three AI personas, and executes paper trades — end to end, with zero human input in the loop.
 
 ```
-Alpaca News API → Valkey Stream → LangGraph Agent → Groq LLM Committee → Alpaca Orders → Supabase → FastAPI → React Dashboard
+Alpaca News API -> Valkey Stream -> LangGraph Agent -> LLM Committee -> Alpaca Orders -> Supabase -> FastAPI -> React Dashboard
 ```
 
 ---
@@ -17,7 +17,7 @@ Alpaca News API → Valkey Stream → LangGraph Agent → Groq LLM Committee →
 5. [Service 2 — Agent](#service-2--agent)
    - [LangGraph Graph](#langgraph-graph)
    - [AI Committee — The Debate](#ai-committee--the-debate)
-   - [ModelRouter — Quota-Aware Cascade](#modelrouter--quota-aware-cascade)
+   - [LLM Provider Router — Quota-Aware Cascade](#llm-provider-router--quota-aware-cascade)
    - [Risk Gate](#risk-gate)
    - [Signal Visibility Guarantee](#signal-visibility-guarantee)
 6. [Service 3 — Frontend](#service-3--frontend)
@@ -69,7 +69,7 @@ graph TD
     style E fill:#22c55e,color:#fff
 ```
 
-The services share no in-process state. A Groq rate limit on the agent doesn't affect ingestion. A noisy news day doesn't slow the LLM. A frontend deploy doesn't touch the Oracle Cloud workers.
+The services share no in-process state. An LLM provider rate limit on the agent doesn't affect ingestion. A noisy news day doesn't slow ingestion. A frontend deploy doesn't touch the Oracle Cloud workers.
 
 ---
 
@@ -99,7 +99,7 @@ Every headline that enters the system follows this exact path:
             moves to an independent retry queue or DLQ instead of blocking fresh news
 
 6.  agent/analyst.py — LangGraph state machine (see graph below)
-      └─▶ check_cache → fetch_context → 4× Groq calls → assess_risk → trade/hold → log
+      └─▶ check_cache → fetch_context → 4× LLM calls → assess_risk → trade/hold → log
 
 7.  agent/logger.py
       └─▶ INSERT into Supabase "trades" table
@@ -177,7 +177,7 @@ main.py
   1. load_dotenv()                         # load local env when present
   2. logging.basicConfig(...)              # configure before any imports that log
   3. config.reload_from_supabase()         # fetch agent_config row — crash loudly on failure
-  4. graph = build_agent_graph(...)        # compile LangGraph, init Groq client + ModelRouter
+  4. graph = build_agent_graph(...)        # compile LangGraph, init active LLM provider + ModelRouter
   5. RedisStreamConsumer.start(...)        # consume Redis stream forever
 ```
 
@@ -205,10 +205,10 @@ flowchart TD
     START([▶ START]) --> CC["check_cache\nSHA-256 Redis lookup"]
     CC -->|cache HIT| SKIP([⏭ END — duplicate skipped])
     CC -->|cache MISS| FC["fetch_context\nAlpaca Data API\nlive price + day change %"]
-    FC --> MA["momentum_analyst\nGroq call #1\nTrend · Price action"]
-    MA --> VA["value_analyst\nGroq call #2\nFundamentals · reads #1"]
-    VA --> RA["risk_analyst\nGroq call #3\nTail risk · reads #1 + #2"]
-    RA --> SY["synthesizer\nGroq call #4\nPortfolio Manager · reads all three"]
+    FC --> MA["momentum_analyst\nLLM call #1\nTrend · Price action"]
+    MA --> VA["value_analyst\nLLM call #2\nFundamentals · reads #1"]
+    VA --> RA["risk_analyst\nLLM call #3\nTail risk · reads #1 + #2"]
+    RA --> SY["synthesizer\nLLM call #4\nPortfolio Manager · reads all three"]
     SY --> AR["assess_risk\nPure Python\nsentiment + confidence thresholds"]
     AR -->|thresholds cleared| ET["execute_trade\nAlpaca paper order"]
     AR -->|HOLD| LR["log_result\nSupabase INSERT\nfull debate stored as JSONB"]
@@ -254,9 +254,9 @@ The day-change context matters substantively: a +8% NVDA headline reads differen
 
 ### AI Committee — The Debate
 
-Four sequential Groq calls. Each call uses `instructor.from_groq(..., mode=instructor.Mode.JSON)` for schema-validated structured output.
+Four sequential LLM calls. Each provider client is patched by `instructor` in JSON mode for schema-validated structured output.
 
-`Mode.JSON` is used instead of `Mode.TOOLS` because Groq's tool-calling implementation is unreliable — models sometimes invent tool names or return plain text when tool use is required. JSON mode produces consistent results.
+`Mode.JSON` is used instead of `Mode.TOOLS` because tool-calling behavior varies across free and routed providers. JSON mode gives the agent one stable Pydantic validation path.
 
 #### What every prompt includes
 
@@ -271,10 +271,10 @@ ARTICLE SUMMARY:           ← only when Alpaca provides a summary field
 ```mermaid
 sequenceDiagram
     participant N as 📰 NewsMessage<br/>(headline + summary + price)
-    participant M as 🟦 Momentum Trader<br/>Groq Call #1
-    participant V as 🟣 Value Investor<br/>Groq Call #2
-    participant R as 🔴 Risk Manager<br/>Groq Call #3
-    participant S as 🟡 Portfolio Manager<br/>Groq Call #4 (Synthesizer)
+    participant M as 🟦 Momentum Trader<br/>LLM Call #1
+    participant V as 🟣 Value Investor<br/>LLM Call #2
+    participant R as 🔴 Risk Manager<br/>LLM Call #3
+    participant S as 🟡 Portfolio Manager<br/>LLM Call #4 (Synthesizer)
     participant DB as 🟢 Supabase<br/>trades table
 
     N->>M: headline + market price + summary
@@ -335,73 +335,105 @@ This is what gets stored in Supabase as the signal record. The top-level trade c
 
 ---
 
-### ModelRouter — Quota-Aware Cascade
+### LLM Provider Router — Quota-Aware Cascade
 
-Every LLM call goes through `ModelRouter.call()`, which discovers active Groq models from `/openai/v1/models` at startup and ranks candidates with a local policy. The endpoint changes over time, so the router does not require a hardcoded model list.
+Every LLM call goes through `ModelRouter.call()`, but provider-specific state now lives behind a provider object created by `create_llm_client()`. The public contract stays stable:
 
-**Auto-ranking policy:**
+```python
+parsed_response, model_id = router.call(client, ResponseModel, messages)
+```
 
-| Step | Rule                                                                                                                                         |
-| ---- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | Keep only `active: true` models with enough context and completion capacity                                                                  |
-| 2    | Exclude non-analysis systems: audio/transcription, prompt guards, safeguards, TTS/speech, and Groq compound systems                          |
-| 3    | Score candidates by parameter size, context window, max completion tokens, instruction/reasoning signals, and known general-purpose families |
-| 4    | Sort by score and use that as the cascade                                                                                                    |
-| 5    | If `GROQ_MODEL_PINNED_ORDER` is set, try those active models first, then append the auto-ranked remainder                                    |
+That `model_id` is written to `decision_trace.llm_operations[*].model` for every persona call and to `portfolio_manager_decision.model` for the final synthesis. LangGraph stays provider-agnostic, and LangSmith still sees normal OpenAI-compatible calls because the underlying Groq/OpenRouter clients are wrapped before `instructor` patches them.
 
-Groq's models endpoint does not expose per-day token quota or subjective quality, so runtime fallback still matters: a model that is active but quota-limited is cooled down and the router moves to the next candidate.
+**Supported provider configs:**
 
-**Groq limit/failure types handled by the router:**
+```json
+{
+  "llm_provider": {
+    "type": "groq-always-free"
+  }
+}
+```
 
-| Error type              | Detection                                     | Behaviour                                                                                |
-| ----------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Per-minute (RPM/TPM)    | `429` without "per day"/"daily" in message    | Cool down that model using Groq's retry-after value, then fall back within the same call |
-| Daily token quota (TPD) | `429` with "per day"/"daily"/"TPD" in message | Cool down that model using Groq's retry-after value, then fall back within the same call |
-| Missing model           | `404 model_not_found` or equivalent text      | Disable that model for the process and continue to the next configured tier              |
+```json
+{
+  "llm_provider": {
+    "type": "openrouter",
+    "base_url": "https://openrouter.ai/api/v1",
+    "routing": {
+      "strategy": "ordered_fallback",
+      "max_wait_seconds": 600,
+      "default_cooldown_seconds": 60,
+      "key_status_check_interval_seconds": 300
+    },
+    "models": [
+      {
+        "priority": 1,
+        "id": "qwen/qwen3-coder:free",
+        "temperature": 0.7,
+        "top_p": 0.7
+      },
+      {
+        "priority": 2,
+        "id": "openai/gpt-4o-mini",
+        "temperature": 0.7,
+        "top_p": 0.7
+      }
+    ]
+  }
+}
+```
+
+Only one provider is active at a time. Secrets stay in environment variables: `GROQ_API_KEY` for Groq and `OPENROUTER_API_KEY` for OpenRouter.
+
+**Groq Always Free behavior:**
+
+| Step | Rule |
+| ---- | ---- |
+| 1 | Fetch Groq `/openai/v1/models` at startup |
+| 2 | Keep active text-analysis candidates with enough context/completion capacity |
+| 3 | Exclude audio, speech, guardrail, safeguard, and compound/agentic systems |
+| 4 | Rank by size, context, completion budget, and instruction/reasoning hints |
+| 5 | On 429, cool that model down using `Retry-After` or the provider body and continue to the next active model |
+
+Groq models are intentionally not configurable in `agent_config`. This prevents stale model pins from breaking a free-tier deployment when Groq rotates model availability.
+
+**OpenRouter fallback behavior:**
+
+| Failure type | Detection | Router action |
+| ------------ | --------- | ------------- |
+| Temporary rate limit | `429`, `free-models-per-min`, or `Retry-After` | Put only that model in temporary cooldown and try the next priority |
+| Daily/weekly/monthly quota | `free-models-per-day`, `daily`, `weekly`, `monthly`, `quota`, or `X-RateLimit-Reset` metadata | Mark only that model quota-exhausted until reset and try the next priority |
+| Provider outage | `502`, `503`, `504` | Temporary cooldown for that model and try the next priority |
+| Missing/no-access model | `404`, `model_not_found`, or equivalent text | Disable that model for the process |
+| Credit exhaustion | `402`, insufficient credits, or `/key` reports no credits remaining | Block OpenRouter globally and fail fast |
+| Bad structured output | instructor/Pydantic validation failure | Try the next configured model |
+
+OpenRouter `/api/v1/key` is checked at startup and periodically, not before every LLM call. It is used to catch provider-global credit exhaustion and to log daily/weekly/monthly usage. Per-model free quota exhaustion is learned from the failing inference response because OpenRouter's key endpoint exposes account credit state, not every free-model bucket.
 
 ```mermaid
 flowchart LR
-    START["Agent startup"] --> MODELS["Fetch Groq /models"]
-    MODELS --> FILTER["Filter text-analysis candidates"]
-    FILTER --> RANK["Score and auto-rank"]
-    RANK --> CALL["LLM call requested"]
-    CALL --> NEXT["Try next available model"]
+    CALL["LLM call requested"] --> KEY["Refresh key status if interval elapsed"]
+    KEY --> NEXT["Try highest available priority"]
     NEXT --> OK{"Success?"}
-    OK -->|"yes"| RETURN["Return parsed response + model"]
-    OK -->|"429"| COOL["Set retry-after cooldown"]
-    OK -->|"404 model_not_found"| DISABLE["Disable model for process"]
-    COOL --> NEXT
+    OK -->|"yes"| RETURN["Return parsed response + model_id"]
+    OK -->|"429 temp"| COOLDOWN["Temporary cooldown"]
+    OK -->|"429 quota"| QUOTA["Quota exhausted until reset"]
+    OK -->|"502/503"| PROVIDER["Provider cooldown"]
+    OK -->|"404"| DISABLE["Disable model"]
+    OK -->|"402"| FAIL["Fail fast: credits exhausted"]
+    COOLDOWN --> NEXT
+    QUOTA --> NEXT
+    PROVIDER --> NEXT
     DISABLE --> NEXT
-    NEXT -->|"none available"| WAIT["Wait for soonest cooldown up to 10m"]
+    NEXT -->|"all cooling"| WAIT["Wait up to max_wait_seconds"]
     WAIT --> NEXT
 
     style RETURN fill:#22c55e,color:#fff
+    style FAIL fill:#ef4444,color:#fff
 ```
 
-**Key implementation detail — dynamic availability + retry-after cooldown:**
-
-```python
-self.tiers = _resolve_model_tiers(config.GROQ_MODEL_PINNED_ORDER)
-self._cooldown_until: dict[str, float] = {}
-self._disabled_models: set[str] = set()
-
-# In call():
-available = [
-    m for m in self.tiers
-    if m not in self._disabled_models
-    and time.time() >= self._cooldown_until.get(m, 0)
-]
-
-# On 429:
-self._cooldown_until[model] = time.time() + retry_after
-continue  # try next tier in the same call()
-```
-
-Because the fallback happens inside the same `call()` invocation, if Call #3 (Risk Analyst) hits a token limit on the first-ranked candidate, the risk analyst can still get a valid response from the next available tier in that same call. Once Groq's retry-after window expires, the cooled-down model re-enters the pool.
-
-**Hard override:** If `MODEL_OVERRIDE` is set in agent_config (Supabase), the entire cascade is bypassed and every call goes to that specific model. Useful for local testing.
-
-**Operator preference:** Set `GROQ_MODEL_PINNED_ORDER=openai/gpt-oss-120b,qwen/qwen3-32b` only when you want to force a short preferred prefix. Leaving it empty keeps the router fully auto-ranked from Groq's active model list.
+Because fallback happens inside the same `call()` invocation, a risk analyst can hit a free OpenRouter model's daily limit and still complete on a paid fourth-priority model in that same signal. When the first priority's cooldown expires, the next call automatically switches back to it.
 
 ---
 
@@ -466,7 +498,7 @@ The React app is a static single-page application. Netlify serves `dist/`, and t
 | ---------------- | ------ | ---------------------------------------------------------------------------- |
 | `/auth/me`       | GET    | Validates the Supabase access token and returns dashboard role flags         |
 | `/simulate`      | POST   | Authenticates the user, rate-limits with Valkey, and injects a test headline |
-| `/status`        | GET    | Combines Supabase, Alpaca, Redis, Groq, and agent heartbeat checks           |
+| `/status`        | GET    | Combines Supabase, Alpaca, Redis, LLM provider, and agent heartbeat checks   |
 | `/agent-config`  | GET    | Reads current agent_config row from Supabase                                 |
 | `/agent-config`  | POST   | Super-user only; writes updated config with the Supabase service role        |
 | `/stats`         | GET    | Aggregated dashboard stats                                                   |
@@ -557,7 +589,7 @@ BUY_SENTIMENT_THRESHOLD:  float
 SELL_SENTIMENT_THRESHOLD: float
 CONFIDENCE_THRESHOLD:     float
 ORDER_QTY:                int
-MODEL_OVERRIDE:           str | None
+LLM_PROVIDER_CONFIG:      dict
 MOMENTUM_SYSTEM_PROMPT:   str
 VALUE_SYSTEM_PROMPT:      str
 RISK_SYSTEM_PROMPT:       str
@@ -580,7 +612,7 @@ The React app sends the user's Supabase access token to FastAPI. FastAPI validat
 
 | Layer          | Technology                                      | Why                                                                                            |
 | -------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| AI reasoning   | Groq API (`instructor` JSON mode)               | Sub-second structured LLM output; `instructor` handles Pydantic validation + retries           |
+| AI reasoning   | Groq Always Free or OpenRouter (`instructor` JSON mode) | Structured LLM output with provider-aware fallback and Pydantic validation              |
 | Agent pipeline | LangGraph 0.2 StateGraph                        | Explicit conditional routing, composable nodes, no hidden side-effects                         |
 | Message bus    | Valkey/Redis Streams                            | At-least-once delivery, consumer groups, persistent backlog                                    |
 | Market data    | Alpaca News REST + Data API + Paper Trading API | Free tier; news, live prices, and paper orders in one platform                                 |
@@ -653,7 +685,8 @@ sentient-trader/
 │
 ├── supabase/
 │   └── migrations/
-│       └── 001_current_schema.sql # current sentient_trader schema baseline
+│       ├── 001_current_schema.sql       # current sentient_trader schema baseline
+│       └── 002_llm_provider_config.sql  # provider config migration
 │
 └── README.md
 ```
@@ -669,13 +702,16 @@ sentient-trader/
 - Valkey or Redis instance available at `REDIS_HOST` / `REDIS_PORT`
 - Supabase project (free tier works)
 - Alpaca account (free paper trading)
-- Groq API key (free tier works)
+- Groq API key or OpenRouter API key
 
 `127.0.0.1` works when Valkey is running on the same host/network namespace as the process. For Docker or hosted workers, set `REDIS_HOST` to the reachable service hostname or private network address.
 
 ### 1. Apply Supabase migrations
 
-Run `supabase/migrations/001_current_schema.sql` via the Supabase SQL Editor.
+Run the Supabase migration files in order via the Supabase SQL Editor:
+
+1. `supabase/migrations/001_current_schema.sql`
+2. `supabase/migrations/002_llm_provider_config.sql`
 
 ### 2. Agent service
 
@@ -705,6 +741,9 @@ export AGENT_PENDING_BATCH_SIZE=5
 export ALPACA_API_KEY=...
 export ALPACA_SECRET_KEY=...
 export GROQ_API_KEY=...
+export OPENROUTER_API_KEY=...                 # required only when llm_provider.type=openrouter
+export OPENROUTER_HTTP_REFERER=https://sentient-trader.coolify.sundeepdayalan.in
+export OPENROUTER_APP_TITLE="Sentient Trader" # optional OpenRouter attribution
 
 python main.py
 ```
@@ -763,7 +802,7 @@ export AGENT_WORKER_NAME=agent
 export ALPACA_API_KEY=...
 export ALPACA_SECRET_KEY=...
 export ALPACA_BASE_URL=https://paper-api.alpaca.markets
-export GROQ_API_KEY=...
+export GROQ_API_KEY=...                       # optional, used to show live Groq model cascade
 
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
@@ -1041,6 +1080,9 @@ positions before returning to live ingestion.
   ALPACA_API_KEY=...
   ALPACA_SECRET_KEY=...
   GROQ_API_KEY=...
+  OPENROUTER_API_KEY=...
+  OPENROUTER_HTTP_REFERER=https://sentient-trader.coolify.sundeepdayalan.in
+  OPENROUTER_APP_TITLE="Sentient Trader"
 
 # backend/ingestion additionally needs:
   SUPABASE_URL=...
@@ -1088,20 +1130,20 @@ Redis Streams provide the queue semantics this pipeline needs: a persistent orde
 
 **Separate backend workers**
 
-A single process would mean a Groq rate limit pauses news ingestion. Splitting the services means ingestion always stays current regardless of LLM quota. The Redis Stream buffer absorbs any processing delay.
+A single process would mean an LLM provider rate limit pauses news ingestion. Splitting the services means ingestion always stays current regardless of LLM quota. The Redis Stream buffer absorbs any processing delay.
 
 **Alpaca `summary` field, not full article body**
 
-Alpaca's `summary` field is ~150–400 tokens. A full article body is ~2,000–3,000 tokens. With four sequential Groq calls per signal and Groq's 6K–12K TPM limits, passing full article bodies would exhaust per-minute quotas under any moderate news volume. The summary field adds meaningful context (earnings numbers, specific details) while staying well within budget.
+Alpaca's `summary` field is ~150–400 tokens. A full article body is ~2,000–3,000 tokens. With four sequential LLM calls per signal and free-tier provider limits, passing full article bodies would exhaust per-minute quotas under any moderate news volume. The summary field adds meaningful context (earnings numbers, specific details) while staying well within budget.
 
 **`instructor` JSON mode over TOOLS mode**
 
-Groq's tool-calling implementation inconsistently invents tool names or returns unstructured text when `Mode.TOOLS` is requested. `Mode.JSON` with a system prompt containing the JSON schema produces consistent, validatable output. `instructor` handles Pydantic deserialization and retries automatically.
+Tool-calling behavior differs across Groq and routed OpenRouter models. `Mode.JSON` with a system prompt containing the JSON schema produces consistent, validatable output. `instructor` handles Pydantic deserialization and retries automatically.
 
 **Supabase as the only source of config defaults**
 
 Python type annotations without assignment (`BUY_SENTIMENT_THRESHOLD: float`) create no module-level attribute. If `reload_from_supabase()` is never called or fails, any code that reads these values crashes with `AttributeError` immediately — loud and obvious. The alternative (hardcoded Python defaults) would let the process run silently on stale values after a Supabase connection failure, producing trades at wrong thresholds with no log indication of why.
 
-**60-second per-minute rate limit cooldown**
+**Provider-aware cooldowns**
 
-Groq's per-minute limit is transient — it resets after 60 seconds. Rather than retrying the same rate-limited model on every call (wasteful round-trips), `ModelRouter` timestamps the cooldown expiry. Models that are cooling down are excluded from the `available` list before the first attempt. This eliminates one guaranteed failed API call per model per signal during high-volume periods.
+Temporary rate limits are not treated the same as quota exhaustion. For Groq, the router cools down the affected active model and tries the next discovered free model. For OpenRouter, the router reads `Retry-After` and `X-RateLimit-Reset` metadata where available; temporary minute limits get a short cooldown, while daily/weekly/monthly quota errors keep only that model out of rotation until reset. Paid lower-priority models can still run while free higher-priority models are exhausted.
