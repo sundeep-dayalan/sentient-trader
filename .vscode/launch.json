@@ -8,7 +8,7 @@
       "program": "${workspaceFolder}/backend/agent/main.py",
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}/backend/agent",
-      "envFile": "${workspaceFolder}/backend/agent/.env",
+      "envFile": "${workspaceFolder}/.env",
       "justMyCode": true
     },
     {
@@ -18,7 +18,7 @@
       "program": "${workspaceFolder}/backend/ingestion/main.py",
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}/backend/ingestion",
-      "envFile": "${workspaceFolder}/backend/ingestion/.env",
+      "envFile": "${workspaceFolder}/.env",
       "justMyCode": true
     },
     {
@@ -29,7 +29,7 @@
       "args": ["main:app", "--reload", "--port", "8080"],
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}/backend/api",
-      "envFile": "${workspaceFolder}/backend/api/.env",
+      "envFile": "${workspaceFolder}/.env",
       "justMyCode": true
     },
     {

@@ -29,9 +29,9 @@ from listener import NewsListener
 # If not found (e.g. in production/Docker), it will safely fallback.
 dotenv_path = find_dotenv()
 if dotenv_path:
-    load_dotenv(dotenv_path)
+    load_dotenv(dotenv_path, override=True)
 else:
-    load_dotenv()
+    load_dotenv(override=True)
 
 # Structured logging so the host's log aggregator can parse and search entries.
 logging.basicConfig(

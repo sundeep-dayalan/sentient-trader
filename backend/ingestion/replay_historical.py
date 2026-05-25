@@ -189,9 +189,9 @@ def _run_replay(args: argparse.Namespace, start: datetime, end: datetime) -> int
 def main() -> int:
     dotenv_path = find_dotenv()
     if dotenv_path:
-        load_dotenv(dotenv_path)
+        load_dotenv(dotenv_path, override=True)
     else:
-        load_dotenv()
+        load_dotenv(override=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",

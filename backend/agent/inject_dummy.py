@@ -13,9 +13,9 @@ from redis_client import create_redis_client
 # If not found (e.g. in production/Docker), it will safely fallback.
 dotenv_path = find_dotenv()
 if dotenv_path:
-    load_dotenv(dotenv_path)
+    load_dotenv(dotenv_path, override=True)
 else:
-    load_dotenv()
+    load_dotenv(override=True)
 
 
 def inject_message(ticker: str, headline: str, summary: str = None) -> None:
