@@ -19,16 +19,22 @@ interface OpenRouterModelConfig {
   top_p: number;
 }
 
-interface LLMProviderConfig {
-  type: 'groq-always-free' | 'openrouter';
+interface OpenRouterRoutingConfig {
+  strategy?: string;
+  max_wait_seconds: number;
+  default_cooldown_seconds: number;
+  key_status_check_interval_seconds: number;
+}
+
+interface OpenRouterProfile {
   base_url?: string;
-  routing?: {
-    strategy?: string;
-    max_wait_seconds: number;
-    default_cooldown_seconds: number;
-    key_status_check_interval_seconds: number;
-  };
+  routing?: OpenRouterRoutingConfig;
   models?: OpenRouterModelConfig[];
+}
+
+interface LLMProviderConfig extends OpenRouterProfile {
+  type: 'groq-always-free' | 'openrouter';
+  openrouter?: OpenRouterProfile;
 }
 
 interface AgentConfig {
@@ -61,6 +67,20 @@ const DEFAULT_OPENROUTER_MODEL = {
   id: 'openai/gpt-4o-mini',
   temperature: 0.7,
   top_p: 0.7,
+};
+
+const cloneOpenRouterModels = (models?: OpenRouterModelConfig[]) =>
+  models && models.length > 0
+    ? models.map((model) => ({ ...model }))
+    : [{ ...DEFAULT_OPENROUTER_MODEL }];
+
+const openRouterProfileFrom = (provider: LLMProviderConfig): OpenRouterProfile => {
+  const source = provider.type === 'openrouter' ? provider : provider.openrouter;
+  return {
+    base_url: source?.base_url || DEFAULT_OPENROUTER_BASE_URL,
+    routing: { ...DEFAULT_OPENROUTER_ROUTING, ...(source?.routing ?? {}) },
+    models: cloneOpenRouterModels(source?.models),
+  };
 };
 
 // ── Root component ────────────────────────────────────────────────────────────
@@ -166,7 +186,9 @@ function AgentConfigTab({
         method: 'POST',
         body: JSON.stringify(draft),
       });
-      onSave(structuredClone(draft));
+      const updated = await apiFetch<AgentConfig>('/agent-config');
+      onSave(structuredClone(updated));
+      setDraft(structuredClone(updated));
       setEditing(null);
     } catch (e) {
       setSaveErr(e instanceof ApiError ? e.message : String(e));
@@ -177,25 +199,22 @@ function AgentConfigTab({
 
   const isEditing = (section: string) => editing === section;
   const provider = draft.llm_provider;
-  const openRouterModels = provider.models ?? [];
-  const openRouterRouting = provider.routing ?? DEFAULT_OPENROUTER_ROUTING;
+  const activeOpenRouterProfile = openRouterProfileFrom(provider);
+  const openRouterModels =
+    provider.type === 'openrouter' ? activeOpenRouterProfile.models ?? [] : [];
+  const openRouterRouting = activeOpenRouterProfile.routing ?? DEFAULT_OPENROUTER_ROUTING;
 
   const setProviderType = (type: LLMProviderConfig['type']) => {
-    setDraft((d) => ({
-      ...d,
-      llm_provider:
-        type === 'groq-always-free'
-          ? { type: 'groq-always-free' }
-          : {
-              type: 'openrouter',
-              base_url: d.llm_provider.base_url || DEFAULT_OPENROUTER_BASE_URL,
-              routing: d.llm_provider.routing || DEFAULT_OPENROUTER_ROUTING,
-              models:
-                d.llm_provider.models && d.llm_provider.models.length > 0
-                  ? d.llm_provider.models
-                  : [DEFAULT_OPENROUTER_MODEL],
-            },
-    }));
+    setDraft((d) => {
+      const rememberedOpenRouter = openRouterProfileFrom(d.llm_provider);
+      return {
+        ...d,
+        llm_provider:
+          type === 'groq-always-free'
+            ? { type: 'groq-always-free', openrouter: rememberedOpenRouter }
+            : { type: 'openrouter', ...rememberedOpenRouter },
+      };
+    });
   };
 
   const updateOpenRouterModel = (index: number, patch: Partial<OpenRouterModelConfig>) => {
@@ -247,7 +266,7 @@ function AgentConfigTab({
         <h1 className="text-lg font-bold text-primary">Agent Config</h1>
         <p className="mt-1 text-sm text-muted">
           Tunable parameters for the trading agent. Changes are persisted to Supabase and applied on
-          the next agent restart.
+          the next signal the agent processes.
         </p>
       </div>
 

@@ -177,7 +177,7 @@ main.py
   1. load_dotenv()                         # load local env when present
   2. logging.basicConfig(...)              # configure before any imports that log
   3. config.reload_from_supabase()         # fetch agent_config row — crash loudly on failure
-  4. graph = build_agent_graph(...)        # compile LangGraph, init active LLM provider + ModelRouter
+  4. graph = build_agent_graph(...)        # compile LangGraph, init hot-reloadable LLM provider + ModelRouter
   5. RedisStreamConsumer.start(...)        # consume Redis stream forever
 ```
 
@@ -384,7 +384,16 @@ That `model_id` is written to `decision_trace.llm_operations[*].model` for every
 }
 ```
 
-Only one provider is active at a time. Secrets stay in environment variables: `GROQ_API_KEY` for Groq and `OPENROUTER_API_KEY` for OpenRouter.
+Only one provider is active at a time. When Groq is active, the dashboard may keep the last OpenRouter model list under an inactive `llm_provider.openrouter` profile so switching back does not reset the ordered cascade. Secrets stay in environment variables: `GROQ_API_KEY` for Groq and `OPENROUTER_API_KEY` for OpenRouter.
+
+Provider/model settings are hot-reloaded. The agent refreshes Supabase
+`agent_config` before processing a signal when `AGENT_CONFIG_REFRESH_SECONDS`
+has elapsed, and the stable LangGraph client swaps the underlying provider only
+when the normalized `llm_provider` fingerprint changes. The active signal is not
+interrupted; new prompts, thresholds, order quantity, provider, and model list
+apply cleanly to the next signal. If a new provider config cannot initialize
+(for example a missing API key), the worker logs the reload failure and keeps the
+last working provider instead of crashing mid-run.
 
 **Groq Always Free behavior:**
 
@@ -600,7 +609,7 @@ SYNTHESIS_SYSTEM_PROMPT:  str
 
 ### Editing config without redeploying
 
-The Settings page in the dashboard writes to `agent_config` via `POST /agent-config` on FastAPI. The new values take effect on the next agent process restart. The agent does not hot-reload config at runtime — a restart is intentional so config changes are auditable in deployment history.
+The Settings page in the dashboard writes to `agent_config` via `POST /agent-config` on FastAPI. The agent hot-reloads Supabase config before the next signal after `AGENT_CONFIG_REFRESH_SECONDS` elapses, so thresholds, prompts, order size, provider, and model-list changes no longer require a process restart.
 
 ### Why FastAPI owns Settings writes
 
@@ -1110,11 +1119,7 @@ Connect the repo to Netlify. Set environment variables in the Netlify dashboard 
 
 ### Config changes (no redeploy needed)
 
-Update agent parameters via the Settings page in the dashboard. Then restart the agent machine to apply:
-
-```bash
-restart the agent worker in Oracle Cloud
-```
+Update agent parameters via the Settings page in the dashboard. The worker refreshes `agent_config` before the next signal after `AGENT_CONFIG_REFRESH_SECONDS` elapses, so normal settings changes do not require redeploying or restarting the agent.
 
 ---
 

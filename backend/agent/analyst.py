@@ -81,6 +81,9 @@ from trader import AlpacaTrader
 
 log = logging.getLogger("agent.analyst")
 
+ARTICLE_EXECUTION_SCORE_FLOOR = 0.48
+LOG_FIELD_LIMIT = 240
+
 
 # ── LangGraph State ──────────────────────────────────────────────────────────
 
@@ -183,6 +186,56 @@ def _trading_context_section(ctx: Optional[dict]) -> str:
         )
 
     return f"\n\nTRADING CONTEXT:\n" + "\n".join(lines) if lines else ""
+
+
+def _log_text(value: Any, *, limit: int = LOG_FIELD_LIMIT) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 3]}..."
+
+
+def _log_list(values: Any, *, limit: int = 4) -> str:
+    if not values:
+        return "none"
+    if not isinstance(values, list):
+        values = [values]
+    items = [_log_text(item, limit=160) for item in values if str(item or "").strip()]
+    if not items:
+        return "none"
+    suffix = f"; +{len(items) - limit} more" if len(items) > limit else ""
+    return "; ".join(items[:limit]) + suffix
+
+
+def _log_signal_input(news: NewsMessage) -> None:
+    log.info(
+        'Signal input [%s]: source=%s simulated=%s article_id=%s published_at=%s '
+        'summary_chars=%d url=%s headline="%s"',
+        news.ticker,
+        news.source or "unknown",
+        news.is_simulated,
+        news.article_id or "n/a",
+        news.published_at or "n/a",
+        len(news.summary or ""),
+        "yes" if news.article_url else "no",
+        _log_text(news.headline),
+    )
+
+
+def _log_article_quality(ticker: str, quality: dict[str, Any], *, label: str) -> None:
+    log.info(
+        "%s [%s]: grade=%s score=%.2f floor=%.2f category=%s has_summary=%s "
+        "flags=%s reasons=%s",
+        label,
+        ticker,
+        quality.get("grade", "LOW"),
+        float(quality.get("score", 0.0) or 0.0),
+        ARTICLE_EXECUTION_SCORE_FLOOR,
+        quality.get("category") or "unknown",
+        quality.get("has_summary", False),
+        _log_list(quality.get("flags")),
+        _log_list(quality.get("reasons")),
+    )
 
 
 def _opinion_block(label: str, opinion: PersonaAnalysis) -> str:
@@ -361,6 +414,12 @@ def _make_fetch_context_node(trader: AlpacaTrader):
     def fetch_context(state: AgentState) -> dict:
         news = state["news"]
         article_quality = evaluate_article_quality(news)
+        _log_signal_input(news)
+        _log_article_quality(
+            news.ticker,
+            article_quality.to_dict(),
+            label="Article quality",
+        )
 
         account_context = trader.get_account_context()
         position_context = trader.get_position_context(news.ticker)
@@ -454,7 +513,18 @@ def _make_pre_screen_node():
         )
         score = quality.get("score", 0.0)
 
-        if isinstance(score, (int, float)) and score >= 0.48:
+        if isinstance(score, (int, float)) and score >= ARTICLE_EXECUTION_SCORE_FLOOR:
+            log.info(
+                "Pre-screen [%s]: PASS to LLM debate grade=%s score=%.2f floor=%.2f "
+                "category=%s flags=%s reasons=%s",
+                news.ticker,
+                quality.get("grade", "UNKNOWN"),
+                float(score),
+                ARTICLE_EXECUTION_SCORE_FLOOR,
+                quality.get("category") or "unknown",
+                _log_list(quality.get("flags")),
+                _log_list(quality.get("reasons")),
+            )
             return {"article_quality": quality}
 
         metadata = _quality_metadata(quality)
@@ -508,11 +578,24 @@ def _make_pre_screen_node():
             primary_risk="The article may omit material facts, so the system refused to infer a trade from thin evidence.",
         )
 
+        logged_score = float(score) if isinstance(score, (int, float)) else 0.0
         log.info(
-            "Pre-screen [%s]: HOLD low-quality article grade=%s score=%.2f",
+            "Pre-screen [%s]: HOLD before LLM grade=%s score=%.2f floor=%.2f "
+            "category=%s flags=%s reasons=%s",
             news.ticker,
             grade,
-            float(score) if isinstance(score, (int, float)) else 0.0,
+            logged_score,
+            ARTICLE_EXECUTION_SCORE_FLOOR,
+            category,
+            _log_list(quality.get("flags")),
+            _log_list(reasons),
+        )
+        log.info(
+            "Pre-screen [%s]: LLM skipped model=deterministic-pre-screen "
+            "committee=3xNEUTRAL sentiment=0.00 confidence=%.2f reason=%s",
+            news.ticker,
+            analysis.confidence,
+            _log_text(analysis.reasoning),
         )
         return {"analysis": analysis, "article_quality": quality}
 
@@ -946,12 +1029,17 @@ def _make_assess_risk_node():
         Execution gate: requires a good thesis, calibrated confidence, valid
         account state, and a position-aware order plan.
         """
+        news = state["news"]
         article_quality = (
             state.get("article_quality")
             or evaluate_article_quality(state["news"]).to_dict()
         )
 
         if state.get("analysis") is None:
+            log.info(
+                "Risk gate [%s]: BLOCK no valid analysis available; defaulting to HOLD",
+                news.ticker,
+            )
             return {
                 "should_trade": False,
                 "execution_plan": build_execution_plan(
@@ -992,7 +1080,9 @@ def _make_assess_risk_node():
         is_confident = (
             metrics["calibrated_confidence"] >= effective_confidence_threshold
         )
-        quality_ok = article_quality.get("score", 0.0) >= 0.48
+        quality_ok = (
+            article_quality.get("score", 0.0) >= ARTICLE_EXECUTION_SCORE_FLOOR
+        )
         plan_ok = len(plan["blocked_reasons"]) == 0
 
         blockers: list[str] = []
@@ -1009,6 +1099,7 @@ def _make_assess_risk_node():
         if a.action != "HOLD" and not quality_ok:
             blockers.append("Article quality is too weak/broad for execution.")
         blockers.extend(plan["blocked_reasons"])
+        unique_blockers = list(dict.fromkeys(blockers))
 
         should_trade = (
             (is_strong_buy or is_strong_sell)
@@ -1019,13 +1110,18 @@ def _make_assess_risk_node():
         reason = (
             "Signal passed thesis, source-quality, account, and execution-plan gates."
         )
-        if blockers:
+        if unique_blockers:
             if a.action == "HOLD":
                 reason = "Portfolio Manager chose HOLD."
             else:
-                reason = " ".join(dict.fromkeys(blockers))
+                reason = " ".join(unique_blockers)
 
         # ── SIM safety: simulated signals never trigger Alpaca orders ──
+        if state.get("is_simulated", False):
+            log.info(
+                "Risk gate [%s]: simulated signal; Alpaca order submission is disabled",
+                news.ticker,
+            )
         if state.get("is_simulated", False) and should_trade:
             log.info(
                 "Risk gate: BLOCKED simulated signal from trading "
@@ -1037,6 +1133,7 @@ def _make_assess_risk_node():
             should_trade = False
             reason = "Simulated signals are never sent to Alpaca."
             blockers.append(reason)
+            unique_blockers = list(dict.fromkeys(blockers))
 
         log.info(
             "Risk gate: should_trade=%s  (action=%s  sentiment=%.2f  confidence=%.2f→%.2f  quality=%s %.2f)",
@@ -1048,6 +1145,58 @@ def _make_assess_risk_node():
             article_quality.get("grade"),
             article_quality.get("score", 0.0),
         )
+        log.info(
+            "Risk gate [%s]: checks strong_buy=%s strong_sell=%s confident=%s "
+            "quality_ok=%s execution_plan_ok=%s",
+            news.ticker,
+            is_strong_buy,
+            is_strong_sell,
+            is_confident,
+            quality_ok,
+            plan_ok,
+        )
+        log.info(
+            "Risk gate [%s]: thresholds buy>=%.2f sell<=%.2f confidence>=%.2f "
+            "effective_confidence>=%.2f quality_score>=%.2f",
+            news.ticker,
+            config.BUY_SENTIMENT_THRESHOLD,
+            config.SELL_SENTIMENT_THRESHOLD,
+            config.CONFIDENCE_THRESHOLD,
+            effective_confidence_threshold,
+            ARTICLE_EXECUTION_SCORE_FLOOR,
+        )
+        log.info(
+            "Risk gate [%s]: committee_metrics agreement=%.3f net_weight=%.3f "
+            "cap=%.2f calibrated=%.2f thesis=%s cap_reasons=%s dissenters=%s",
+            news.ticker,
+            float(metrics.get("agreement", 0.0) or 0.0),
+            float(metrics.get("net_weight", 0.0) or 0.0),
+            float(metrics.get("confidence_cap", 0.0) or 0.0),
+            float(metrics.get("calibrated_confidence", 0.0) or 0.0),
+            metrics.get("thesis_quality") or "unknown",
+            _log_list(metrics.get("cap_reasons")),
+            _log_list(metrics.get("high_conviction_dissenters")),
+        )
+        log.info(
+            "Risk gate [%s]: execution_plan action=%s side=%s qty=%s intent=%s "
+            "notional=%s buying_power=%s position_qty=%s blocked=%s",
+            news.ticker,
+            plan.get("action"),
+            plan.get("side") or "none",
+            plan.get("quantity"),
+            plan.get("position_intent"),
+            plan.get("estimated_notional"),
+            plan.get("buying_power"),
+            plan.get("position_qty"),
+            _log_list(plan.get("blocked_reasons")),
+        )
+        if unique_blockers:
+            log.info(
+                "Risk gate [%s]: blockers=%s",
+                news.ticker,
+                _log_list(unique_blockers, limit=8),
+            )
+        log.info("Risk gate [%s]: reason=%s", news.ticker, _log_text(reason))
         return {
             "should_trade": should_trade,
             "execution_plan": plan,
@@ -1077,7 +1226,7 @@ def _make_assess_risk_node():
                     "execution_plan_ok": plan_ok,
                 },
                 "should_trade": should_trade,
-                "blockers": list(dict.fromkeys(blockers)),
+                "blockers": unique_blockers,
                 "reason": reason,
             },
         }

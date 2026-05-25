@@ -70,6 +70,15 @@ def main() -> None:
 
     def process_news(news: NewsMessage) -> None:
         """Run one news article through the full agent graph."""
+        try:
+            if config.reload_from_supabase_if_stale():
+                log.info("Agent config hot-reloaded before processing %s", news.ticker)
+        except Exception as exc:
+            log.warning(
+                "Could not refresh agent config; using current in-memory config: %s",
+                exc,
+            )
+
         initial_state = {
             "news": news,
             "is_cached": False,

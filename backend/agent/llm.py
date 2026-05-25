@@ -14,7 +14,9 @@ The public contract stays intentionally small:
 
 from __future__ import annotations
 
+import json
 import logging
+import threading
 from typing import Any
 
 import config
@@ -33,14 +35,102 @@ from llm_providers.openrouter import OpenRouterProvider
 log = logging.getLogger("agent.llm")
 
 
-def create_llm_client() -> LLMClient:
-    """Build the active provider from Supabase config and return a stable wrapper."""
+def _build_provider() -> Provider:
     provider_config = parse_llm_provider_config(config.LLM_PROVIDER_CONFIG)
     if provider_config.type == "openrouter":
-        provider: Provider = OpenRouterProvider(provider_config)
-    else:
-        provider = GroqAlwaysFreeProvider(provider_config)
-    log.info("ModelRouter: active provider=%s", provider.name)
+        return OpenRouterProvider(provider_config)
+    return GroqAlwaysFreeProvider(provider_config)
+
+
+def _provider_config_fingerprint() -> str:
+    normalized = normalize_llm_provider_config(config.LLM_PROVIDER_CONFIG)
+    return json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str)
+
+
+class ReloadableLLMProvider:
+    """
+    Stable provider wrapper that hot-swaps the underlying implementation.
+
+    The graph keeps this object for the life of the process. Before every LLM
+    call, it checks the current Supabase-backed provider config fingerprint and
+    rebuilds only when the provider/model settings changed. A failed rebuild
+    keeps the previous working provider alive so an invalid edit does not kill
+    the worker mid-run.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._provider: Provider | None = None
+        self._fingerprint = ""
+
+    @property
+    def name(self) -> str:
+        provider = self._provider
+        return provider.name if provider is not None else "uninitialized"
+
+    def refresh_if_needed(self, *, force: bool = False) -> Provider:
+        with self._lock:
+            try:
+                fingerprint = _provider_config_fingerprint()
+            except Exception:
+                if self._provider is not None:
+                    log.exception(
+                        "ModelRouter: provider config is invalid; keeping active provider=%s",
+                        self._provider.name,
+                    )
+                    return self._provider
+                raise
+
+            if (
+                not force
+                and self._provider is not None
+                and fingerprint == self._fingerprint
+            ):
+                return self._provider
+
+            old_name = self._provider.name if self._provider is not None else None
+            try:
+                provider = _build_provider()
+            except Exception:
+                if self._provider is not None:
+                    log.exception(
+                        "ModelRouter: provider config changed but reload failed; keeping active provider=%s",
+                        self._provider.name,
+                    )
+                    return self._provider
+                raise
+
+            self._provider = provider
+            self._fingerprint = fingerprint
+            if old_name and old_name != provider.name:
+                log.info(
+                    "ModelRouter: provider hot-swapped from %s to %s",
+                    old_name,
+                    provider.name,
+                )
+            else:
+                log.info("ModelRouter: active provider=%s", provider.name)
+            return provider
+
+    def call(
+        self,
+        response_model: type,
+        messages: list[dict],
+        *,
+        max_retries: int = 1,
+    ) -> tuple[Any, str]:
+        provider = self.refresh_if_needed()
+        return provider.call(
+            response_model,
+            messages,
+            max_retries=max_retries,
+        )
+
+
+def create_llm_client() -> LLMClient:
+    """Return a stable wrapper whose underlying provider can hot-reload."""
+    provider = ReloadableLLMProvider()
+    provider.refresh_if_needed(force=True)
     return LLMClient(provider=provider)
 
 
@@ -77,6 +167,7 @@ __all__ = [
     "LLMClient",
     "ModelRouter",
     "OpenRouterProvider",
+    "ReloadableLLMProvider",
     "_quota_reset_seconds",
     "_retry_after_seconds",
     "create_llm_client",

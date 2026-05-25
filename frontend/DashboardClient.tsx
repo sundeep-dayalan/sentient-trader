@@ -780,7 +780,12 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     'auth_required',
   );
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const [paperBannerDismissed, setPaperBannerDismissed] = useState(false);
+  const [paperBannerDismissed, setPaperBannerDismissed] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('st-paper-banner-dismissed') === 'true';
+    }
+    return false;
+  });
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -920,9 +925,16 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     try {
       const after = latestSeenRef.current;
       const url = after ? `/trades?after=${encodeURIComponent(after)}` : '/trades';
-      const { trades: fresh } = await apiFetch<{ trades: Trade[] }>(url);
+      const { trades: fresh, hasMore: nextHasMore } = await apiFetch<{
+        trades: Trade[];
+        hasMore?: boolean;
+      }>(url);
       if (fresh.length > 0) {
         ingestFreshTrades(fresh);
+        if (!after && nextHasMore !== undefined) {
+          setHasMore(nextHasMore);
+          hasMoreRef.current = nextHasMore;
+        }
       }
     } finally {
       pollingLatestRef.current = false;
@@ -1284,6 +1296,15 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                   <strong>Paper Trading Mode</strong> — This dashboard uses Alpaca&apos;s paper
                   trading API with simulated funds. No real money is involved.
                 </p>
+                <button
+                  onClick={() => {
+                    localStorage.setItem('st-paper-banner-dismissed', 'true');
+                    setPaperBannerDismissed(true);
+                  }}
+                  className="shrink-0 rounded-lg border border-warning/30 px-2 py-1 text-xs font-semibold text-warning transition hover:bg-warning/10 hover:border-warning/50 active:scale-95"
+                >
+                  Don&apos;t show again
+                </button>
                 <button
                   onClick={() => setPaperBannerDismissed(true)}
                   className="shrink-0 rounded-lg p-1 text-warning transition hover:bg-warning/10"

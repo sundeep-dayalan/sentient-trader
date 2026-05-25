@@ -515,19 +515,9 @@ def default_llm_provider_config() -> dict[str, Any]:
     return {"type": "groq-always-free"}
 
 
-def normalize_llm_provider_config(raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, dict) or not raw:
-        return default_llm_provider_config()
-
-    provider_type = str(raw.get("type") or "groq-always-free").strip().lower()
-    if provider_type == "groq-always-free":
-        return default_llm_provider_config()
-    if provider_type != "openrouter":
-        raise HTTPException(
-            status_code=400,
-            detail="llm_provider.type must be groq-always-free or openrouter",
-        )
-
+def normalize_openrouter_profile_config(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="openrouter profile must be an object")
     base_url = str(raw.get("base_url") or DEFAULT_OPENROUTER_BASE_URL).strip()
     if not base_url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="llm_provider.base_url must be a URL")
@@ -602,7 +592,6 @@ def normalize_llm_provider_config(raw: Any) -> dict[str, Any]:
 
     models.sort(key=lambda model: (model["priority"], model["id"]))
     return {
-        "type": "openrouter",
         "base_url": base_url.rstrip("/"),
         "routing": {
             "strategy": "ordered_fallback",
@@ -616,6 +605,33 @@ def normalize_llm_provider_config(raw: Any) -> dict[str, Any]:
         },
         "models": models,
     }
+
+
+def normalize_llm_provider_config(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict) or not raw:
+        return default_llm_provider_config()
+
+    provider_type = str(raw.get("type") or "groq-always-free").strip().lower()
+    if provider_type == "groq-always-free":
+        normalized = default_llm_provider_config()
+        profile_raw = raw.get("openrouter") if isinstance(raw.get("openrouter"), dict) else raw
+        if (
+            isinstance(profile_raw, dict)
+            and isinstance(profile_raw.get("models"), list)
+            and profile_raw.get("models")
+        ):
+            try:
+                normalized["openrouter"] = normalize_openrouter_profile_config(profile_raw)
+            except HTTPException:
+                pass
+        return normalized
+    if provider_type != "openrouter":
+        raise HTTPException(
+            status_code=400,
+            detail="llm_provider.type must be groq-always-free or openrouter",
+        )
+
+    return {"type": "openrouter", **normalize_openrouter_profile_config(raw)}
 
 
 def get_model_cascade() -> list[dict[str, str]]:
