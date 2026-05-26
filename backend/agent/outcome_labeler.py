@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Optional
@@ -27,6 +28,7 @@ ALPACA_DATA_BASE_URL = os.environ.get(
 )
 ALPACA_DATA_FEED = os.environ.get("ALPACA_DATA_FEED", "iex")
 TERMINAL_STATUSES = {"LABELED", "NO_BARS", "ERROR"}
+ALPACA_STOCK_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.-]*$")
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,21 @@ def return_pct(start: Optional[float], end: Optional[float]) -> Optional[float]:
     if start is None or end is None or start <= 0:
         return None
     return round((end - start) / start, 6)
+
+
+def is_supported_alpaca_stock_symbol(ticker: str) -> bool:
+    """
+    Alpaca's stock bars endpoint expects US-style symbols, not exchange-prefixed
+    symbols such as TSX:ENB. Treat unsupported forms as no-bar rows so one
+    foreign/invalid ticker cannot abort the whole scheduler run.
+    """
+    return bool(ALPACA_STOCK_SYMBOL_PATTERN.fullmatch(ticker.strip().upper()))
+
+
+def alpaca_bar_error_message(exc: httpx.HTTPStatusError) -> str:
+    status_code = exc.response.status_code
+    reason = exc.response.reason_phrase
+    return f"Alpaca bars request failed with HTTP {status_code} {reason}."
 
 
 def label_status_for_record(record: dict[str, Any], now: datetime) -> str:
@@ -290,6 +307,25 @@ def label_recent_signals(limit: int, *, force: bool = False) -> int:
         trace = trace_row.get("decision_trace")
         signal_at = parse_timestamp(str(created_at))
         trace_price = signal_price_from_trace(trace if isinstance(trace, dict) else None)
+        if not is_supported_alpaca_stock_symbol(str(ticker)):
+            error = (
+                "Ticker format is unsupported by Alpaca stock bars endpoint: "
+                f"{ticker}"
+            )
+            log.info("%s trade_id=%s", error, trade_id)
+            record = build_no_bars_record(
+                trade_id=str(trade_id),
+                ticker=str(ticker),
+                signal_at=signal_at,
+                signal_price=trace_price,
+                now=now,
+                error=error,
+                label_attempts=next_attempt_count(existing),
+            )
+            sb.table("signal_outcomes").upsert(record, on_conflict="trade_id").execute()
+            labeled += 1
+            continue
+
         end = min(now, market_close_for_signal(signal_at) + timedelta(minutes=5))
         if end <= signal_at:
             record = build_no_bars_record(
@@ -305,7 +341,24 @@ def label_recent_signals(limit: int, *, force: bool = False) -> int:
             labeled += 1
             continue
 
-        bars = fetch_bars(str(ticker), signal_at, end)
+        try:
+            bars = fetch_bars(str(ticker), signal_at, end)
+        except httpx.HTTPStatusError as exc:
+            error = alpaca_bar_error_message(exc)
+            log.info("%s %s trade_id=%s", error, ticker, trade_id)
+            record = build_no_bars_record(
+                trade_id=str(trade_id),
+                ticker=str(ticker),
+                signal_at=signal_at,
+                signal_price=trace_price,
+                now=now,
+                error=error,
+                label_attempts=next_attempt_count(existing),
+            )
+            sb.table("signal_outcomes").upsert(record, on_conflict="trade_id").execute()
+            labeled += 1
+            continue
+
         if not bars:
             error = "No Alpaca bars available for requested window."
             log.info("%s %s trade_id=%s", error, ticker, trade_id)
@@ -340,9 +393,9 @@ def label_recent_signals(limit: int, *, force: bool = False) -> int:
 def main() -> None:
     dotenv_path = find_dotenv()
     if dotenv_path:
-        load_dotenv(dotenv_path, override=True)
+        load_dotenv(dotenv_path, override=False)
     else:
-        load_dotenv(override=True)
+        load_dotenv(override=False)
 
     parser = argparse.ArgumentParser(description="Label post-signal returns.")
     parser.add_argument("--limit", type=int, default=250)

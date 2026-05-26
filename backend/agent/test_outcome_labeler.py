@@ -1,11 +1,15 @@
 import unittest
 from datetime import datetime, timezone
 
+import httpx
+
 from outcome_labeler import (
     Bar,
+    alpaca_bar_error_message,
     build_no_bars_record,
     build_outcome_record,
     first_close_at_or_after,
+    is_supported_alpaca_stock_symbol,
     label_status_for_record,
     market_close_for_signal,
     maybe_single_data,
@@ -146,6 +150,21 @@ class OutcomeLabelerTests(unittest.TestCase):
                 return Result()
 
         self.assertEqual(maybe_single_data(Query())["label_status"], "NO_BARS")
+
+    def test_supported_alpaca_symbol_rejects_exchange_prefixes(self) -> None:
+        self.assertTrue(is_supported_alpaca_stock_symbol("AAPL"))
+        self.assertTrue(is_supported_alpaca_stock_symbol("BRK.B"))
+        self.assertFalse(is_supported_alpaca_stock_symbol("TSX:ENB"))
+
+    def test_alpaca_bar_error_message_is_short_and_actionable(self) -> None:
+        request = httpx.Request("GET", "https://data.alpaca.markets/v2/stocks/X/bars")
+        response = httpx.Response(400, request=request)
+        exc = httpx.HTTPStatusError("bad request", request=request, response=response)
+
+        self.assertEqual(
+            alpaca_bar_error_message(exc),
+            "Alpaca bars request failed with HTTP 400 Bad Request.",
+        )
 
 
 if __name__ == "__main__":
