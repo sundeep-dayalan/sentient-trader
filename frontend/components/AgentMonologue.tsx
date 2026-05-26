@@ -1,4 +1,4 @@
-import { articleSourceLabel, safeArticleUrl } from '@/lib/news';
+import { articleSourceLabel, safeArticleUrl, unescapeHtml } from '@/lib/news';
 import {
   ArticleQuality,
   DecisionTrace,
@@ -253,7 +253,7 @@ export default function AgentMonologue({
             )}
           </div>
           <p className="border-l-2 border-accent pl-3.5 text-sm leading-relaxed text-primary">
-            &quot;{trade.headline}&quot;
+            &quot;{unescapeHtml(trade.headline)}&quot;
           </p>
         </div>
 

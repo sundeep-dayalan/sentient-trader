@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { safeArticleUrl } from '@/lib/news';
+import { safeArticleUrl, unescapeHtml } from '@/lib/news';
 import { Trade } from '@/lib/types';
 
 const ACTION_STYLE: Record<string, string> = {
@@ -87,10 +87,10 @@ export default function LiveTicker({
             </div>
           </div>
           <span className="rounded-full bg-[var(--dashboard-control)] px-3 py-1 text-[11px] font-semibold text-[var(--dashboard-subtle)]">
-            {isPreview 
-              ? `${visibleTrades.length} latest` 
-              : totalCount !== undefined 
-                ? `${totalCount} events` 
+            {isPreview
+              ? `${visibleTrades.length} latest`
+              : totalCount !== undefined
+                ? `${totalCount} events`
                 : `${trades.length} events`}
           </span>
         </div>
@@ -190,7 +190,7 @@ export default function LiveTicker({
               </div>
 
               <p className="mb-3 line-clamp-2 text-xs leading-relaxed text-secondary">
-                {trade.headline}
+                {unescapeHtml(trade.headline)}
               </p>
 
               <div className="flex items-center gap-2">

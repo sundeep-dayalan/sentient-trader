@@ -10,9 +10,9 @@ from hashlib import sha256
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import re
+import html
 
 import config
-
 
 TRACKING_QUERY_PREFIXES = ("utm_",)
 TRACKING_QUERY_KEYS = {
@@ -171,12 +171,16 @@ class NormalizedArticle:
     received_at: datetime = field(default_factory=utc_now)
     raw_payload: dict[str, Any] = field(default_factory=dict)
 
-    def redis_message(self, ticker: str, fallback_article_id: str | None = None) -> dict[str, str]:
+    def redis_message(
+        self, ticker: str, fallback_article_id: str | None = None
+    ) -> dict[str, str]:
         message = {
             "ticker": ticker,
             "headline": self.headline,
             "source": self.article_source or self.provider,
-            "published_at": iso_z(self.source_created_at) or iso_z(self.received_at) or "",
+            "published_at": iso_z(self.source_created_at)
+            or iso_z(self.received_at)
+            or "",
         }
         if self.summary:
             message["summary"] = self.summary
@@ -188,8 +192,10 @@ class NormalizedArticle:
         return message
 
 
-def normalize_article(article: Any, provider: str = config.PROVIDER) -> NormalizedArticle | None:
-    headline = str(_get(article, "headline", "") or "").strip()
+def normalize_article(
+    article: Any, provider: str = config.PROVIDER
+) -> NormalizedArticle | None:
+    headline = html.unescape(str(_get(article, "headline", "") or "").strip())
     created_at = parse_datetime(_get(article, "created_at"))
     if not headline or created_at is None:
         return None

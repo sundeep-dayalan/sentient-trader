@@ -16,6 +16,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { ApiError, apiFetch } from '@/lib/api';
 import { isRiskGated } from '@/lib/dashboardStats';
 import { DashboardStats, Trade } from '@/lib/types';
+import { unescapeHtml } from '@/lib/news';
 
 const PAGE_SIZE = 20;
 const NAV_ITEMS = [
@@ -330,7 +331,7 @@ function RecentSignalsCard({ trades, onSeeMore }: { trades: Trade[]; onSeeMore: 
                 </span>
               </div>
               <p className="mt-1 line-clamp-1 text-xs text-[var(--dashboard-subtle)]">
-                {trade.headline}
+                {unescapeHtml(trade.headline)}
               </p>
             </div>
             <div className="text-right">
@@ -1343,9 +1344,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
             {activeView !== 'Dashboard' && (
               <section className="glass-panel flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-2xl px-5 py-3.5">
                 <div className="flex flex-wrap items-center gap-3">
-                  <h1 className="text-xl font-bold text-[var(--dashboard-text)]">
-                    {activeView}
-                  </h1>
+                  <h1 className="text-xl font-bold text-[var(--dashboard-text)]">{activeView}</h1>
                   <span className="hidden h-4 w-[1px] bg-[var(--dashboard-divider)] md:inline-block" />
                   <p className="text-xs text-[var(--dashboard-subtle)]">
                     {viewSubtitle[activeView] ?? 'View coming online.'}

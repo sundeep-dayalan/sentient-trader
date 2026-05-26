@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import time
+import html
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -354,9 +355,10 @@ def compute_dashboard_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
             sell_orders += 1
         if is_risk_gated(row):
             risk_gated += 1
-        if str(row.get("executed_action") or "").strip() or str(
-            row.get("order_id") or ""
-        ).strip():
+        if (
+            str(row.get("executed_action") or "").strip()
+            or str(row.get("order_id") or "").strip()
+        ):
             executed += 1
         if row.get("decision_path") == "pre_screen":
             pre_screened += 1
@@ -438,7 +440,7 @@ def check_simulate_limit(user_id: str, tier: UserTier) -> dict[str, Any]:
 
 def validate_simulation(payload: SimulateRequest) -> tuple[str, str, str]:
     ticker = payload.ticker.strip().upper()
-    headline = payload.headline.strip()
+    headline = html.unescape(payload.headline.strip())
     source = (payload.source or "simulation").strip() or "simulation"
 
     if not TICKER_REGEX.match(ticker):
@@ -538,10 +540,14 @@ def default_llm_provider_config() -> dict[str, Any]:
 
 def normalize_openrouter_profile_config(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
-        raise HTTPException(status_code=400, detail="openrouter profile must be an object")
+        raise HTTPException(
+            status_code=400, detail="openrouter profile must be an object"
+        )
     base_url = str(raw.get("base_url") or DEFAULT_OPENROUTER_BASE_URL).strip()
     if not base_url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="llm_provider.base_url must be a URL")
+        raise HTTPException(
+            status_code=400, detail="llm_provider.base_url must be a URL"
+        )
 
     routing_raw = raw.get("routing") if isinstance(raw.get("routing"), dict) else {}
 
@@ -572,10 +578,13 @@ def normalize_openrouter_profile_config(raw: Any) -> dict[str, Any]:
         try:
             priority = int(item.get("priority", item.get("preference", index)))
         except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="model priority must be an integer")
+            raise HTTPException(
+                status_code=400, detail="model priority must be an integer"
+            )
         if priority < 1 or priority in seen_priorities:
             raise HTTPException(
-                status_code=400, detail="model priorities must be unique positive integers"
+                status_code=400,
+                detail="model priorities must be unique positive integers",
             )
         seen_priorities.add(priority)
 
@@ -617,9 +626,7 @@ def normalize_openrouter_profile_config(raw: Any) -> dict[str, Any]:
         "routing": {
             "strategy": "ordered_fallback",
             "max_wait_seconds": positive_float("max_wait_seconds", 600),
-            "default_cooldown_seconds": positive_float(
-                "default_cooldown_seconds", 60
-            ),
+            "default_cooldown_seconds": positive_float("default_cooldown_seconds", 60),
             "key_status_check_interval_seconds": positive_float(
                 "key_status_check_interval_seconds", 300
             ),
@@ -635,14 +642,18 @@ def normalize_llm_provider_config(raw: Any) -> dict[str, Any]:
     provider_type = str(raw.get("type") or "groq-always-free").strip().lower()
     if provider_type == "groq-always-free":
         normalized = default_llm_provider_config()
-        profile_raw = raw.get("openrouter") if isinstance(raw.get("openrouter"), dict) else raw
+        profile_raw = (
+            raw.get("openrouter") if isinstance(raw.get("openrouter"), dict) else raw
+        )
         if (
             isinstance(profile_raw, dict)
             and isinstance(profile_raw.get("models"), list)
             and profile_raw.get("models")
         ):
             try:
-                normalized["openrouter"] = normalize_openrouter_profile_config(profile_raw)
+                normalized["openrouter"] = normalize_openrouter_profile_config(
+                    profile_raw
+                )
             except HTTPException:
                 pass
         return normalized

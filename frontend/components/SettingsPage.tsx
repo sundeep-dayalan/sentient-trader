@@ -201,7 +201,7 @@ function AgentConfigTab({
   const provider = draft.llm_provider;
   const activeOpenRouterProfile = openRouterProfileFrom(provider);
   const openRouterModels =
-    provider.type === 'openrouter' ? activeOpenRouterProfile.models ?? [] : [];
+    provider.type === 'openrouter' ? (activeOpenRouterProfile.models ?? []) : [];
   const openRouterRouting = activeOpenRouterProfile.routing ?? DEFAULT_OPENROUTER_ROUTING;
 
   const setProviderType = (type: LLMProviderConfig['type']) => {
@@ -470,7 +470,10 @@ function AgentConfigTab({
                     </button>
                   </div>
                   {openRouterModels.map((model, index) => (
-                    <div key={`${model.priority}-${index}`} className="rounded-xl border border-line p-3">
+                    <div
+                      key={`${model.priority}-${index}`}
+                      className="rounded-xl border border-line p-3"
+                    >
                       <div className="grid gap-3 md:grid-cols-[88px_1fr_110px_110px_auto] md:items-end">
                         <CompactNumberField
                           label="Priority"
@@ -526,9 +529,7 @@ function AgentConfigTab({
               <ReadRow
                 label="Active provider"
                 value={
-                  config.llm_provider.type === 'openrouter'
-                    ? 'OpenRouter'
-                    : 'Groq Always Free'
+                  config.llm_provider.type === 'openrouter' ? 'OpenRouter' : 'Groq Always Free'
                 }
                 badge="active"
               />
