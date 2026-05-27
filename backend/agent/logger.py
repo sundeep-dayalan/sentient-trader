@@ -106,8 +106,21 @@ def trade_observability_fields(
         error = execution.get("error")
         if isinstance(error, str) and error.strip():
             fields["execution_error"] = error.strip()
-        if submitted and execution_order_id:
+
+        # ── Fix #3: only mark executed_action when Alpaca confirms fill ──
+        # Previously we set executed_action as soon as submitted=True,
+        # which recorded intent not reality. Now we check the fill
+        # verification status — only filled/partially_filled orders
+        # count as actual executions.
+        fill_status = str(execution.get("fill_status") or "").strip().lower()
+        is_confirmed_fill = fill_status in ("filled", "partially_filled")
+
+        if submitted and execution_order_id and is_confirmed_fill:
             fields["executed_action"] = execution.get("action") or trade_action
+        elif submitted and execution_order_id and not is_confirmed_fill:
+            # Order was submitted but not yet confirmed as filled.
+            # Record as pending — the outcome labeler will reconcile later.
+            fields["order_status"] = fill_status or fields.get("order_status") or "pending_fill"
         elif submitted and not execution_order_id:
             fields["order_status"] = fields.get("order_status") or "missing_order_id"
             fields["execution_error"] = (

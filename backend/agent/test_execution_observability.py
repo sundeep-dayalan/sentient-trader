@@ -41,6 +41,99 @@ class ExecutionObservabilityTests(unittest.TestCase):
         self.assertEqual(fields["decision_path"], "full_debate")
         self.assertEqual(fields["calibrated_confidence"], 0.82)
 
+    def test_submitted_with_order_id_but_not_filled_has_no_executed_action(self) -> None:
+        """Fix #3: submitted=True + order_id but fill_status='new' should NOT set executed_action."""
+        fields = trade_observability_fields(
+            decision_trace={
+                "llm_operations": [{"step": "portfolio_manager_synthesis"}],
+                "risk_gate": {"should_trade": True},
+                "execution": {
+                    "submitted": True,
+                    "action": "BUY",
+                    "order_id": "alpaca-123",
+                    "status": "new",
+                    "fill_status": "new",
+                    "error": None,
+                },
+            },
+            trade_action="BUY",
+            order_id="alpaca-123",
+        )
+
+        self.assertNotIn("executed_action", fields)
+        self.assertEqual(fields["order_status"], "new")
+
+    def test_submitted_and_filled_sets_executed_action(self) -> None:
+        """Fix #3: submitted=True + order_id + fill_status='filled' SHOULD set executed_action."""
+        fields = trade_observability_fields(
+            decision_trace={
+                "llm_operations": [{"step": "portfolio_manager_synthesis"}],
+                "risk_gate": {"should_trade": True},
+                "execution": {
+                    "submitted": True,
+                    "action": "BUY",
+                    "order_id": "alpaca-456",
+                    "status": "filled",
+                    "fill_status": "filled",
+                    "filled_avg_price": 123.45,
+                    "error": None,
+                },
+            },
+            trade_action="BUY",
+            order_id="alpaca-456",
+        )
+
+        self.assertEqual(fields["executed_action"], "BUY")
+        self.assertEqual(fields["order_status"], "filled")
+
+    def test_partially_filled_sets_executed_action(self) -> None:
+        """Fix #3: partially_filled also counts as a real execution."""
+        fields = trade_observability_fields(
+            decision_trace={
+                "llm_operations": [{"step": "portfolio_manager_synthesis"}],
+                "risk_gate": {"should_trade": True},
+                "execution": {
+                    "submitted": True,
+                    "action": "BUY",
+                    "order_id": "alpaca-789",
+                    "status": "partially_filled",
+                    "fill_status": "partially_filled",
+                    "error": None,
+                },
+            },
+            trade_action="BUY",
+            order_id="alpaca-789",
+        )
+
+        self.assertEqual(fields["executed_action"], "BUY")
+
+    def test_price_move_blocked_has_no_executed_action(self) -> None:
+        """Fix #4: price-move gate blocks should record the error but no executed_action."""
+        fields = trade_observability_fields(
+            decision_trace={
+                "llm_operations": [{"step": "portfolio_manager_synthesis"}],
+                "risk_gate": {"should_trade": True},
+                "execution": {
+                    "submitted": False,
+                    "action": "BUY",
+                    "order_id": None,
+                    "status": "price_move_blocked",
+                    "error": "Price-move gate: AAPL moved up 4.2% since analysis",
+                    "price_move_gate": {
+                        "enabled": True,
+                        "blocked": True,
+                        "move_pct": 0.042,
+                    },
+                },
+            },
+            trade_action="BUY",
+            order_id=None,
+        )
+
+        self.assertNotIn("executed_action", fields)
+        self.assertEqual(fields["order_status"], "price_move_blocked")
+        self.assertIn("Price-move gate", fields.get("execution_error", ""))
+
     def test_deterministic_pre_screen_path_is_queryable(self) -> None:
         fields = trade_observability_fields(
             decision_trace={

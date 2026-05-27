@@ -51,6 +51,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional, TypedDict
 
@@ -1455,6 +1456,29 @@ def _make_assess_risk_node():
 
 
 def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
+    """Build a data-client once for the price-move gate re-check."""
+    try:
+        _exec_data_client = StockHistoricalDataClient(
+            api_key=os.environ["ALPACA_API_KEY"],
+            secret_key=os.environ["ALPACA_SECRET_KEY"],
+        )
+    except Exception:
+        _exec_data_client = None
+
+    def _refetch_live_price(ticker: str) -> Optional[float]:
+        """Get the latest trade price for a ticker right before order submission."""
+        if _exec_data_client is None:
+            return None
+        try:
+            snap = _exec_data_client.get_stock_snapshot(
+                StockSnapshotRequest(symbol_or_symbols=ticker)
+            ).get(ticker)
+            if snap and snap.latest_trade:
+                return float(snap.latest_trade.price)
+        except Exception as exc:
+            log.debug("Price re-fetch failed for %s: %s", ticker, exc)
+        return None
+
     def execute_trade(state: AgentState) -> dict:
         """Submit the order to Alpaca."""
         news = state["news"]
@@ -1462,6 +1486,77 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
         plan = state.get("execution_plan") or {}
         quantity = int(plan.get("quantity") or config.ORDER_QTY)
 
+        # ── Price-move gate (config-gated) ────────────────────────────────
+        # Re-check the live price and compare to the snapshot from
+        # fetch_context. If the stock has already moved more than the
+        # configured threshold, the opportunity has passed — don't chase.
+        price_move_gate: dict[str, Any] = {"enabled": config.PRICE_MOVE_GATE_ENABLED}
+        if config.PRICE_MOVE_GATE_ENABLED:
+            ctx = state.get("market_context") or {}
+            snapshot_price = ctx.get("price")
+            live_price = _refetch_live_price(news.ticker)
+
+            if snapshot_price and live_price and snapshot_price > 0:
+                move_pct = abs(live_price - snapshot_price) / snapshot_price
+                price_move_gate.update({
+                    "snapshot_price": snapshot_price,
+                    "live_price": round(live_price, 2),
+                    "move_pct": round(move_pct, 4),
+                    "threshold_pct": config.MAX_PRICE_MOVE_PCT,
+                })
+
+                if move_pct > config.MAX_PRICE_MOVE_PCT:
+                    direction = "up" if live_price > snapshot_price else "down"
+                    gate_reason = (
+                        f"Price-move gate: {news.ticker} moved {direction} "
+                        f"{move_pct:.1%} (${snapshot_price:.2f} → ${live_price:.2f}) "
+                        f"since analysis, exceeding {config.MAX_PRICE_MOVE_PCT:.0%} threshold. "
+                        f"Order blocked to avoid chasing."
+                    )
+                    price_move_gate["blocked"] = True
+                    price_move_gate["reason"] = gate_reason
+                    log.warning(
+                        "Price-move gate BLOCKED [%s]: %s moved %s %.1f%% "
+                        "($%.2f → $%.2f) > %.0f%% threshold",
+                        news.ticker, news.ticker, direction,
+                        move_pct * 100, snapshot_price, live_price,
+                        config.MAX_PRICE_MOVE_PCT * 100,
+                    )
+                    return {
+                        "trade_order_id": None,
+                        "execution": {
+                            "step": "execute_trade",
+                            "submitted": False,
+                            "ticker": news.ticker,
+                            "action": action,
+                            "quantity": quantity,
+                            "order_id": None,
+                            "status": "price_move_blocked",
+                            "error": gate_reason,
+                            "execution_plan": plan,
+                            "price_move_gate": price_move_gate,
+                        },
+                    }
+                else:
+                    price_move_gate["blocked"] = False
+                    log.info(
+                        "Price-move gate OK [%s]: moved %.2f%% ($%.2f → $%.2f), "
+                        "within %.0f%% threshold",
+                        news.ticker, move_pct * 100,
+                        snapshot_price, live_price,
+                        config.MAX_PRICE_MOVE_PCT * 100,
+                    )
+            else:
+                price_move_gate["blocked"] = False
+                price_move_gate["reason"] = (
+                    "Could not compare prices (snapshot or live price unavailable)."
+                )
+                log.debug(
+                    "Price-move gate [%s]: skipped — snapshot=$%s live=$%s",
+                    news.ticker, snapshot_price, live_price,
+                )
+
+        # ── Idempotency ──────────────────────────────────────────────────
         # Deterministic client_order_id prevents duplicate orders if the
         # worker crashes after placing the order but before xack (SEC-04).
         idempotency_seed = "|".join(
@@ -1552,14 +1647,43 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
                 bracket_info["status"] = "attached_to_primary_order"
             else:
                 bracket_info["status"] = "order_failed_no_bracket"
+        if price_move_gate.get("enabled"):
+            execution_data["price_move_gate"] = price_move_gate
 
-        # Fill verification (non-blocking)
+        # ── Fill verification with retry ──────────────────────────────────
+        # Market orders fill near-instantly, but Alpaca's API may not
+        # reflect the fill status on the first check. We retry up to 3
+        # times with a short sleep so the DB records the actual fill
+        # status rather than just "submitted". This is what lets
+        # executed_action reflect reality.
         if result.submitted and result.order_id:
-            try:
-                fill = trader.verify_fill(result.order_id)
+            fill: dict[str, Any] = {}
+            for attempt in range(3):
+                try:
+                    fill = trader.verify_fill(result.order_id)
+                    fill_status = str(fill.get("status", "")).lower()
+                    if fill_status in ("filled", "partially_filled", "cancelled", "expired", "rejected"):
+                        break  # Terminal state — no point retrying
+                    if attempt < 2:
+                        time.sleep(0.5)  # 500ms between retries
+                except Exception:
+                    break
+            if fill:
                 execution_data["fill_verification"] = fill
-            except Exception:
-                pass
+                # Propagate the confirmed fill status to the top-level
+                # so logger.py can gate executed_action on it.
+                fill_status = str(fill.get("status", "")).lower()
+                execution_data["fill_status"] = fill_status
+                if fill.get("filled_avg_price"):
+                    execution_data["filled_avg_price"] = fill["filled_avg_price"]
+                log.info(
+                    "Fill verification [%s]: status=%s filled_qty=%s avg_price=$%s (attempts=%d)",
+                    news.ticker,
+                    fill.get("status"),
+                    fill.get("filled_qty"),
+                    fill.get("filled_avg_price"),
+                    attempt + 1,
+                )
 
         # Record signal for momentum tracking (config-gated)
         try:

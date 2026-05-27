@@ -481,4 +481,33 @@ def build_feature_report(
         outcome="categorized" if mh_enabled else "disabled",
     )
 
+    # ── Price-Move Gate ──────────────────────────────────────────────────
+    pmg_enabled = getattr(cfg, "PRICE_MOVE_GATE_ENABLED", False)
+    pmg_data = exec_data.get("price_move_gate")
+    if pmg_enabled and isinstance(pmg_data, dict):
+        was_blocked = pmg_data.get("blocked", False)
+        report.record(
+            "price_move_gate",
+            enabled=True,
+            activated=True,
+            outcome="blocked" if was_blocked else "passed",
+            details={
+                "snapshot_price": pmg_data.get("snapshot_price"),
+                "live_price": pmg_data.get("live_price"),
+                "move_pct": pmg_data.get("move_pct"),
+                "threshold_pct": pmg_data.get("threshold_pct"),
+            },
+            impact=(
+                f"Order blocked: price moved {pmg_data.get('move_pct', 0):.1%} "
+                f"exceeding {pmg_data.get('threshold_pct', 0):.0%} threshold."
+                if was_blocked
+                else f"Price move {pmg_data.get('move_pct', 0):.1%} within threshold."
+            ),
+        )
+        metrics.increment("price_move_gate", "blocked" if was_blocked else "passed", ticker)
+    elif pmg_enabled:
+        report.record("price_move_gate", enabled=True, activated=False, outcome="no_data")
+    else:
+        report.record("price_move_gate", enabled=False, outcome="disabled")
+
     return report.to_dict()

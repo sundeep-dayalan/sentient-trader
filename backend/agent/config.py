@@ -149,6 +149,11 @@ MARKET_HOURS_AWARENESS_ENABLED: bool = False
 # Structured synthesis framework
 STRUCTURED_SYNTHESIS_ENABLED: bool = False
 
+# Price-move freshness gate: block trades when the stock has already moved
+# too much since the headline was first analyzed (chasing protection).
+PRICE_MOVE_GATE_ENABLED: bool = False
+MAX_PRICE_MOVE_PCT: float = 0.03  # 3% default — block if price moved >3%
+
 CONFIG_FINGERPRINT = ""
 LAST_CONFIG_REFRESH_EPOCH = 0.0
 
@@ -195,6 +200,7 @@ def reload_from_supabase() -> bool:
     global FEEDBACK_LOOP_ENABLED, FEEDBACK_LOOP_LOOKBACK_DAYS
     global USE_LIMIT_ORDERS, LIMIT_ORDER_BUFFER_PCT
     global MARKET_HOURS_AWARENESS_ENABLED, STRUCTURED_SYNTHESIS_ENABLED
+    global PRICE_MOVE_GATE_ENABLED, MAX_PRICE_MOVE_PCT
 
     from supabase import create_client
     from supabase.client import ClientOptions
@@ -253,6 +259,8 @@ def reload_from_supabase() -> bool:
     LIMIT_ORDER_BUFFER_PCT = _safe_float(enhanced.get("limit_order_buffer_pct"), 0.005)
     MARKET_HOURS_AWARENESS_ENABLED = _safe_bool(enhanced.get("market_hours_awareness"), False)
     STRUCTURED_SYNTHESIS_ENABLED = _safe_bool(enhanced.get("structured_synthesis"), False)
+    PRICE_MOVE_GATE_ENABLED = _safe_bool(enhanced.get("price_move_gate"), False)
+    MAX_PRICE_MOVE_PCT = _safe_float(enhanced.get("max_price_move_pct"), 0.03)
 
     CONFIG_FINGERPRINT = fingerprint
     LAST_CONFIG_REFRESH_EPOCH = time.time()
@@ -279,6 +287,7 @@ def reload_from_supabase() -> bool:
             ("limit_orders", USE_LIMIT_ORDERS),
             ("market_hours", MARKET_HOURS_AWARENESS_ENABLED),
             ("structured_synth", STRUCTURED_SYNTHESIS_ENABLED),
+            ("price_move_gate", PRICE_MOVE_GATE_ENABLED),
         ] if enabled]
         if active_features:
             log.info("Enhanced features active: %s", ", ".join(active_features))

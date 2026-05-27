@@ -2,6 +2,18 @@
 
 An autonomous paper-trading system that reads live financial news, filters weak signals, runs a sequential AI committee on tradeable catalysts, and submits Alpaca paper orders only when the calibrated risk gate clears.
 
+<div align="center">
+
+### 🚀 [**Live Demo → apps.sundeepdayalan.in/sentient-trader**](https://apps.sundeepdayalan.in/sentient-trader)
+
+*Watch the AI committee debate in real-time as it analyzes live market headlines.*
+
+[![Live Demo](https://img.shields.io/badge/🔴_LIVE-Demo_Dashboard-22c55e?style=for-the-badge&logoColor=white)](https://apps.sundeepdayalan.in/sentient-trader)
+[![Paper Trading](https://img.shields.io/badge/Mode-Paper_Trading-3b82f6?style=for-the-badge)](https://apps.sundeepdayalan.in/sentient-trader)
+[![AI Powered](https://img.shields.io/badge/AI-LLM_Committee-8b5cf6?style=for-the-badge)](https://apps.sundeepdayalan.in/sentient-trader)
+
+</div>
+
 ```
 Alpaca News API -> Valkey Stream -> LangGraph Agent -> LLM Committee -> Alpaca Orders -> Supabase -> FastAPI -> React Dashboard
 ```
