@@ -236,3 +236,19 @@ WHERE t.executed_action IN ('BUY', 'SELL')
   AND so.label_status = 'COMPLETED'
 GROUP BY 1
 ORDER BY 1;
+
+
+
+
+-- EXTRA
+SELECT
+    pm_recommendation,
+    COUNT(*) AS total,
+    ROUND(AVG(CASE WHEN so.return_1h > 0 AND pm_recommendation = 'BUY' THEN 1
+                    WHEN so.return_1h < 0 AND pm_recommendation = 'SELL' THEN 1
+                    ELSE 0 END) * 100, 1) AS directional_accuracy_pct
+FROM sentient_trader.trades t
+JOIN sentient_trader.signal_outcomes so ON so.trade_id = t.id
+WHERE t.executed_action IS NOT NULL
+  AND so.label_status IN ('LABELED', 'COMPLETED')
+GROUP BY pm_recommendation;
