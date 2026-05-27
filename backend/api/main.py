@@ -1323,3 +1323,68 @@ def simulate(
         "entry_id": entry_id,
         "remaining": rate_limit["remaining"],
     }
+
+
+# ── Enhanced Features Observability ──────────────────────────────────────────
+
+
+@app.get("/enhanced-features/audit")
+def enhanced_features_audit(
+    limit: int = Query(default=50, ge=1, le=200),
+    user: UserInfo = Depends(require_user),
+) -> dict[str, Any]:
+    """
+    Audit recent enhanced feature activations.
+
+    Queries the decision_trace JSONB for the `enhanced_features` section
+    that records what each feature did per signal.
+    """
+    try:
+        result = (
+            supa_service()
+            .table("trade_decision_traces")
+            .select("trade_id, decision_trace")
+            .not_.is_("decision_trace->enhanced_features", "null")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        rows = result.data or []
+
+        # Aggregate feature stats
+        feature_stats: dict[str, dict[str, int]] = {}
+        signals_with_features = 0
+
+        for row in rows:
+            trace = row.get("decision_trace") or {}
+            ef = trace.get("enhanced_features")
+            if not ef:
+                continue
+            signals_with_features += 1
+
+            for activation in ef.get("activations", []):
+                feature = activation.get("feature", "unknown")
+                outcome = activation.get("outcome", "unknown")
+                if feature not in feature_stats:
+                    feature_stats[feature] = {}
+                feature_stats[feature][outcome] = (
+                    feature_stats[feature].get(outcome, 0) + 1
+                )
+
+        return {
+            "signals_analyzed": len(rows),
+            "signals_with_features": signals_with_features,
+            "feature_stats": feature_stats,
+            "recent_reports": [
+                {
+                    "trade_id": row.get("trade_id"),
+                    "enhanced_features": (
+                        row.get("decision_trace", {}).get("enhanced_features")
+                    ),
+                }
+                for row in rows[:10]  # Last 10 detailed reports
+            ],
+        }
+    except Exception as exc:
+        log.warning("Enhanced features audit failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))

@@ -1612,8 +1612,22 @@ def _build_decision_trace(state: AgentState) -> dict[str, Any]:
     }
     processing_finished_at = datetime.now(timezone.utc).isoformat()
 
-    return {
-        "schema_version": 2,
+    # Build enhanced feature observability report
+    enhanced_features = None
+    try:
+        from observability import build_feature_report
+        enhanced_features = build_feature_report(
+            ticker=news.ticker,
+            market_context=state.get("market_context"),
+            article_quality=state.get("article_quality"),
+            execution_plan=plan,
+            execution=execution,
+        )
+    except Exception as obs_exc:
+        log.debug("Could not build feature report: %s", obs_exc)
+
+    trace = {
+        "schema_version": 3,
         "pipeline": "decision_core",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "processing_started_at": state.get("processing_started_at"),
@@ -1628,6 +1642,9 @@ def _build_decision_trace(state: AgentState) -> dict[str, Any]:
         "execution": execution,
         "error": state.get("error"),
     }
+    if enhanced_features:
+        trace["enhanced_features"] = enhanced_features
+    return trace
 
 
 def _make_log_result_node(db: SupabaseLogger, cache: HeadlineCache):
