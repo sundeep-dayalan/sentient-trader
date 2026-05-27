@@ -23,14 +23,26 @@ try:
     from alpaca.common.exceptions import APIError
     from alpaca.trading.client import TradingClient
     from alpaca.trading.enums import OrderSide, TimeInForce
-    from alpaca.trading.requests import MarketOrderRequest
+    from alpaca.trading.requests import (
+        LimitOrderRequest,
+        MarketOrderRequest,
+        StopOrderRequest,
+    )
 except ModuleNotFoundError:
     APIError = Exception  # type: ignore[assignment]
     TradingClient = None  # type: ignore[assignment]
     OrderSide = SimpleNamespace(BUY="buy", SELL="sell")
-    TimeInForce = SimpleNamespace(DAY="day")
+    TimeInForce = SimpleNamespace(DAY="day", GTC="gtc", IOC="ioc")
 
     class MarketOrderRequest:  # type: ignore[no-redef]
+        def __init__(self, **kwargs) -> None:
+            self.__dict__.update(kwargs)
+
+    class LimitOrderRequest:  # type: ignore[no-redef]
+        def __init__(self, **kwargs) -> None:
+            self.__dict__.update(kwargs)
+
+    class StopOrderRequest:  # type: ignore[no-redef]
         def __init__(self, **kwargs) -> None:
             self.__dict__.update(kwargs)
 
@@ -94,15 +106,13 @@ class AlpacaTrader:
         action: str,
         quantity: Optional[int] = None,
         client_order_id: Optional[str] = None,
+        limit_price: Optional[float] = None,
     ) -> OrderResult:
         """
-        Submit a market order and return structured Alpaca execution metadata.
+        Submit a market or limit order and return structured Alpaca execution metadata.
         Failed orders return submitted=False — errors are logged but don't crash the pipeline.
 
-        Common failure reasons:
-          - Market is closed (paper trading still works after hours for some assets)
-          - Trying to SELL a ticker we don't hold
-          - Account has insufficient buying power
+        When limit_price is provided, submits a limit IOC order instead of market DAY.
         """
         qty = quantity if quantity is not None else config.ORDER_QTY
         side = OrderSide.BUY if action == "BUY" else OrderSide.SELL
@@ -125,13 +135,28 @@ class AlpacaTrader:
                 status="accepted",
             )
 
-        order_request = MarketOrderRequest(
-            symbol=ticker,
-            qty=qty,
-            side=side,
-            time_in_force=TimeInForce.DAY,  # auto-cancels at end of day if unfilled
-            client_order_id=client_order_id,  # Alpaca rejects duplicates — idempotent
-        )
+        # Use limit order if price provided, otherwise market order
+        if limit_price is not None and limit_price > 0:
+            order_request = LimitOrderRequest(
+                symbol=ticker,
+                qty=qty,
+                side=side,
+                limit_price=round(limit_price, 2),
+                time_in_force=TimeInForce.IOC,  # Immediate-or-cancel for limit
+                client_order_id=client_order_id,
+            )
+            log.info(
+                "Submitting LIMIT order: %s %d %s @ $%.2f",
+                action, qty, ticker, limit_price,
+            )
+        else:
+            order_request = MarketOrderRequest(
+                symbol=ticker,
+                qty=qty,
+                side=side,
+                time_in_force=TimeInForce.DAY,  # auto-cancels at end of day if unfilled
+                client_order_id=client_order_id,  # Alpaca rejects duplicates — idempotent
+            )
 
         try:
             order = self._client.submit_order(order_data=order_request)
@@ -188,6 +213,130 @@ class AlpacaTrader:
                 client_order_id=client_order_id,
                 error=str(e),
             )
+
+    def place_bracket_orders(
+        self,
+        ticker: str,
+        quantity: int,
+        entry_price: float,
+        stop_loss_pct: float = 0.03,
+        take_profit_pct: float = 0.06,
+    ) -> dict:
+        """
+        Place take-profit and stop-loss orders after a BUY fill.
+
+        Returns a dict with order IDs for both legs. Failures are logged
+        but do not raise — the primary order has already been executed.
+        """
+        if self._dry_run:
+            import uuid
+            return {
+                "take_profit_order_id": str(uuid.uuid4()),
+                "stop_loss_order_id": str(uuid.uuid4()),
+                "status": "mock",
+            }
+
+        result: dict = {
+            "take_profit_order_id": None,
+            "stop_loss_order_id": None,
+            "errors": [],
+        }
+
+        tp_price = round(entry_price * (1 + take_profit_pct), 2)
+        sl_price = round(entry_price * (1 - stop_loss_pct), 2)
+
+        # Take-profit limit order
+        try:
+            tp_order = self._client.submit_order(
+                order_data=LimitOrderRequest(
+                    symbol=ticker,
+                    qty=quantity,
+                    side=OrderSide.SELL,
+                    limit_price=tp_price,
+                    time_in_force=TimeInForce.GTC,
+                )
+            )
+            result["take_profit_order_id"] = str(getattr(tp_order, "id", "") or "")
+            log.info(
+                "Take-profit order placed: SELL %d %s @ $%.2f (order_id=%s)",
+                quantity, ticker, tp_price, result["take_profit_order_id"],
+            )
+        except Exception as exc:
+            result["errors"].append(f"Take-profit order failed: {exc}")
+            log.warning("Take-profit order failed for %s: %s", ticker, exc)
+
+        # Stop-loss order
+        try:
+            sl_order = self._client.submit_order(
+                order_data=StopOrderRequest(
+                    symbol=ticker,
+                    qty=quantity,
+                    side=OrderSide.SELL,
+                    stop_price=sl_price,
+                    time_in_force=TimeInForce.GTC,
+                )
+            )
+            result["stop_loss_order_id"] = str(getattr(sl_order, "id", "") or "")
+            log.info(
+                "Stop-loss order placed: SELL %d %s @ $%.2f (order_id=%s)",
+                quantity, ticker, sl_price, result["stop_loss_order_id"],
+            )
+        except Exception as exc:
+            result["errors"].append(f"Stop-loss order failed: {exc}")
+            log.warning("Stop-loss order failed for %s: %s", ticker, exc)
+
+        return result
+
+    def verify_fill(self, order_id: str) -> dict:
+        """
+        Check the fill status of an order.
+
+        Returns filled quantity, average price, and status.
+        Non-blocking — returns whatever status is current.
+        """
+        if self._dry_run:
+            return {
+                "filled_qty": 0,
+                "filled_avg_price": 0,
+                "status": "mock",
+            }
+        try:
+            order = self._client.get_order_by_id(order_id)
+            return {
+                "filled_qty": _floatish(getattr(order, "filled_qty", None)) or 0,
+                "filled_avg_price": _floatish(getattr(order, "filled_avg_price", None)) or 0,
+                "status": str(getattr(order, "status", "") or ""),
+            }
+        except Exception as exc:
+            log.warning("Could not verify fill for order %s: %s", order_id, exc)
+            return {
+                "filled_qty": 0,
+                "filled_avg_price": 0,
+                "status": "unknown",
+                "error": str(exc),
+            }
+
+    def get_all_positions(self) -> list[dict]:
+        """Return all open positions as a list of dicts."""
+        try:
+            positions = self._client.get_all_positions()
+            return [
+                {
+                    "symbol": str(getattr(p, "symbol", "") or ""),
+                    "qty": _floatish(getattr(p, "qty", None)) or 0.0,
+                    "side": str(getattr(p, "side", "") or "long"),
+                    "market_value": _floatish(getattr(p, "market_value", None)),
+                    "cost_basis": _floatish(getattr(p, "cost_basis", None)),
+                    "avg_entry_price": _floatish(getattr(p, "avg_entry_price", None)),
+                    "current_price": _floatish(getattr(p, "current_price", None)),
+                    "unrealized_pl": _floatish(getattr(p, "unrealized_pl", None)),
+                    "unrealized_plpc": _floatish(getattr(p, "unrealized_plpc", None)),
+                }
+                for p in positions
+            ]
+        except Exception as exc:
+            log.warning("Could not fetch all positions: %s", exc)
+            return []
 
     def get_account_context(self) -> Optional[dict]:
         """Small, JSON-safe account snapshot used by risk gating and prompts."""

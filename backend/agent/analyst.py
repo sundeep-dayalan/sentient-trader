@@ -180,12 +180,42 @@ def _trading_context_section(ctx: Optional[dict]) -> str:
         side = position.get("side") or "flat"
         market_value = position.get("market_value")
         unrealized_pl = position.get("unrealized_pl")
+        unrealized_plpc = position.get("unrealized_plpc")
+        avg_entry = position.get("avg_entry_price")
         lines.append(
             "POSITION: "
             f"{side} qty={qty}, "
             f"market_value={market_value if market_value is not None else 'n/a'}, "
             f"unrealized_pl={unrealized_pl if unrealized_pl is not None else 'n/a'}"
         )
+        # P&L awareness for existing positions
+        if (
+            unrealized_pl is not None
+            and unrealized_plpc is not None
+            and avg_entry is not None
+            and float(qty or 0) != 0
+        ):
+            try:
+                pl_val = float(unrealized_pl)
+                pl_pct = float(unrealized_plpc) * 100
+                lines.append(
+                    f"POSITION P&L: entry=${float(avg_entry):.2f}, "
+                    f"unrealized={'+' if pl_val >= 0 else ''}${pl_val:.2f} "
+                    f"({'+' if pl_pct >= 0 else ''}{pl_pct:.1f}%)"
+                )
+            except (TypeError, ValueError):
+                pass
+
+    # Technical indicators (config-gated)
+    tech = ctx.get("technical_indicators")
+    if tech:
+        try:
+            from market_intelligence import format_technical_prompt_block
+            tech_block = format_technical_prompt_block(tech)
+            if tech_block:
+                lines.append(tech_block)
+        except Exception:
+            pass
 
     return f"\n\nTRADING CONTEXT:\n" + "\n".join(lines) if lines else ""
 
@@ -508,6 +538,41 @@ def _make_fetch_context_node(trader: AlpacaTrader):
                 "account": account_context,
                 "position": position_context,
             }
+
+            # Technical indicators enrichment (config-gated)
+            try:
+                if config.TECHNICAL_INDICATORS_ENABLED and snap:
+                    from alpaca.data.requests import StockBarsRequest
+                    from alpaca.data.timeframe import TimeFrame
+                    from market_intelligence import build_technical_context
+
+                    try:
+                        bars = data_client.get_stock_bars(
+                            StockBarsRequest(
+                                symbol_or_symbols=ticker,
+                                timeframe=TimeFrame.Hour,
+                                start=datetime.now(timezone.utc) - __import__('datetime').timedelta(days=5),
+                            )
+                        )
+                        bar_list = bars.get(ticker) if bars else None
+                        if bar_list and len(bar_list) >= 5:
+                            closes = [float(b.close) for b in bar_list]
+                            volumes = [float(b.volume) for b in bar_list]
+                            tech = build_technical_context(closes, volumes, price)
+                            if tech:
+                                ctx["technical_indicators"] = tech
+                                log.info(
+                                    "Technical indicators [%s]: RSI=%s MACD=%s VR=%s",
+                                    ticker,
+                                    tech.get("rsi_14"),
+                                    tech.get("macd"),
+                                    tech.get("volume_ratio"),
+                                )
+                    except Exception as tech_exc:
+                        log.debug("Technical indicators unavailable for %s: %s", ticker, tech_exc)
+            except Exception:
+                pass
+
             log.info(
                 "Context [%s]: $%.2f  %s",
                 ticker,
@@ -711,9 +776,16 @@ def _make_momentum_analyst_node(router: ModelRouter, client: Any):
                 input_payload=input_payload,
                 error=sanitize_llm_error(exc),
             )
+            # Graceful fallback: return a neutral stance rather than None
+            fallback = PersonaAnalysis(
+                stance="NEUTRAL",
+                conviction=0.30,
+                analysis="LLM call failed; defaulting to neutral stance with low conviction for safety.",
+                headline_take="Unable to analyze; recommending caution.",
+            )
             return {
-                "momentum_opinion": None,
-                "momentum_model": None,
+                "momentum_opinion": fallback,
+                "momentum_model": "fallback-deterministic",
                 "llm_operations": _append_llm_operation(state, operation),
             }
 
@@ -957,12 +1029,82 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
             f"{_trading_context_section(state.get('market_context'))}"
             f"{quality_prompt_block(state.get('article_quality'))}\n\n"
             f"FULL COMMITTEE DEBATE:\n{debate_transcript}\n\n"
-            f"As the Portfolio Manager for {news.ticker}, synthesize this debate into a final "
-            f"trade decision. Weight the momentum/value directional views, then apply the Risk "
-            f"Manager's level, confidence cap, and disqualifying conditions as execution constraints. "
-            f"Acknowledge the key tension if the committee was split or risk-capped. "
-            f"Recommend BUY/SELL only for concrete, source-backed catalysts; otherwise HOLD."
         )
+
+        # Signal momentum context (config-gated)
+        try:
+            if config.SIGNAL_MOMENTUM_ENABLED:
+                from market_intelligence import SignalMomentumTracker
+                from redis_client import create_redis_client
+                tracker = SignalMomentumTracker(create_redis_client())
+                momentum_block = tracker.format_momentum_prompt(news.ticker)
+                if momentum_block:
+                    prompt += f"{momentum_block}\n\n"
+        except Exception:
+            pass
+
+        # Source credibility note (config-gated)
+        try:
+            if config.SOURCE_CREDIBILITY_ENABLED:
+                from source_credibility import source_credibility_prompt_note
+                cred_note = source_credibility_prompt_note(news.source)
+                if cred_note:
+                    prompt += f"{cred_note}\n\n"
+        except Exception:
+            pass
+
+        # Historical feedback loop (config-gated)
+        feedback_note = ""
+        try:
+            if config.FEEDBACK_LOOP_ENABLED:
+                from feedback_loop import compute_historical_accuracy, query_recent_outcomes
+                from supabase import create_client as _fb_create_client
+                from supabase.client import ClientOptions as _FBClientOptions
+                _fb_client = _fb_create_client(
+                    supabase_url=os.environ["SUPABASE_URL"],
+                    supabase_key=os.environ["SUPABASE_SERVICE_ROLE_KEY"],
+                    options=_FBClientOptions(
+                        schema=os.environ.get("SUPABASE_DB_SCHEMA", "public"),
+                    ),
+                )
+                # Check accuracy for the dominant action
+                for check_action in ["BUY", "SELL"]:
+                    outcomes = query_recent_outcomes(
+                        _fb_client, news.ticker, check_action,
+                        days=config.FEEDBACK_LOOP_LOOKBACK_DAYS,
+                    )
+                    if outcomes:
+                        accuracy = compute_historical_accuracy(outcomes, check_action)
+                        if accuracy.prompt_note:
+                            feedback_note += f"{accuracy.prompt_note}\n"
+                if feedback_note:
+                    prompt += f"{feedback_note}\n"
+        except Exception:
+            pass
+
+        # Structured synthesis framework (config-gated)
+        if config.STRUCTURED_SYNTHESIS_ENABLED:
+            prompt += (
+                f"As the Portfolio Manager for {news.ticker}, synthesize this debate into a final "
+                f"trade decision. Before deciding BUY/SELL/HOLD, explicitly evaluate:\n"
+                f"1. CATALYST CLARITY: Is the catalyst specific and actionable, or vague?\n"
+                f"2. TIMING: Has the price already moved? Is this news priced in?\n"
+                f"3. POSITION CONTEXT: Are we adding to an existing position or opening new?\n"
+                f"4. RISK-REWARD: What's the upside target vs downside risk?\n"
+                f"5. CONVICTION ALIGNMENT: Do the committee members agree on direction?\n\n"
+                f"Only recommend BUY/SELL if items 1, 4, and 5 are clearly favorable. "
+                f"Weight the momentum/value directional views, then apply the Risk "
+                f"Manager's level, confidence cap, and disqualifying conditions as execution constraints. "
+                f"Acknowledge the key tension if the committee was split or risk-capped."
+            )
+        else:
+            prompt += (
+                f"As the Portfolio Manager for {news.ticker}, synthesize this debate into a final "
+                f"trade decision. Weight the momentum/value directional views, then apply the Risk "
+                f"Manager's level, confidence cap, and disqualifying conditions as execution constraints. "
+                f"Acknowledge the key tension if the committee was split or risk-capped. "
+                f"Recommend BUY/SELL only for concrete, source-backed catalysts; otherwise HOLD."
+            )
         messages = [
             {
                 "role": "system",
@@ -1129,10 +1271,23 @@ def _make_assess_risk_node():
 
         a = state["analysis"]
         metrics = committee_metrics(a, article_quality, state.get("market_context"))
+
+        # Fetch all positions for concentration checks if enabled
+        all_positions: list[dict] = []
+        try:
+            if config.CONCENTRATION_LIMITS_ENABLED:
+                # trader is not available here, but we can get it from plan context
+                pass  # Concentration is already checked in build_execution_plan
+        except Exception:
+            pass
+
         plan = build_execution_plan(
             action=a.action,
             order_qty=config.ORDER_QTY,
             market_context=state.get("market_context"),
+            calibrated_confidence=metrics.get("calibrated_confidence", 0.0),
+            thesis_quality=metrics.get("thesis_quality", "WEAK"),
+            all_positions=all_positions,
         )
 
         is_strong_buy = (
@@ -1321,26 +1476,100 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
         )
         client_order_id = hashlib.sha256(idempotency_seed.encode()).hexdigest()[:36]
 
+        # Compute limit price if limit orders are enabled
+        limit_price = None
+        try:
+            if config.USE_LIMIT_ORDERS:
+                ctx = state.get("market_context") or {}
+                price = ctx.get("price")
+                if price is not None and price > 0:
+                    buffer = config.LIMIT_ORDER_BUFFER_PCT
+                    if action == "BUY":
+                        limit_price = round(price * (1 + buffer), 2)
+                    elif action == "SELL":
+                        limit_price = round(price * (1 - buffer), 2)
+        except Exception:
+            pass
+
         result = trader.place_order(
             ticker=news.ticker,
             action=action,
             quantity=quantity,
             client_order_id=client_order_id,
+            limit_price=limit_price,
         )
+
+        execution_data: dict[str, Any] = {
+            "step": "execute_trade",
+            "submitted": result.submitted,
+            "ticker": news.ticker,
+            "action": action,
+            "quantity": quantity,
+            "client_order_id": client_order_id,
+            "order_id": result.order_id,
+            "status": result.status,
+            "error": result.error,
+            "execution_plan": plan,
+        }
+        if limit_price is not None:
+            execution_data["limit_price"] = limit_price
+
+        # Fill verification (non-blocking)
+        if result.submitted and result.order_id:
+            try:
+                fill = trader.verify_fill(result.order_id)
+                execution_data["fill_verification"] = fill
+            except Exception:
+                pass
+
+        # Bracket orders: auto stop-loss + take-profit after BUY (config-gated)
+        if (
+            result.submitted
+            and action == "BUY"
+            and config.BRACKET_ORDERS_ENABLED
+        ):
+            try:
+                ctx = state.get("market_context") or {}
+                entry_price = ctx.get("price")
+                if entry_price and entry_price > 0:
+                    bracket = trader.place_bracket_orders(
+                        ticker=news.ticker,
+                        quantity=quantity,
+                        entry_price=float(entry_price),
+                        stop_loss_pct=config.STOP_LOSS_PCT,
+                        take_profit_pct=config.TAKE_PROFIT_PCT,
+                    )
+                    execution_data["bracket_orders"] = bracket
+                    log.info(
+                        "Bracket orders placed for %s: TP=%s SL=%s",
+                        news.ticker,
+                        bracket.get("take_profit_order_id"),
+                        bracket.get("stop_loss_order_id"),
+                    )
+            except Exception as bracket_exc:
+                log.warning("Bracket order placement failed for %s: %s", news.ticker, bracket_exc)
+                execution_data["bracket_orders"] = {"error": str(bracket_exc)}
+
+        # Record signal for momentum tracking (config-gated)
+        try:
+            if config.SIGNAL_MOMENTUM_ENABLED:
+                from market_intelligence import SignalMomentumTracker
+                from redis_client import create_redis_client
+                analysis = state.get("analysis")
+                if analysis:
+                    tracker = SignalMomentumTracker(create_redis_client())
+                    tracker.record_signal(
+                        ticker=news.ticker,
+                        sentiment=analysis.sentiment,
+                        confidence=analysis.confidence,
+                        action=analysis.action,
+                    )
+        except Exception:
+            pass
+
         return {
             "trade_order_id": result.order_id,
-            "execution": {
-                "step": "execute_trade",
-                "submitted": result.submitted,
-                "ticker": news.ticker,
-                "action": action,
-                "quantity": quantity,
-                "client_order_id": client_order_id,
-                "order_id": result.order_id,
-                "status": result.status,
-                "error": result.error,
-                "execution_plan": plan,
-            },
+            "execution": execution_data,
         }
 
     return execute_trade

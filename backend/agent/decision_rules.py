@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from schemas import NewsMessage, TradeAnalysis
 
@@ -130,6 +132,22 @@ def evaluate_article_quality(news: NewsMessage) -> ArticleQuality:
     if len(headline) < 35:
         score -= 0.06
         flags.append("very_short_headline")
+
+    # Source credibility adjustment (config-gated)
+    try:
+        import config as _cfg
+        if getattr(_cfg, "SOURCE_CREDIBILITY_ENABLED", False):
+            from source_credibility import source_credibility_score, source_tier
+            src_bonus = source_credibility_score(news.source)
+            if src_bonus != 0.0:
+                score += src_bonus
+                tier = source_tier(news.source)
+                if src_bonus > 0:
+                    reasons.append(f"Source credibility boost ({tier}): {news.source}.")
+                else:
+                    flags.append(f"low_credibility_source_{tier.lower()}")
+    except Exception:
+        pass  # Source credibility is an optional enhancement
 
     score = round(max(0.0, min(1.0, score)), 2)
     if score >= 0.72:
@@ -358,6 +376,9 @@ def build_execution_plan(
     action: str,
     order_qty: int,
     market_context: Optional[dict],
+    calibrated_confidence: float = 0.0,
+    thesis_quality: str = "WEAK",
+    all_positions: Optional[list[dict]] = None,
 ) -> dict[str, Any]:
     """Create a position-aware execution plan before the risk gate fires."""
     ctx = market_context or {}
@@ -365,6 +386,7 @@ def build_execution_plan(
     position = ctx.get("position") or {}
     price = _floatish(ctx.get("price") or position.get("current_price"))
     buying_power = _floatish(account.get("buying_power"))
+    portfolio_value = _floatish(account.get("portfolio_value")) or _floatish(account.get("equity")) or 0.0
     position_qty = _floatish(position.get("qty")) or 0.0
 
     plan: dict[str, Any] = {
@@ -376,6 +398,7 @@ def build_execution_plan(
         "buying_power": buying_power,
         "position_qty": position_qty,
         "blocked_reasons": [],
+        "sizing_method": "fixed",
     }
 
     if action == "HOLD":
@@ -390,18 +413,90 @@ def build_execution_plan(
             "Live price unavailable; refusing blind market order."
         )
 
+    # Circuit breaker check (config-gated)
+    try:
+        import config as _cfg
+        if getattr(_cfg, "CIRCUIT_BREAKER_ENABLED", False):
+            from position_manager import check_daily_loss_limit
+            equity = _floatish(account.get("equity"))
+            last_equity = _floatish(account.get("last_equity"))
+            breaker = check_daily_loss_limit(
+                equity=equity,
+                last_equity=last_equity,
+                max_daily_loss_pct=getattr(_cfg, "MAX_DAILY_LOSS_PCT", 0.02),
+            )
+            if breaker.is_tripped:
+                plan["blocked_reasons"].append(breaker.reason)
+                plan["circuit_breaker"] = {
+                    "tripped": True,
+                    "daily_pnl_pct": breaker.daily_pnl_pct,
+                    "reason": breaker.reason,
+                }
+    except Exception:
+        pass
+
+    # Dynamic position sizing (config-gated)
+    effective_qty = int(order_qty)
+    try:
+        import config as _cfg
+        if (
+            getattr(_cfg, "DYNAMIC_POSITION_SIZING_ENABLED", False)
+            and action == "BUY"
+            and price is not None
+            and price > 0
+            and portfolio_value > 0
+            and buying_power is not None
+        ):
+            from position_manager import compute_dynamic_position_size
+            sizing = compute_dynamic_position_size(
+                calibrated_confidence=calibrated_confidence,
+                thesis_quality=thesis_quality,
+                current_price=price,
+                portfolio_value=portfolio_value,
+                buying_power=buying_power,
+                max_position_pct=getattr(_cfg, "MAX_POSITION_PCT", 0.05),
+                fallback_qty=int(order_qty),
+            )
+            effective_qty = sizing.quantity
+            plan["sizing_method"] = sizing.method
+            plan["sizing_scale"] = sizing.scale_factor
+            plan["sizing_reasons"] = sizing.reasons
+    except Exception:
+        pass
+
     if action == "BUY":
         plan["side"] = "buy"
-        plan["quantity"] = int(order_qty)
+        plan["quantity"] = effective_qty
         plan["position_intent"] = (
             "open_or_add_long" if position_qty <= 0 else "add_to_long"
         )
         if price is not None:
-            plan["estimated_notional"] = round(price * order_qty, 2)
-            if buying_power is not None and buying_power < price * order_qty * 1.02:
+            plan["estimated_notional"] = round(price * effective_qty, 2)
+            if buying_power is not None and buying_power < price * effective_qty * 1.02:
                 plan["blocked_reasons"].append(
                     "Insufficient buying power for order plus safety buffer."
                 )
+
+        # Portfolio concentration check (config-gated)
+        try:
+            import config as _cfg
+            if (
+                getattr(_cfg, "CONCENTRATION_LIMITS_ENABLED", False)
+                and price is not None
+                and portfolio_value > 0
+            ):
+                from position_manager import check_portfolio_concentration
+                notional = price * effective_qty
+                conc_blockers = check_portfolio_concentration(
+                    ticker=ctx.get("position", {}).get("symbol", ""),
+                    order_notional=notional,
+                    positions=all_positions or [],
+                    portfolio_value=portfolio_value,
+                    max_single_ticker_pct=getattr(_cfg, "MAX_SINGLE_TICKER_PCT", 0.10),
+                )
+                plan["blocked_reasons"].extend(conc_blockers)
+        except Exception:
+            pass
 
     if action == "SELL":
         plan["side"] = "sell"
@@ -425,3 +520,29 @@ def build_execution_plan(
                 plan["estimated_notional"] = round(price * sell_qty, 2)
 
     return plan
+
+
+# ── Signal Timing ────────────────────────────────────────────────────────────
+
+MARKET_TZ = ZoneInfo("America/New_York")
+
+
+def categorize_signal_timing(published_at: Optional[str]) -> str:
+    """
+    Categorize when a signal was published relative to US market hours.
+    Returns: 'pre_market', 'regular', 'after_hours', 'weekend', or 'unknown'.
+    """
+    if not published_at:
+        return "unknown"
+    try:
+        text = published_at.strip()
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        parsed = datetime.fromisoformat(text)
+        if not parsed.tzinfo:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        et = parsed.astimezone(MARKET_TZ)
+        from position_manager import categorize_signal_timing as _cat
+        return _cat(et.time(), et.weekday())
+    except Exception:
+        return "unknown"

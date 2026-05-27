@@ -19,6 +19,7 @@ Alpaca News API -> Valkey Stream -> LangGraph Agent -> LLM Committee -> Alpaca O
    - [AI Committee — The Debate](#ai-committee--the-debate)
    - [LLM Provider Router — Quota-Aware Cascade](#llm-provider-router--quota-aware-cascade)
    - [Risk Gate](#risk-gate)
+   - [Enhanced Trading Features](#enhanced-trading-features)
    - [Signal Visibility Guarantee](#signal-visibility-guarantee)
 6. [Service 3 — Frontend](#service-3--frontend)
 7. [Persistence Layer](#persistence-layer)
@@ -485,7 +486,175 @@ Default thresholds (seeded in Supabase, editable via Settings UI):
 
 ---
 
-### Signal Visibility Guarantee
+### Enhanced Trading Features
+
+The agent ships with a suite of advanced trading features that extend the core pipeline with institutional-grade risk management, quantitative analysis, and intelligent execution. **Every feature defaults to OFF** and is activated by adding an `enhanced_trading` JSON block to the existing `agent_config` row in Supabase — no code changes or redeployments needed to toggle features on or off.
+
+```mermaid
+flowchart LR
+    subgraph "Pre-Trade Intelligence"
+        SC["🏷️ Source<br/>Credibility"]
+        TI["📊 Technical<br/>Indicators"]
+        SM["📈 Signal<br/>Momentum"]
+        FL["🔄 Feedback<br/>Loop"]
+    end
+
+    subgraph "Risk Controls"
+        CB["🔴 Circuit<br/>Breaker"]
+        CL["📦 Concentration<br/>Limits"]
+        MH["🕐 Market Hours<br/>Awareness"]
+    end
+
+    subgraph "Execution"
+        DS["⚖️ Dynamic<br/>Position Sizing"]
+        LO["💰 Limit<br/>Orders"]
+        BO["🛡️ Bracket<br/>Orders"]
+        TS["📏 Trailing<br/>Stops"]
+        FV["✅ Fill<br/>Verification"]
+    end
+
+    subgraph "Analysis Quality"
+        SS["🧠 Structured<br/>Synthesis"]
+        PA["📋 P&L-Aware<br/>Prompts"]
+        GF["🪂 Graceful<br/>LLM Fallback"]
+        SD["🔍 Semantic<br/>Deduplication"]
+    end
+
+    SC --> SS
+    TI --> SS
+    SM --> SS
+    FL --> SS
+    CB --> DS
+    CL --> DS
+    DS --> LO
+    LO --> BO
+    BO --> TS
+    BO --> FV
+```
+
+#### Feature Reference
+
+##### Pre-Trade Intelligence
+
+| Feature | Config Key | What It Does |
+|---------|-----------|--------------|
+| **Source Credibility** | `source_credibility` | Scores 30+ news sources across 4 tiers (Reuters/Bloomberg → PR wires). Tier 1 sources boost article quality scores; Tier 4 sources penalize them. Adds credibility notes to LLM prompts so the committee weighs source reliability. |
+| **Technical Indicators** | `technical_indicators` | Fetches 5-day hourly bars from Alpaca and computes RSI(14), SMA(20), EMA(12/26), MACD, volume ratio, and 52-week range position. Injected into all persona prompts so the committee considers quantitative market structure alongside the headline. |
+| **Signal Momentum** | `signal_momentum` | Tracks recent signal sentiment per ticker in Redis sorted sets. When multiple signals converge on the same ticker within an hour, the synthesizer sees the directional consensus — a strong clustering signal that single-article analysis misses. |
+| **Feedback Loop** | `feedback_loop` | Queries `signal_outcomes` for historical win rates by ticker and action. If past BUY signals on NVDA hit 80% win rate, the synthesizer sees that context. Adjusts calibrated confidence by up to ±8% based on track record. |
+
+##### Risk Controls
+
+| Feature | Config Key | What It Does |
+|---------|-----------|--------------|
+| **Circuit Breaker** | `circuit_breaker` | Compares current equity to prior-close equity. If the daily P&L loss exceeds the configured threshold (default: 2%), all trading is blocked until the next session. Prevents cascading losses during adverse market conditions. |
+| **Concentration Limits** | `concentration_limits` | Checks if a new order would push any single ticker above the configured portfolio percentage (default: 10%). Prevents overexposure to a single name regardless of how strong the signal is. |
+| **Market Hours Awareness** | `market_hours_awareness` | Categorizes each signal as `pre_market`, `regular`, `after_hours`, or `weekend`. This timing context helps the committee reason about liquidity and price discovery differences. |
+
+##### Execution Improvements
+
+| Feature | Config Key | What It Does |
+|---------|-----------|--------------|
+| **Dynamic Position Sizing** | `dynamic_position_sizing` | Replaces the fixed `ORDER_QTY` with conviction-scaled sizing. High-confidence EXECUTABLE theses get up to `max_position_pct` (default: 5%) of portfolio; weak theses get 15% of that. Never exceeds buying power. |
+| **Bracket Orders** | `bracket_orders` | After a BUY fill, automatically places a take-profit limit sell and a stop-loss order. Defaults: +6% take-profit, -3% stop-loss. Both are GTC (good-till-cancelled). |
+| **Trailing Stops** | `trailing_stops` | Computes trailing stop parameters that tighten as positions gain. Activates once the position is up 2%+, then trails 3% below the current price (ratchets up only, never down). |
+| **Limit Orders** | `use_limit_orders` | Submits IOC (immediate-or-cancel) limit orders instead of market orders. Adds a configurable buffer (default: 0.5%) above/below the current price. Can reduce slippage but may miss fills on fast-moving tickers. |
+| **Fill Verification** | Always active when trading | Non-blocking check on order status immediately after submission. Records filled quantity, average fill price, and status in the execution trace. |
+
+##### Analysis Quality
+
+| Feature | Config Key | What It Does |
+|---------|-----------|--------------|
+| **Structured Synthesis** | `structured_synthesis` | Replaces the freeform synthesis prompt with a 5-point framework: (1) Catalyst clarity, (2) Timing/priced-in analysis, (3) Position context, (4) Risk-reward assessment, (5) Conviction alignment. Produces more disciplined BUY/SELL recommendations. |
+| **P&L-Aware Prompts** | Always active | When the trader has an existing position, prompts now include entry price, unrealized P&L in dollars, and P&L percentage. The committee can now reason about "should we add to a winning position?" vs "should we average down?" |
+| **Graceful LLM Fallback** | Always active | When a persona's LLM call fails, instead of returning `None` (which previously left a gap in the debate), returns a neutral `PersonaAnalysis(stance=NEUTRAL, conviction=0.30)`. The synthesizer always receives three opinions. |
+| **Semantic Deduplication** | Always active | Extends the SHA-256 exact-match cache with Jaccard word-set similarity. Headlines like "NVIDIA beats Q3 earnings" and "NVDA earnings top estimates" are detected as covering the same story — saving LLM calls on reformulated duplicates. |
+
+#### Configuration
+
+All enhanced features are controlled via the `enhanced_trading` sub-object in `agent_config.config`:
+
+```json
+{
+  "enhanced_trading": {
+    "dynamic_position_sizing": true,
+    "max_position_pct": 0.05,
+    "bracket_orders": true,
+    "stop_loss_pct": 0.03,
+    "take_profit_pct": 0.06,
+    "trailing_stops": true,
+    "trailing_stop_pct": 0.03,
+    "trailing_stop_activation_pct": 0.02,
+    "concentration_limits": true,
+    "max_single_ticker_pct": 0.10,
+    "circuit_breaker": true,
+    "max_daily_loss_pct": 0.02,
+    "technical_indicators": true,
+    "signal_momentum": true,
+    "source_credibility": true,
+    "feedback_loop": true,
+    "feedback_loop_lookback_days": 30,
+    "use_limit_orders": false,
+    "limit_order_buffer_pct": 0.005,
+    "market_hours_awareness": true,
+    "structured_synthesis": true
+  }
+}
+```
+
+To enable via Supabase SQL Editor:
+
+```sql
+UPDATE agent_config
+SET config = jsonb_set(
+  config::jsonb,
+  '{enhanced_trading}',
+  '{
+    "circuit_breaker": true,
+    "source_credibility": true,
+    "structured_synthesis": true,
+    "technical_indicators": true,
+    "signal_momentum": true,
+    "feedback_loop": true,
+    "dynamic_position_sizing": true,
+    "bracket_orders": true,
+    "concentration_limits": true,
+    "market_hours_awareness": true,
+    "use_limit_orders": false
+  }'::jsonb,
+  true
+)
+WHERE id = 1;
+```
+
+The agent hot-reloads config before each signal. Active features are logged:
+
+```
+Config loaded - buy=0.30  sell=-0.20  confidence=0.60  qty=1  llm_provider=openrouter
+Enhanced features active: dynamic_sizing, bracket_orders, concentration, circuit_breaker, technicals, momentum, source_cred, feedback, market_hours, structured_synth
+```
+
+#### Recommended Rollout Order
+
+1. **Stage 1 — Zero execution risk:** `circuit_breaker`, `source_credibility`, `structured_synthesis`, `market_hours_awareness`
+2. **Stage 2 — Enriches LLM debate:** `technical_indicators`, `signal_momentum`, `feedback_loop`
+3. **Stage 3 — Changes order execution:** `dynamic_position_sizing`, `bracket_orders`, `concentration_limits`, `trailing_stops`
+4. **Stage 4 — Monitor closely:** `use_limit_orders` (may affect fill rates)
+
+#### Architecture
+
+Enhanced features are implemented across four new modules:
+
+| Module | Location | Purpose |
+|--------|----------|---------|
+| `position_manager.py` | `backend/agent/` | Position sizing, bracket/trailing stop params, concentration, circuit breaker, market hours |
+| `market_intelligence.py` | `backend/agent/` | RSI, SMA, EMA, MACD, volume ratio, signal momentum tracker (Redis-backed) |
+| `source_credibility.py` | `backend/agent/` | 4-tier source scoring for 30+ financial news outlets |
+| `feedback_loop.py` | `backend/agent/` | Historical outcome accuracy analysis and confidence calibration |
+
+All new module imports are **lazy and wrapped in try/except** — if a module fails to load, the feature silently degrades rather than crashing the agent. No new dependencies are required.
+
+
 
 Every unique headline that enters the graph **always produces a row in the `trades` table**, regardless of how analysis went.
 
@@ -739,10 +908,18 @@ sentient-trader/
 │       ├── analyst.py       # Full LangGraph graph: all nodes, ModelRouter, AI committee
 │       ├── consumer.py      # XREADGROUP consumer loop — one message at a time
 │       ├── config.py        # Module-level type annotations + reload_from_supabase()
-│       ├── trader.py        # AlpacaTrader — wraps alpaca-py order submission
-│       ├── cache.py         # HeadlineCache — SHA-256 dedup in Redis, 5-min TTL
+│       ├── trader.py        # AlpacaTrader — wraps alpaca-py order submission + brackets
+│       ├── cache.py         # HeadlineCache — SHA-256 + semantic Jaccard dedup in Redis
 │       ├── logger.py        # SupabaseLogger — inserts into trades table
 │       ├── schemas.py       # Pydantic models: NewsMessage, PersonaAnalysis, TradeAnalysis, etc.
+│       ├── position_manager.py    # Dynamic sizing, brackets, trailing stops, circuit breaker
+│       ├── market_intelligence.py # RSI, SMA, EMA, MACD, volume ratio, signal momentum
+│       ├── source_credibility.py  # 4-tier news source scoring
+│       ├── feedback_loop.py       # Historical outcome accuracy + confidence calibration
+│       ├── decision_rules.py      # Committee metrics, article quality, execution plans
+│       ├── outcome_labeler.py     # Post-signal price tracking and return labeling
+│       ├── outcome_scheduler.py   # Background scheduler for outcome labeling
+│       ├── test_enhancements.py   # 40 tests for enhanced trading features
 │       ├── requirements.txt
 │       └── Dockerfile
 │   │
