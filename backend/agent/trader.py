@@ -22,15 +22,18 @@ from typing import Optional
 try:
     from alpaca.common.exceptions import APIError
     from alpaca.trading.client import TradingClient
-    from alpaca.trading.enums import OrderSide, TimeInForce
+    from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
     from alpaca.trading.requests import (
         LimitOrderRequest,
         MarketOrderRequest,
+        StopLossRequest,
         StopOrderRequest,
+        TakeProfitRequest,
     )
 except ModuleNotFoundError:
     APIError = Exception  # type: ignore[assignment]
     TradingClient = None  # type: ignore[assignment]
+    OrderClass = SimpleNamespace(BRACKET="bracket", SIMPLE="simple")  # type: ignore[assignment]
     OrderSide = SimpleNamespace(BUY="buy", SELL="sell")
     TimeInForce = SimpleNamespace(DAY="day", GTC="gtc", IOC="ioc")
 
@@ -43,6 +46,14 @@ except ModuleNotFoundError:
             self.__dict__.update(kwargs)
 
     class StopOrderRequest:  # type: ignore[no-redef]
+        def __init__(self, **kwargs) -> None:
+            self.__dict__.update(kwargs)
+
+    class TakeProfitRequest:  # type: ignore[no-redef]
+        def __init__(self, **kwargs) -> None:
+            self.__dict__.update(kwargs)
+
+    class StopLossRequest:  # type: ignore[no-redef]
         def __init__(self, **kwargs) -> None:
             self.__dict__.update(kwargs)
 
@@ -107,12 +118,19 @@ class AlpacaTrader:
         quantity: Optional[int] = None,
         client_order_id: Optional[str] = None,
         limit_price: Optional[float] = None,
+        take_profit_price: Optional[float] = None,
+        stop_loss_price: Optional[float] = None,
     ) -> OrderResult:
         """
         Submit a market or limit order and return structured Alpaca execution metadata.
         Failed orders return submitted=False — errors are logged but don't crash the pipeline.
 
         When limit_price is provided, submits a limit IOC order instead of market DAY.
+
+        When take_profit_price and/or stop_loss_price are provided AND action is BUY,
+        submits a native Alpaca bracket order (order_class=BRACKET) that atomically
+        attaches take-profit and stop-loss legs to the primary order. This avoids
+        the "potential wash trade" error that occurs when submitting separate orders.
         """
         qty = quantity if quantity is not None else config.ORDER_QTY
         side = OrderSide.BUY if action == "BUY" else OrderSide.SELL
@@ -135,28 +153,68 @@ class AlpacaTrader:
                 status="accepted",
             )
 
+        # Determine if this should be a bracket order
+        use_bracket = (
+            action == "BUY"
+            and take_profit_price is not None
+            and stop_loss_price is not None
+            and take_profit_price > 0
+            and stop_loss_price > 0
+        )
+
         # Use limit order if price provided, otherwise market order
         if limit_price is not None and limit_price > 0:
-            order_request = LimitOrderRequest(
+            order_kwargs = dict(
                 symbol=ticker,
                 qty=qty,
                 side=side,
                 limit_price=round(limit_price, 2),
-                time_in_force=TimeInForce.IOC,  # Immediate-or-cancel for limit
+                time_in_force=TimeInForce.GTC if use_bracket else TimeInForce.IOC,
                 client_order_id=client_order_id,
             )
-            log.info(
-                "Submitting LIMIT order: %s %d %s @ $%.2f",
-                action, qty, ticker, limit_price,
-            )
+            if use_bracket:
+                order_kwargs["order_class"] = OrderClass.BRACKET
+                order_kwargs["take_profit"] = TakeProfitRequest(
+                    limit_price=round(take_profit_price, 2)
+                )
+                order_kwargs["stop_loss"] = StopLossRequest(
+                    stop_price=round(stop_loss_price, 2)
+                )
+                log.info(
+                    "Submitting BRACKET LIMIT order: %s %d %s @ $%.2f "
+                    "(TP=$%.2f, SL=$%.2f)",
+                    action, qty, ticker, limit_price,
+                    take_profit_price, stop_loss_price,
+                )
+            else:
+                log.info(
+                    "Submitting LIMIT order: %s %d %s @ $%.2f",
+                    action, qty, ticker, limit_price,
+                )
+            order_request = LimitOrderRequest(**order_kwargs)
         else:
-            order_request = MarketOrderRequest(
+            order_kwargs = dict(
                 symbol=ticker,
                 qty=qty,
                 side=side,
-                time_in_force=TimeInForce.DAY,  # auto-cancels at end of day if unfilled
-                client_order_id=client_order_id,  # Alpaca rejects duplicates — idempotent
+                time_in_force=TimeInForce.GTC if use_bracket else TimeInForce.DAY,
+                client_order_id=client_order_id,
             )
+            if use_bracket:
+                order_kwargs["order_class"] = OrderClass.BRACKET
+                order_kwargs["take_profit"] = TakeProfitRequest(
+                    limit_price=round(take_profit_price, 2)
+                )
+                order_kwargs["stop_loss"] = StopLossRequest(
+                    stop_price=round(stop_loss_price, 2)
+                )
+                log.info(
+                    "Submitting BRACKET MARKET order: %s %d %s "
+                    "(TP=$%.2f, SL=$%.2f)",
+                    action, qty, ticker,
+                    take_profit_price, stop_loss_price,
+                )
+            order_request = MarketOrderRequest(**order_kwargs)
 
         try:
             order = self._client.submit_order(order_data=order_request)
@@ -191,8 +249,10 @@ class AlpacaTrader:
                     error=error,
                 )
 
+            order_type_label = "BRACKET" if use_bracket else "SIMPLE"
             log.info(
-                "Order submitted: %s %d %s → order_id=%s",
+                "%s order submitted: %s %d %s → order_id=%s",
+                order_type_label,
                 action,
                 qty,
                 ticker,
@@ -223,69 +283,32 @@ class AlpacaTrader:
         take_profit_pct: float = 0.06,
     ) -> dict:
         """
-        Place take-profit and stop-loss orders after a BUY fill.
+        DEPRECATED: Bracket legs are now attached atomically via place_order().
 
-        Returns a dict with order IDs for both legs. Failures are logged
-        but do not raise — the primary order has already been executed.
+        This method is kept for backwards compatibility but now only computes
+        and returns the bracket price levels. It does NOT submit separate orders
+        (which Alpaca rejects as "potential wash trade").
+
+        The actual bracket submission happens in place_order() when
+        take_profit_price and stop_loss_price are provided.
         """
-        if self._dry_run:
-            import uuid
-            return {
-                "take_profit_order_id": str(uuid.uuid4()),
-                "stop_loss_order_id": str(uuid.uuid4()),
-                "status": "mock",
-            }
-
-        result: dict = {
-            "take_profit_order_id": None,
-            "stop_loss_order_id": None,
-            "errors": [],
-        }
-
         tp_price = round(entry_price * (1 + take_profit_pct), 2)
         sl_price = round(entry_price * (1 - stop_loss_pct), 2)
 
-        # Take-profit limit order
-        try:
-            tp_order = self._client.submit_order(
-                order_data=LimitOrderRequest(
-                    symbol=ticker,
-                    qty=quantity,
-                    side=OrderSide.SELL,
-                    limit_price=tp_price,
-                    time_in_force=TimeInForce.GTC,
-                )
-            )
-            result["take_profit_order_id"] = str(getattr(tp_order, "id", "") or "")
-            log.info(
-                "Take-profit order placed: SELL %d %s @ $%.2f (order_id=%s)",
-                quantity, ticker, tp_price, result["take_profit_order_id"],
-            )
-        except Exception as exc:
-            result["errors"].append(f"Take-profit order failed: {exc}")
-            log.warning("Take-profit order failed for %s: %s", ticker, exc)
+        log.info(
+            "Bracket prices computed for %s: entry=$%.2f TP=$%.2f (+%.1f%%) SL=$%.2f (-%.1f%%)",
+            ticker, entry_price, tp_price, take_profit_pct * 100,
+            sl_price, stop_loss_pct * 100,
+        )
 
-        # Stop-loss order
-        try:
-            sl_order = self._client.submit_order(
-                order_data=StopOrderRequest(
-                    symbol=ticker,
-                    qty=quantity,
-                    side=OrderSide.SELL,
-                    stop_price=sl_price,
-                    time_in_force=TimeInForce.GTC,
-                )
-            )
-            result["stop_loss_order_id"] = str(getattr(sl_order, "id", "") or "")
-            log.info(
-                "Stop-loss order placed: SELL %d %s @ $%.2f (order_id=%s)",
-                quantity, ticker, sl_price, result["stop_loss_order_id"],
-            )
-        except Exception as exc:
-            result["errors"].append(f"Stop-loss order failed: {exc}")
-            log.warning("Stop-loss order failed for %s: %s", ticker, exc)
-
-        return result
+        return {
+            "take_profit_price": tp_price,
+            "stop_loss_price": sl_price,
+            "entry_price": entry_price,
+            "method": "atomic_bracket",
+            "status": "attached_to_primary_order",
+            "errors": [],
+        }
 
     def verify_fill(self, order_id: str) -> dict:
         """

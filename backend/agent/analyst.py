@@ -1491,12 +1491,45 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
         except Exception:
             pass
 
+        # Compute bracket prices for atomic bracket order (config-gated)
+        take_profit_price = None
+        stop_loss_price = None
+        bracket_info: dict[str, Any] = {}
+        if action == "BUY" and config.BRACKET_ORDERS_ENABLED:
+            try:
+                ctx = state.get("market_context") or {}
+                entry_price = ctx.get("price")
+                if entry_price and entry_price > 0:
+                    tp_price = round(float(entry_price) * (1 + config.TAKE_PROFIT_PCT), 2)
+                    sl_price = round(float(entry_price) * (1 - config.STOP_LOSS_PCT), 2)
+                    take_profit_price = tp_price
+                    stop_loss_price = sl_price
+                    bracket_info = {
+                        "entry_price": float(entry_price),
+                        "take_profit_price": tp_price,
+                        "stop_loss_price": sl_price,
+                        "take_profit_pct": config.TAKE_PROFIT_PCT,
+                        "stop_loss_pct": config.STOP_LOSS_PCT,
+                        "method": "atomic_bracket",
+                    }
+                    log.info(
+                        "Bracket prices for %s: entry=$%.2f TP=$%.2f (+%.1f%%) SL=$%.2f (-%.1f%%)",
+                        news.ticker, entry_price, tp_price,
+                        config.TAKE_PROFIT_PCT * 100, sl_price,
+                        config.STOP_LOSS_PCT * 100,
+                    )
+            except Exception as bracket_exc:
+                log.warning("Bracket price computation failed for %s: %s", news.ticker, bracket_exc)
+                bracket_info = {"error": str(bracket_exc)}
+
         result = trader.place_order(
             ticker=news.ticker,
             action=action,
             quantity=quantity,
             client_order_id=client_order_id,
             limit_price=limit_price,
+            take_profit_price=take_profit_price,
+            stop_loss_price=stop_loss_price,
         )
 
         execution_data: dict[str, Any] = {
@@ -1513,6 +1546,12 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
         }
         if limit_price is not None:
             execution_data["limit_price"] = limit_price
+        if bracket_info:
+            execution_data["bracket_orders"] = bracket_info
+            if result.submitted:
+                bracket_info["status"] = "attached_to_primary_order"
+            else:
+                bracket_info["status"] = "order_failed_no_bracket"
 
         # Fill verification (non-blocking)
         if result.submitted and result.order_id:
@@ -1521,34 +1560,6 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
                 execution_data["fill_verification"] = fill
             except Exception:
                 pass
-
-        # Bracket orders: auto stop-loss + take-profit after BUY (config-gated)
-        if (
-            result.submitted
-            and action == "BUY"
-            and config.BRACKET_ORDERS_ENABLED
-        ):
-            try:
-                ctx = state.get("market_context") or {}
-                entry_price = ctx.get("price")
-                if entry_price and entry_price > 0:
-                    bracket = trader.place_bracket_orders(
-                        ticker=news.ticker,
-                        quantity=quantity,
-                        entry_price=float(entry_price),
-                        stop_loss_pct=config.STOP_LOSS_PCT,
-                        take_profit_pct=config.TAKE_PROFIT_PCT,
-                    )
-                    execution_data["bracket_orders"] = bracket
-                    log.info(
-                        "Bracket orders placed for %s: TP=%s SL=%s",
-                        news.ticker,
-                        bracket.get("take_profit_order_id"),
-                        bracket.get("stop_loss_order_id"),
-                    )
-            except Exception as bracket_exc:
-                log.warning("Bracket order placement failed for %s: %s", news.ticker, bracket_exc)
-                execution_data["bracket_orders"] = {"error": str(bracket_exc)}
 
         # Record signal for momentum tracking (config-gated)
         try:
