@@ -83,7 +83,7 @@ from trader import AlpacaTrader
 
 log = logging.getLogger("agent.analyst")
 
-ARTICLE_EXECUTION_SCORE_FLOOR = 0.48
+ARTICLE_EXECUTION_SCORE_FLOOR = 0.60
 LOG_FIELD_LIMIT = 240
 
 
@@ -108,6 +108,7 @@ class AgentState(TypedDict):
     is_cached: bool
     market_context: Optional[dict]  # {price, day_change_pct} from Alpaca
     article_quality: Optional[dict[str, Any]]
+    all_positions: Optional[list[dict]]  # all Alpaca positions for concentration checks
     momentum_opinion: Optional[PersonaAnalysis]
     value_opinion: Optional[PersonaAnalysis]
     risk_opinion: Optional[RiskAssessment]
@@ -492,6 +493,7 @@ def _make_fetch_context_node(trader: AlpacaTrader):
 
         account_context = trader.get_account_context()
         position_context = trader.get_position_context(news.ticker)
+        all_positions = trader.get_all_positions()
 
         if data_client is None:
             return {
@@ -502,6 +504,7 @@ def _make_fetch_context_node(trader: AlpacaTrader):
                     "position": position_context,
                 },
                 "article_quality": article_quality.to_dict(),
+                "all_positions": all_positions,
             }
 
         ticker = news.ticker
@@ -584,7 +587,7 @@ def _make_fetch_context_node(trader: AlpacaTrader):
                     else "(change n/a)"
                 ),
             )
-            return {"market_context": ctx, "article_quality": article_quality.to_dict()}
+            return {"market_context": ctx, "article_quality": article_quality.to_dict(), "all_positions": all_positions}
 
         except Exception as exc:
             log.warning("Could not fetch market context for %s: %s", ticker, exc)
@@ -596,6 +599,7 @@ def _make_fetch_context_node(trader: AlpacaTrader):
                     "position": position_context,
                 },
                 "article_quality": article_quality.to_dict(),
+                "all_positions": all_positions,
             }
 
     return fetch_context
@@ -1273,14 +1277,51 @@ def _make_assess_risk_node():
         a = state["analysis"]
         metrics = committee_metrics(a, article_quality, state.get("market_context"))
 
-        # Fetch all positions for concentration checks if enabled
-        all_positions: list[dict] = []
+        # Use positions fetched in fetch_context for concentration checks
+        all_positions: list[dict] = state.get("all_positions") or []
+
+        # Apply feedback loop confidence adjustment (config-gated)
+        feedback_adjustment = 0.0
         try:
-            if config.CONCENTRATION_LIMITS_ENABLED:
-                # trader is not available here, but we can get it from plan context
-                pass  # Concentration is already checked in build_execution_plan
-        except Exception:
-            pass
+            if config.FEEDBACK_LOOP_ENABLED:
+                from feedback_loop import compute_historical_accuracy, query_recent_outcomes
+                from supabase import create_client as _fb_create_client
+                from supabase.client import ClientOptions as _FBClientOptions
+                _fb_client = _fb_create_client(
+                    supabase_url=os.environ["SUPABASE_URL"],
+                    supabase_key=os.environ["SUPABASE_SERVICE_ROLE_KEY"],
+                    options=_FBClientOptions(
+                        schema=os.environ.get("SUPABASE_DB_SCHEMA", "public"),
+                    ),
+                )
+                outcomes = query_recent_outcomes(
+                    _fb_client, news.ticker, a.action,
+                    days=config.FEEDBACK_LOOP_LOOKBACK_DAYS,
+                )
+                if outcomes:
+                    accuracy = compute_historical_accuracy(outcomes, a.action)
+                    feedback_adjustment = accuracy.confidence_adjustment
+                    if feedback_adjustment != 0.0:
+                        log.info(
+                            "Feedback loop [%s]: adjusting calibrated confidence by %+.4f "
+                            "(win_rate_1h=%s, %d signals)",
+                            news.ticker,
+                            feedback_adjustment,
+                            accuracy.win_rate_1h,
+                            accuracy.total_signals,
+                        )
+        except Exception as fb_exc:
+            log.debug("Feedback loop adjustment unavailable: %s", fb_exc)
+
+        # Apply the feedback adjustment to calibrated confidence
+        calibrated_with_feedback = max(
+            0.0,
+            min(1.0, metrics["calibrated_confidence"] + feedback_adjustment),
+        )
+        if feedback_adjustment != 0.0:
+            metrics["calibrated_confidence_before_feedback"] = metrics["calibrated_confidence"]
+            metrics["feedback_adjustment"] = feedback_adjustment
+            metrics["calibrated_confidence"] = round(calibrated_with_feedback, 4)
 
         plan = build_execution_plan(
             action=a.action,

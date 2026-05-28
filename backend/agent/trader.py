@@ -450,3 +450,106 @@ class AlpacaTrader:
         except Exception as exc:
             log.warning("Could not fetch Alpaca position for %s: %s", ticker, exc)
             return flat
+
+    def get_open_orders(self, ticker: Optional[str] = None) -> list[dict]:
+        """Return open orders, optionally filtered by ticker symbol."""
+        if self._dry_run:
+            return []
+        try:
+            from alpaca.trading.enums import QueryOrderStatus
+            from alpaca.trading.requests import GetOrdersRequest
+
+            request_params = GetOrdersRequest(
+                status=QueryOrderStatus.OPEN,
+                symbols=[ticker] if ticker else None,
+            )
+            orders = self._client.get_orders(filter=request_params)
+            return [
+                {
+                    "id": str(getattr(o, "id", "") or ""),
+                    "symbol": str(getattr(o, "symbol", "") or ""),
+                    "side": str(getattr(o, "side", "") or ""),
+                    "type": str(getattr(o, "type", "") or ""),
+                    "qty": _floatish(getattr(o, "qty", None)) or 0.0,
+                    "stop_price": _floatish(getattr(o, "stop_price", None)),
+                    "limit_price": _floatish(getattr(o, "limit_price", None)),
+                    "status": str(getattr(o, "status", "") or ""),
+                    "order_class": str(getattr(o, "order_class", "") or ""),
+                    "legs": [
+                        {
+                            "id": str(getattr(leg, "id", "") or ""),
+                            "type": str(getattr(leg, "type", "") or ""),
+                            "side": str(getattr(leg, "side", "") or ""),
+                            "stop_price": _floatish(getattr(leg, "stop_price", None)),
+                            "limit_price": _floatish(getattr(leg, "limit_price", None)),
+                            "status": str(getattr(leg, "status", "") or ""),
+                        }
+                        for leg in (getattr(o, "legs", None) or [])
+                    ],
+                }
+                for o in orders
+            ]
+        except Exception as exc:
+            log.warning("Could not fetch open orders%s: %s",
+                        f" for {ticker}" if ticker else "", exc)
+            return []
+
+    def cancel_order(self, order_id: str) -> bool:
+        """Cancel an order by ID. Returns True on success."""
+        if self._dry_run:
+            log.info("MOCK CANCEL (Dry Run): order_id=%s", order_id)
+            return True
+        try:
+            self._client.cancel_order_by_id(order_id)
+            log.info("Cancelled order: %s", order_id)
+            return True
+        except Exception as exc:
+            log.warning("Could not cancel order %s: %s", order_id, exc)
+            return False
+
+    def place_stop_order(
+        self,
+        ticker: str,
+        quantity: int,
+        stop_price: float,
+        side: str = "sell",
+    ) -> OrderResult:
+        """Place a standalone stop order (used for trailing stop replacement)."""
+        if self._dry_run:
+            import uuid
+            mock_id = str(uuid.uuid4())
+            log.info(
+                "MOCK STOP ORDER (Dry Run): %s %d %s @ stop=$%.2f → order_id=%s",
+                side, quantity, ticker, stop_price, mock_id,
+            )
+            return OrderResult(
+                submitted=True,
+                order_id=mock_id,
+                status="accepted",
+            )
+
+        order_side = OrderSide.SELL if side.lower() == "sell" else OrderSide.BUY
+        try:
+            order_request = StopOrderRequest(
+                symbol=ticker,
+                qty=quantity,
+                side=order_side,
+                stop_price=round(stop_price, 2),
+                time_in_force=TimeInForce.GTC,
+            )
+            order = self._client.submit_order(order_data=order_request)
+            order_id = str(getattr(order, "id", "") or "")
+            status = str(getattr(order, "status", "") or "")
+            log.info(
+                "Stop order submitted: %s %d %s @ stop=$%.2f → order_id=%s",
+                side, quantity, ticker, stop_price, order_id,
+            )
+            return OrderResult(
+                submitted=True,
+                order_id=order_id,
+                status=status,
+            )
+        except APIError as e:
+            log.warning("Stop order failed for %s %s: %s", side, ticker, e)
+            return OrderResult(submitted=False, error=str(e))
+

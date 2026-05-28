@@ -37,12 +37,39 @@ interface LLMProviderConfig extends OpenRouterProfile {
   openrouter?: OpenRouterProfile;
 }
 
+interface EnhancedTradingConfig {
+  bracket_orders: boolean;
+  stop_loss_pct: number;
+  take_profit_pct: number;
+  trailing_stops: boolean;
+  trailing_stop_pct: number;
+  trailing_stop_activation_pct: number;
+  concentration_limits: boolean;
+  max_single_ticker_pct: number;
+  circuit_breaker: boolean;
+  max_daily_loss_pct: number;
+  dynamic_position_sizing: boolean;
+  max_position_pct: number;
+  feedback_loop: boolean;
+  feedback_loop_lookback_days: number;
+  use_limit_orders: boolean;
+  limit_order_buffer_pct: number;
+  price_move_gate: boolean;
+  max_price_move_pct: number;
+  technical_indicators: boolean;
+  signal_momentum: boolean;
+  source_credibility: boolean;
+  market_hours_awareness: boolean;
+  structured_synthesis: boolean;
+}
+
 interface AgentConfig {
   thresholds: { buy_sentiment: number; sell_sentiment: number; confidence: number };
   execution: { order_qty: number };
   llm_provider: LLMProviderConfig;
   model: { cascade: ModelTier[]; override: string | null };
   prompts: { momentum: string; value: string; risk: string; synthesis: string };
+  enhanced_trading: EnhancedTradingConfig;
   consumer: { batch_size: number; poll_interval: number; error_retry: number };
 }
 
@@ -50,6 +77,7 @@ interface AgentConfig {
 
 const TABS = [
   { id: 'agent-config', label: 'Agent Config', icon: <CogIcon /> },
+  { id: 'enhanced-trading', label: 'Enhanced Trading', icon: <ShieldIcon /> },
   // { id: "notifications", label: "Notifications", icon: <BellIcon /> },  // future
 ] as const;
 
@@ -144,6 +172,9 @@ export default function SettingsPage() {
         )}
         {!loading && !fetchError && config && activeTab === 'agent-config' && (
           <AgentConfigTab config={config} onSave={setConfig} canEdit={isSuperUser} />
+        )}
+        {!loading && !fetchError && config && activeTab === 'enhanced-trading' && (
+          <EnhancedTradingTab config={config} onSave={setConfig} canEdit={isSuperUser} />
         )}
       </div>
     </div>
@@ -972,6 +1003,365 @@ function PromptReadCard({
   );
 }
 
+// ── Enhanced Trading tab ──────────────────────────────────────────────────────
+
+const ENHANCED_DEFAULTS: EnhancedTradingConfig = {
+  bracket_orders: false,
+  stop_loss_pct: 0.03,
+  take_profit_pct: 0.06,
+  trailing_stops: false,
+  trailing_stop_pct: 0.03,
+  trailing_stop_activation_pct: 0.02,
+  concentration_limits: false,
+  max_single_ticker_pct: 0.10,
+  circuit_breaker: false,
+  max_daily_loss_pct: 0.02,
+  dynamic_position_sizing: false,
+  max_position_pct: 0.05,
+  feedback_loop: false,
+  feedback_loop_lookback_days: 30,
+  use_limit_orders: false,
+  limit_order_buffer_pct: 0.005,
+  price_move_gate: false,
+  max_price_move_pct: 0.03,
+  technical_indicators: false,
+  signal_momentum: false,
+  source_credibility: false,
+  market_hours_awareness: false,
+  structured_synthesis: false,
+};
+
+function EnhancedTradingTab({
+  config,
+  onSave,
+  canEdit,
+}: {
+  config: AgentConfig;
+  onSave: (updated: AgentConfig) => void;
+  canEdit: boolean;
+}) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState<EnhancedTradingConfig>(() => ({
+    ...ENHANCED_DEFAULTS,
+    ...config.enhanced_trading,
+  }));
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+
+  const current = { ...ENHANCED_DEFAULTS, ...config.enhanced_trading };
+
+  const openEdit = (section: string) => {
+    setDraft({ ...ENHANCED_DEFAULTS, ...config.enhanced_trading });
+    setEditing(section);
+    setSaveErr(null);
+  };
+  const cancelEdit = () => {
+    setEditing(null);
+    setSaveErr(null);
+  };
+
+  const save = async (section: string) => {
+    setSaving(true);
+    setSaveErr(null);
+    try {
+      await apiFetch<{ ok: boolean }>('/agent-config', {
+        method: 'POST',
+        body: JSON.stringify({ enhanced_trading: draft }),
+      });
+      const updated = await apiFetch<AgentConfig>('/agent-config');
+      onSave(structuredClone(updated));
+      setDraft({ ...ENHANCED_DEFAULTS, ...updated.enhanced_trading });
+      setEditing(null);
+    } catch (e) {
+      setSaveErr(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const isEditing = (section: string) => editing === section;
+
+  const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+
+  return (
+    <div className="max-w-2xl space-y-8">
+      {/* Page heading */}
+      <div>
+        <h1 className="text-lg font-bold text-primary">Enhanced Trading</h1>
+        <p className="mt-1 text-sm text-muted">
+          Feature flags and tunable parameters for advanced trading strategies.
+          Changes apply on the next signal the agent processes (~5 seconds).
+        </p>
+      </div>
+
+      {/* ── Risk Management ── */}
+      <Section
+        title="🛡️ Risk Management"
+        description="Protective measures that limit downside exposure. Bracket orders, trailing stops, position concentration limits, and daily loss circuit breakers."
+        isEditing={isEditing('risk')}
+        saving={saving}
+        saveError={saveErr}
+        onEdit={canEdit ? () => openEdit('risk') : undefined}
+        onCancel={cancelEdit}
+        onSave={() => save('risk')}
+        readOnly={!canEdit}
+      >
+        {isEditing('risk') ? (
+          <div className="space-y-5">
+            <FeatureEditCard
+              label="Bracket Orders"
+              description="Auto-attach stop-loss and take-profit to every BUY fill"
+              enabled={draft.bracket_orders}
+              onToggle={(v) => setDraft((d) => ({ ...d, bracket_orders: v }))}
+            >
+              <NumberField label="Stop-loss" hint="Max loss before auto-sell (0.1–50%)" value={draft.stop_loss_pct} min={0.001} max={0.5} step={0.005} onChange={(v) => setDraft((d) => ({ ...d, stop_loss_pct: v }))} />
+              <NumberField label="Take-profit" hint="Gain target to lock in (0.1–100%)" value={draft.take_profit_pct} min={0.001} max={1} step={0.01} onChange={(v) => setDraft((d) => ({ ...d, take_profit_pct: v }))} />
+            </FeatureEditCard>
+
+            <FeatureEditCard
+              label="Trailing Stops"
+              description="Tighten stop-loss as the position gains, locking in profits"
+              enabled={draft.trailing_stops}
+              onToggle={(v) => setDraft((d) => ({ ...d, trailing_stops: v }))}
+            >
+              <NumberField label="Trail distance" hint="Trailing offset from high-water mark" value={draft.trailing_stop_pct} min={0.001} max={0.5} step={0.005} onChange={(v) => setDraft((d) => ({ ...d, trailing_stop_pct: v }))} />
+              <NumberField label="Activation" hint="Min profit before trail activates" value={draft.trailing_stop_activation_pct} min={0} max={0.5} step={0.005} onChange={(v) => setDraft((d) => ({ ...d, trailing_stop_activation_pct: v }))} />
+            </FeatureEditCard>
+
+            <FeatureEditCard
+              label="Concentration Limits"
+              description="Cap max portfolio allocation to any single ticker"
+              enabled={draft.concentration_limits}
+              onToggle={(v) => setDraft((d) => ({ ...d, concentration_limits: v }))}
+            >
+              <NumberField label="Max per ticker" hint="Max % of portfolio in one ticker" value={draft.max_single_ticker_pct} min={0.01} max={1} step={0.01} onChange={(v) => setDraft((d) => ({ ...d, max_single_ticker_pct: v }))} />
+            </FeatureEditCard>
+
+            <FeatureEditCard
+              label="Circuit Breaker"
+              description="Pause trading if daily portfolio loss exceeds threshold"
+              enabled={draft.circuit_breaker}
+              onToggle={(v) => setDraft((d) => ({ ...d, circuit_breaker: v }))}
+            >
+              <NumberField label="Max daily loss" hint="Halt trading after this drawdown" value={draft.max_daily_loss_pct} min={0.001} max={0.5} step={0.005} onChange={(v) => setDraft((d) => ({ ...d, max_daily_loss_pct: v }))} />
+            </FeatureEditCard>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <FeatureReadCard label="Bracket Orders" enabled={current.bracket_orders} params={[['Stop-loss', pct(current.stop_loss_pct)], ['Take-profit', pct(current.take_profit_pct)]]} />
+            <FeatureReadCard label="Trailing Stops" enabled={current.trailing_stops} params={[['Trail distance', pct(current.trailing_stop_pct)], ['Activation', pct(current.trailing_stop_activation_pct)]]} />
+            <FeatureReadCard label="Concentration Limits" enabled={current.concentration_limits} params={[['Max per ticker', pct(current.max_single_ticker_pct)]]} />
+            <FeatureReadCard label="Circuit Breaker" enabled={current.circuit_breaker} params={[['Max daily loss', pct(current.max_daily_loss_pct)]]} />
+          </div>
+        )}
+      </Section>
+
+      <Divider />
+
+      {/* ── Execution ── */}
+      <Section
+        title="⚡ Execution"
+        description="Order execution strategies — dynamic sizing, limit orders, and price-move freshness gating to prevent chasing."
+        isEditing={isEditing('execution')}
+        saving={saving}
+        saveError={saveErr}
+        onEdit={canEdit ? () => openEdit('execution') : undefined}
+        onCancel={cancelEdit}
+        onSave={() => save('execution')}
+        readOnly={!canEdit}
+      >
+        {isEditing('execution') ? (
+          <div className="space-y-5">
+            <FeatureEditCard
+              label="Dynamic Position Sizing"
+              description="Scale order quantity with conviction and thesis quality"
+              enabled={draft.dynamic_position_sizing}
+              onToggle={(v) => setDraft((d) => ({ ...d, dynamic_position_sizing: v }))}
+            >
+              <NumberField label="Max position" hint="Max % of portfolio per trade" value={draft.max_position_pct} min={0.001} max={1} step={0.01} onChange={(v) => setDraft((d) => ({ ...d, max_position_pct: v }))} />
+            </FeatureEditCard>
+
+            <FeatureEditCard
+              label="Limit Orders"
+              description="Use limit orders instead of market orders for better fills"
+              enabled={draft.use_limit_orders}
+              onToggle={(v) => setDraft((d) => ({ ...d, use_limit_orders: v }))}
+            >
+              <NumberField label="Buffer" hint="Price buffer from current price (0–10%)" value={draft.limit_order_buffer_pct} min={0} max={0.1} step={0.001} onChange={(v) => setDraft((d) => ({ ...d, limit_order_buffer_pct: v }))} />
+            </FeatureEditCard>
+
+            <FeatureEditCard
+              label="Price Move Gate"
+              description="Block trades when stock has already moved too much since the headline"
+              enabled={draft.price_move_gate}
+              onToggle={(v) => setDraft((d) => ({ ...d, price_move_gate: v }))}
+            >
+              <NumberField label="Max move" hint="Block if price moved more than this" value={draft.max_price_move_pct} min={0.001} max={0.5} step={0.005} onChange={(v) => setDraft((d) => ({ ...d, max_price_move_pct: v }))} />
+            </FeatureEditCard>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <FeatureReadCard label="Dynamic Position Sizing" enabled={current.dynamic_position_sizing} params={[['Max position', pct(current.max_position_pct)]]} />
+            <FeatureReadCard label="Limit Orders" enabled={current.use_limit_orders} params={[['Buffer', pct(current.limit_order_buffer_pct)]]} />
+            <FeatureReadCard label="Price Move Gate" enabled={current.price_move_gate} params={[['Max move', pct(current.max_price_move_pct)]]} />
+          </div>
+        )}
+      </Section>
+
+      <Divider />
+
+      {/* ── Intelligence ── */}
+      <Section
+        title="🧠 Intelligence"
+        description="Analytical enhancements that enrich the LLM debate context — historical feedback, technical indicators, source credibility, and more."
+        isEditing={isEditing('intelligence')}
+        saving={saving}
+        saveError={saveErr}
+        onEdit={canEdit ? () => openEdit('intelligence') : undefined}
+        onCancel={cancelEdit}
+        onSave={() => save('intelligence')}
+        readOnly={!canEdit}
+      >
+        {isEditing('intelligence') ? (
+          <div className="space-y-5">
+            <FeatureEditCard
+              label="Historical Feedback Loop"
+              description="Feed past trade outcomes into the debate for learning"
+              enabled={draft.feedback_loop}
+              onToggle={(v) => setDraft((d) => ({ ...d, feedback_loop: v }))}
+            >
+              <NumberField label="Lookback days" hint="How many days of history to include (1–365)" value={draft.feedback_loop_lookback_days} min={1} max={365} step={1} onChange={(v) => setDraft((d) => ({ ...d, feedback_loop_lookback_days: Math.round(v) }))} />
+            </FeatureEditCard>
+
+            <FeatureEditCard label="Technical Indicators" description="Include RSI, MACD, Bollinger Bands in LLM context" enabled={draft.technical_indicators} onToggle={(v) => setDraft((d) => ({ ...d, technical_indicators: v }))} />
+            <FeatureEditCard label="Signal Momentum" description="Aggregate sentiment across recent signals for the same ticker" enabled={draft.signal_momentum} onToggle={(v) => setDraft((d) => ({ ...d, signal_momentum: v }))} />
+            <FeatureEditCard label="Source Credibility" description="Weight signals by news source track record" enabled={draft.source_credibility} onToggle={(v) => setDraft((d) => ({ ...d, source_credibility: v }))} />
+            <FeatureEditCard label="Market Hours Awareness" description="Block or queue trades outside market hours" enabled={draft.market_hours_awareness} onToggle={(v) => setDraft((d) => ({ ...d, market_hours_awareness: v }))} />
+            <FeatureEditCard label="Structured Synthesis" description="Use structured JSON framework for portfolio manager synthesis" enabled={draft.structured_synthesis} onToggle={(v) => setDraft((d) => ({ ...d, structured_synthesis: v }))} />
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <FeatureReadCard label="Historical Feedback Loop" enabled={current.feedback_loop} params={[['Lookback', `${current.feedback_loop_lookback_days} days`]]} />
+            <FeatureReadCard label="Technical Indicators" enabled={current.technical_indicators} />
+            <FeatureReadCard label="Signal Momentum" enabled={current.signal_momentum} />
+            <FeatureReadCard label="Source Credibility" enabled={current.source_credibility} />
+            <FeatureReadCard label="Market Hours Awareness" enabled={current.market_hours_awareness} />
+            <FeatureReadCard label="Structured Synthesis" enabled={current.structured_synthesis} />
+          </div>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+// ── Feature toggle card (edit mode) ───────────────────────────────────────────
+
+function FeatureEditCard({
+  label,
+  description,
+  enabled,
+  onToggle,
+  children,
+}: {
+  label: string;
+  description: string;
+  enabled: boolean;
+  onToggle: (v: boolean) => void;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className={`rounded-xl border p-4 transition-colors duration-200 ${
+      enabled
+        ? 'border-positive-border bg-positive-soft/30'
+        : 'border-line bg-surface'
+    }`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-primary">{label}</span>
+            <StatusBadge enabled={enabled} />
+          </div>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-muted">{description}</p>
+        </div>
+        <ToggleSwitch enabled={enabled} onChange={onToggle} />
+      </div>
+      {enabled && children && (
+        <div className="mt-4 space-y-3 border-t border-line/50 pt-4">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Feature read card (read-only mode) ────────────────────────────────────────
+
+function FeatureReadCard({
+  label,
+  enabled,
+  params,
+}: {
+  label: string;
+  enabled: boolean;
+  params?: [string, string][];
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-line bg-surface px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-primary">{label}</span>
+          <StatusBadge enabled={enabled} />
+        </div>
+        {enabled && params && params.length > 0 && (
+          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5">
+            {params.map(([k, v]) => (
+              <span key={k} className="text-[11px] text-muted">
+                {k}: <span className="font-mono font-semibold text-secondary">{v}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Toggle switch ─────────────────────────────────────────────────────────────
+
+function ToggleSwitch({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={enabled}
+      onClick={() => onChange(!enabled)}
+      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent/30 ${
+        enabled ? 'bg-positive' : 'bg-surface-3'
+      }`}
+    >
+      <span
+        className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+          enabled ? 'translate-x-6' : 'translate-x-1'
+        }`}
+      />
+    </button>
+  );
+}
+
+// ── Status badge ──────────────────────────────────────────────────────────────
+
+function StatusBadge({ enabled }: { enabled: boolean }) {
+  return enabled ? (
+    <span className="rounded border border-positive-border bg-positive-soft px-1.5 py-0.5 text-[10px] font-bold text-positive">
+      ON
+    </span>
+  ) : (
+    <span className="rounded border border-line bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold text-muted">
+      OFF
+    </span>
+  );
+}
+
 function Divider() {
   return <div className="border-t border-line" />;
 }
@@ -1024,6 +1414,24 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
       strokeWidth={2}
     >
       <path strokeLinecap="round" strokeLinejoin="round" d="m19 9-7 7-7-7" />
+    </svg>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+      <path d="m9 12 2 2 4-4" />
     </svg>
   );
 }

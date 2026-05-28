@@ -60,7 +60,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins or ["http://localhost:3000"],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -817,6 +817,88 @@ def stats() -> dict[str, Any]:
     return {"stats": compute_dashboard_stats(result.data or []), "fetchedAt": now_iso()}
 
 
+
+# Enhanced trading field validation — matches defaults in agent/config.py
+_ENHANCED_BOOL_KEYS = {
+    "bracket_orders",
+    "trailing_stops",
+    "concentration_limits",
+    "circuit_breaker",
+    "dynamic_position_sizing",
+    "feedback_loop",
+    "use_limit_orders",
+    "price_move_gate",
+    "technical_indicators",
+    "signal_momentum",
+    "source_credibility",
+    "market_hours_awareness",
+    "structured_synthesis",
+}
+
+_ENHANCED_FLOAT_RANGES: dict[str, tuple[float, float]] = {
+    "stop_loss_pct": (0.001, 0.50),
+    "take_profit_pct": (0.001, 1.0),
+    "trailing_stop_pct": (0.001, 0.50),
+    "trailing_stop_activation_pct": (0.0, 0.50),
+    "max_single_ticker_pct": (0.01, 1.0),
+    "max_daily_loss_pct": (0.001, 0.50),
+    "max_position_pct": (0.001, 1.0),
+    "limit_order_buffer_pct": (0.0, 0.10),
+    "max_price_move_pct": (0.001, 0.50),
+}
+
+_ENHANCED_INT_RANGES: dict[str, tuple[int, int]] = {
+    "feedback_loop_lookback_days": (1, 365),
+}
+
+
+def _validate_enhanced_trading(data: dict[str, Any]) -> None:
+    """Validate enhanced_trading keys and value ranges."""
+    allowed_keys = _ENHANCED_BOOL_KEYS | set(_ENHANCED_FLOAT_RANGES) | set(_ENHANCED_INT_RANGES)
+    unknown = set(data) - allowed_keys
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown enhanced_trading keys: {', '.join(sorted(unknown))}",
+        )
+    for key in _ENHANCED_BOOL_KEYS:
+        val = data.get(key)
+        if val is not None and not isinstance(val, bool):
+            raise HTTPException(
+                status_code=400, detail=f"enhanced_trading.{key} must be a boolean"
+            )
+    for key, (lo, hi) in _ENHANCED_FLOAT_RANGES.items():
+        val = data.get(key)
+        if val is not None:
+            try:
+                fval = float(val)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"enhanced_trading.{key} must be a number",
+                )
+            if not lo <= fval <= hi:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"enhanced_trading.{key} must be between {lo} and {hi}",
+                )
+    for key, (lo, hi) in _ENHANCED_INT_RANGES.items():
+        val = data.get(key)
+        if val is not None:
+            try:
+                ival = int(val)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"enhanced_trading.{key} must be an integer",
+                )
+            if not lo <= ival <= hi:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"enhanced_trading.{key} must be between {lo} and {hi}",
+                )
+
+
 @app.get("/agent-config")
 def agent_config() -> dict[str, Any]:
     result = (
@@ -847,6 +929,7 @@ def agent_config() -> dict[str, Any]:
             for index, model in enumerate(llm_provider.get("models", []))
         ]
     )
+    enhanced = row.get("enhanced_trading") or {}
     return {
         "thresholds": {
             "buy_sentiment": row.get("buy_sentiment_threshold"),
@@ -864,6 +947,31 @@ def agent_config() -> dict[str, Any]:
             "value": row.get("value_system_prompt"),
             "risk": row.get("risk_system_prompt"),
             "synthesis": row.get("synthesis_system_prompt"),
+        },
+        "enhanced_trading": {
+            "bracket_orders": bool(enhanced.get("bracket_orders", False)),
+            "stop_loss_pct": float(enhanced.get("stop_loss_pct", 0.03)),
+            "take_profit_pct": float(enhanced.get("take_profit_pct", 0.06)),
+            "trailing_stops": bool(enhanced.get("trailing_stops", False)),
+            "trailing_stop_pct": float(enhanced.get("trailing_stop_pct", 0.03)),
+            "trailing_stop_activation_pct": float(enhanced.get("trailing_stop_activation_pct", 0.02)),
+            "concentration_limits": bool(enhanced.get("concentration_limits", False)),
+            "max_single_ticker_pct": float(enhanced.get("max_single_ticker_pct", 0.10)),
+            "circuit_breaker": bool(enhanced.get("circuit_breaker", False)),
+            "max_daily_loss_pct": float(enhanced.get("max_daily_loss_pct", 0.02)),
+            "dynamic_position_sizing": bool(enhanced.get("dynamic_position_sizing", False)),
+            "max_position_pct": float(enhanced.get("max_position_pct", 0.05)),
+            "feedback_loop": bool(enhanced.get("feedback_loop", False)),
+            "feedback_loop_lookback_days": int(enhanced.get("feedback_loop_lookback_days", 30)),
+            "use_limit_orders": bool(enhanced.get("use_limit_orders", False)),
+            "limit_order_buffer_pct": float(enhanced.get("limit_order_buffer_pct", 0.005)),
+            "price_move_gate": bool(enhanced.get("price_move_gate", False)),
+            "max_price_move_pct": float(enhanced.get("max_price_move_pct", 0.03)),
+            "technical_indicators": bool(enhanced.get("technical_indicators", False)),
+            "signal_momentum": bool(enhanced.get("signal_momentum", False)),
+            "source_credibility": bool(enhanced.get("source_credibility", False)),
+            "market_hours_awareness": bool(enhanced.get("market_hours_awareness", False)),
+            "structured_synthesis": bool(enhanced.get("structured_synthesis", False)),
         },
         "consumer": {"batch_size": 10, "poll_interval": 1.0, "error_retry": 5.0},
     }
@@ -884,6 +992,11 @@ def update_agent_config(
         body.get("llm_provider") if isinstance(body.get("llm_provider"), dict) else None
     )
     prompts = body.get("prompts") if isinstance(body.get("prompts"), dict) else None
+    enhanced_trading = (
+        body.get("enhanced_trading")
+        if isinstance(body.get("enhanced_trading"), dict)
+        else None
+    )
 
     if thresholds:
         buy = thresholds.get("buy_sentiment")
@@ -917,6 +1030,9 @@ def update_agent_config(
                     detail=f'Prompt "{key}" exceeds maximum length of {MAX_PROMPT_LENGTH} characters',
                 )
 
+    if enhanced_trading:
+        _validate_enhanced_trading(enhanced_trading)
+
     patch: dict[str, Any] = {}
     if thresholds:
         if thresholds.get("buy_sentiment") is not None:
@@ -939,6 +1055,8 @@ def update_agent_config(
             patch["risk_system_prompt"] = prompts["risk"]
         if prompts.get("synthesis"):
             patch["synthesis_system_prompt"] = prompts["synthesis"]
+    if enhanced_trading is not None:
+        patch["enhanced_trading"] = enhanced_trading
 
     sb = get_supabase()
     existing = (

@@ -44,6 +44,7 @@ from outcome_scheduler import (
     default_scheduler_run_tracker,
     start_outcome_labeler_scheduler,
 )
+from position_monitor import start_position_monitor
 from schemas import NewsMessage
 from trader import AlpacaTrader
 
@@ -72,6 +73,7 @@ def main() -> None:
     # Compile the LangGraph state machine once — reused for every message
     graph = build_agent_graph(cache=cache, trader=trader, db=db)
     start_outcome_labeler_scheduler(run_tracker=default_scheduler_run_tracker())
+    start_position_monitor(trader)
 
     def process_news(news: NewsMessage) -> None:
         """Run one news article through the full agent graph."""
@@ -90,6 +92,7 @@ def main() -> None:
             "is_cached": False,
             "market_context": None,
             "article_quality": None,
+            "all_positions": None,
             "momentum_opinion": None,
             "value_opinion": None,
             "risk_opinion": None,
