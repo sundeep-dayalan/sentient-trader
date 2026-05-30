@@ -543,39 +543,76 @@ def _make_fetch_context_node(trader: AlpacaTrader):
                 "position": position_context,
             }
 
-            # Technical indicators enrichment (config-gated)
+            # Technical indicators enrichment (config-gated).
+            # Strategy: ask for DAILY bars over 60 days (always plenty even for
+            # newly-listed tickers and low-liquidity names). If that fails or
+            # returns too few bars, fall back to HOURLY over 10 days. Most
+            # `data_unavailable` cases were caused by sparse hourly IEX bars.
             try:
                 if config.TECHNICAL_INDICATORS_ENABLED and snap:
+                    from datetime import timedelta as _td
                     from alpaca.data.requests import StockBarsRequest
                     from alpaca.data.timeframe import TimeFrame
                     from market_intelligence import build_technical_context
 
-                    try:
-                        bars = data_client.get_stock_bars(
-                            StockBarsRequest(
-                                symbol_or_symbols=ticker,
-                                timeframe=TimeFrame.Hour,
-                                start=datetime.now(timezone.utc) - __import__('datetime').timedelta(days=5),
+                    tech: dict | None = None
+                    tech_source: str | None = None
+                    tech_reason: str | None = None
+
+                    def _try_bars(tf, lookback_days: int, label: str):
+                        try:
+                            bars = data_client.get_stock_bars(
+                                StockBarsRequest(
+                                    symbol_or_symbols=ticker,
+                                    timeframe=tf,
+                                    start=datetime.now(timezone.utc) - _td(days=lookback_days),
+                                )
                             )
-                        )
-                        bar_list = bars.get(ticker) if bars else None
-                        if bar_list and len(bar_list) >= 5:
+                            bar_list = bars.get(ticker) if bars else None
+                            if not bar_list:
+                                return None, "no_bars_returned"
+                            if len(bar_list) < 15:
+                                return None, f"insufficient_bars_{len(bar_list)}"
                             closes = [float(b.close) for b in bar_list]
                             volumes = [float(b.volume) for b in bar_list]
-                            tech = build_technical_context(closes, volumes, price)
-                            if tech:
-                                ctx["technical_indicators"] = tech
-                                log.info(
-                                    "Technical indicators [%s]: RSI=%s MACD=%s VR=%s",
-                                    ticker,
-                                    tech.get("rsi_14"),
-                                    tech.get("macd"),
-                                    tech.get("volume_ratio"),
-                                )
-                    except Exception as tech_exc:
-                        log.debug("Technical indicators unavailable for %s: %s", ticker, tech_exc)
-            except Exception:
-                pass
+                            return build_technical_context(closes, volumes, price), None
+                        except Exception as exc:
+                            return None, f"{label}_error:{type(exc).__name__}"
+
+                    tech, tech_reason = _try_bars(TimeFrame.Day, 60, "daily")
+                    if tech:
+                        tech_source = "daily_60d"
+                    else:
+                        log.debug(
+                            "Daily bars unavailable for %s (%s); falling back to hourly",
+                            ticker, tech_reason,
+                        )
+                        hourly_tech, hourly_reason = _try_bars(TimeFrame.Hour, 10, "hourly")
+                        if hourly_tech:
+                            tech = hourly_tech
+                            tech_source = "hourly_10d"
+                        else:
+                            tech_reason = f"{tech_reason}|{hourly_reason}"
+
+                    if tech:
+                        tech["_source"] = tech_source
+                        ctx["technical_indicators"] = tech
+                        log.info(
+                            "Technical indicators [%s] (%s): RSI=%s MACD=%s VR=%s",
+                            ticker, tech_source,
+                            tech.get("rsi_14"),
+                            tech.get("macd"),
+                            tech.get("volume_ratio"),
+                        )
+                    else:
+                        # Surface the reason so we can debug coverage gaps later.
+                        ctx["technical_indicators_unavailable_reason"] = tech_reason
+                        log.info(
+                            "Technical indicators unavailable for %s: %s",
+                            ticker, tech_reason,
+                        )
+            except Exception as outer_tech_exc:
+                log.warning("Technical indicators block failed for %s: %s", ticker, outer_tech_exc)
 
             log.info(
                 "Context [%s]: $%.2f  %s",
@@ -1531,6 +1568,8 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
         # Re-check the live price and compare to the snapshot from
         # fetch_context. If the stock has already moved more than the
         # configured threshold, the opportunity has passed — don't chase.
+        # Hardened: directional check (don't BUY into a +N% spike or SELL
+        # into a -N% drop) AND fail-safe on missing live price.
         price_move_gate: dict[str, Any] = {"enabled": config.PRICE_MOVE_GATE_ENABLED}
         if config.PRICE_MOVE_GATE_ENABLED:
             ctx = state.get("market_context") or {}
@@ -1538,20 +1577,31 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
             live_price = _refetch_live_price(news.ticker)
 
             if snapshot_price and live_price and snapshot_price > 0:
-                move_pct = abs(live_price - snapshot_price) / snapshot_price
+                signed_move_pct = (live_price - snapshot_price) / snapshot_price
+                move_pct = abs(signed_move_pct)
+                # Direction-aware threshold: chasing risk only matters when
+                # the price moved in the trade's direction. If we're buying
+                # and the stock dropped, the entry is BETTER not worse —
+                # don't block it. Same logic mirrored for SELL.
+                directional_move = (
+                    signed_move_pct if action == "BUY" else -signed_move_pct
+                )
                 price_move_gate.update({
                     "snapshot_price": snapshot_price,
                     "live_price": round(live_price, 2),
                     "move_pct": round(move_pct, 4),
+                    "signed_move_pct": round(signed_move_pct, 4),
+                    "directional_move_pct": round(directional_move, 4),
                     "threshold_pct": config.MAX_PRICE_MOVE_PCT,
                 })
 
-                if move_pct > config.MAX_PRICE_MOVE_PCT:
+                if directional_move > config.MAX_PRICE_MOVE_PCT:
                     direction = "up" if live_price > snapshot_price else "down"
                     gate_reason = (
                         f"Price-move gate: {news.ticker} moved {direction} "
                         f"{move_pct:.1%} (${snapshot_price:.2f} → ${live_price:.2f}) "
-                        f"since analysis, exceeding {config.MAX_PRICE_MOVE_PCT:.0%} threshold. "
+                        f"in the trade direction since analysis, exceeding "
+                        f"{config.MAX_PRICE_MOVE_PCT:.0%} threshold. "
                         f"Order blocked to avoid chasing."
                     )
                     price_move_gate["blocked"] = True
@@ -1581,21 +1631,42 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
                 else:
                     price_move_gate["blocked"] = False
                     log.info(
-                        "Price-move gate OK [%s]: moved %.2f%% ($%.2f → $%.2f), "
-                        "within %.0f%% threshold",
-                        news.ticker, move_pct * 100,
+                        "Price-move gate OK [%s]: directional move %.2f%% "
+                        "($%.2f → $%.2f), within %.0f%% threshold",
+                        news.ticker, directional_move * 100,
                         snapshot_price, live_price,
                         config.MAX_PRICE_MOVE_PCT * 100,
                     )
             else:
-                price_move_gate["blocked"] = False
+                # Fail-safe: if we cannot verify the live price, refuse to
+                # trade. A missing live price typically indicates an outage,
+                # halt, or extended-hours condition — none of which are safe
+                # times to send a market order against a stale snapshot.
+                price_move_gate["blocked"] = True
                 price_move_gate["reason"] = (
-                    "Could not compare prices (snapshot or live price unavailable)."
+                    f"Price-move gate fail-safe: could not verify live price "
+                    f"(snapshot=${snapshot_price} live=${live_price}). "
+                    f"Refusing to trade without a current quote."
                 )
-                log.debug(
-                    "Price-move gate [%s]: skipped — snapshot=$%s live=$%s",
+                log.warning(
+                    "Price-move gate FAIL-SAFE [%s]: snapshot=$%s live=$%s — order blocked",
                     news.ticker, snapshot_price, live_price,
                 )
+                return {
+                    "trade_order_id": None,
+                    "execution": {
+                        "step": "execute_trade",
+                        "submitted": False,
+                        "ticker": news.ticker,
+                        "action": action,
+                        "quantity": quantity,
+                        "order_id": None,
+                        "status": "price_move_blocked",
+                        "error": price_move_gate["reason"],
+                        "execution_plan": plan,
+                        "price_move_gate": price_move_gate,
+                    },
+                }
 
         # ── Idempotency ──────────────────────────────────────────────────
         # Deterministic client_order_id prevents duplicate orders if the
@@ -1627,14 +1698,30 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
         except Exception:
             pass
 
-        # Compute bracket prices for atomic bracket order (config-gated)
+        # Compute bracket prices for atomic bracket order (config-gated).
+        # We re-fetch the live price RIGHT BEFORE order submission so the TP/SL
+        # legs are anchored to the current market, not a snapshot from earlier
+        # in the pipeline. The price-move gate already cleared a re-fetched
+        # `live_price` — we reuse it if available, otherwise fetch again.
         take_profit_price = None
         stop_loss_price = None
         bracket_info: dict[str, Any] = {}
         if action == "BUY" and config.BRACKET_ORDERS_ENABLED:
             try:
                 ctx = state.get("market_context") or {}
-                entry_price = ctx.get("price")
+                snapshot_price = ctx.get("price")
+                gate_live_price = price_move_gate.get("live_price")
+                entry_price = (
+                    gate_live_price
+                    if isinstance(gate_live_price, (int, float)) and gate_live_price > 0
+                    else _refetch_live_price(news.ticker)
+                )
+                # Final fallback to the original snapshot only if the live fetch
+                # produced nothing — better a slightly stale bracket than none.
+                price_source = "live_refetch"
+                if not (isinstance(entry_price, (int, float)) and entry_price > 0):
+                    entry_price = snapshot_price
+                    price_source = "snapshot_fallback"
                 if entry_price and entry_price > 0:
                     tp_price = round(float(entry_price) * (1 + config.TAKE_PROFIT_PCT), 2)
                     sl_price = round(float(entry_price) * (1 - config.STOP_LOSS_PCT), 2)
@@ -1642,6 +1729,8 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
                     stop_loss_price = sl_price
                     bracket_info = {
                         "entry_price": float(entry_price),
+                        "snapshot_price": float(snapshot_price) if snapshot_price else None,
+                        "price_source": price_source,
                         "take_profit_price": tp_price,
                         "stop_loss_price": sl_price,
                         "take_profit_pct": config.TAKE_PROFIT_PCT,
@@ -1649,8 +1738,8 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
                         "method": "atomic_bracket",
                     }
                     log.info(
-                        "Bracket prices for %s: entry=$%.2f TP=$%.2f (+%.1f%%) SL=$%.2f (-%.1f%%)",
-                        news.ticker, entry_price, tp_price,
+                        "Bracket prices for %s [%s]: entry=$%.2f TP=$%.2f (+%.1f%%) SL=$%.2f (-%.1f%%)",
+                        news.ticker, price_source, entry_price, tp_price,
                         config.TAKE_PROFIT_PCT * 100, sl_price,
                         config.STOP_LOSS_PCT * 100,
                     )
@@ -1699,14 +1788,19 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
         # executed_action reflect reality.
         if result.submitted and result.order_id:
             fill: dict[str, Any] = {}
-            for attempt in range(3):
+            # Retry schedule: 200ms, 400ms, 800ms, 1600ms, 2000ms = ~5s total.
+            # Bracket parent orders often sit in `accepted`/`new` for >1s before
+            # the broker confirms `filled`; the old 3×500ms loop missed them and
+            # left `executed_action` unset for every fast-fill trade.
+            retry_delays = [0.2, 0.4, 0.8, 1.6, 2.0]
+            for attempt, delay in enumerate(retry_delays + [0.0]):
                 try:
                     fill = trader.verify_fill(result.order_id)
                     fill_status = str(fill.get("status", "")).lower()
                     if fill_status in ("filled", "partially_filled", "cancelled", "expired", "rejected"):
                         break  # Terminal state — no point retrying
-                    if attempt < 2:
-                        time.sleep(0.5)  # 500ms between retries
+                    if delay > 0:
+                        time.sleep(delay)
                 except Exception:
                     break
             if fill:

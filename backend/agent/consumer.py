@@ -24,6 +24,7 @@ Field format from redis-py:
 import json
 import logging
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -41,6 +42,12 @@ from redis_client import create_redis_client
 from schemas import NewsMessage
 
 log = logging.getLogger("agent.consumer")
+
+# US-style ticker symbols only. Alpaca's stock APIs reject exchange-prefixed
+# symbols (TSX:BMO, LSE:BARC, etc.); processing them wastes LLM quota and
+# trips the outcome labeler. Match the regex used by the outcome labeler so
+# whatever passes here is guaranteed labelable downstream.
+_US_TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,9}$")
 REDIS_HOST = os.environ.get("REDIS_HOST", "127.0.0.1")
 REDIS_PORT = os.environ.get("REDIS_PORT", "6379")
 REDIS_DB = os.environ.get("REDIS_DB", "0")
@@ -235,6 +242,27 @@ class RedisStreamConsumer:
             news = NewsMessage(**fields)
             log.info("Consumed [%s]: %s", news.ticker, news.headline[:70])
             self._health.mark_processing(entry_id, news.ticker, source)
+
+            # ── Ticker support gate ──────────────────────────────────────────
+            # Reject exchange-prefixed/non-US tickers (TSX:BMO, LSE:BARC, etc.)
+            # before they reach the LLM pipeline. Alpaca can't trade them and
+            # the outcome labeler can't price them — every cent spent on LLM
+            # debate is wasted. Dead-letter the entry with an explicit reason.
+            ticker_raw = (news.ticker or "").strip().upper()
+            if not ticker_raw or not _US_TICKER_PATTERN.fullmatch(ticker_raw):
+                log.info(
+                    "Rejecting unsupported ticker format: %r (entry=%s)",
+                    news.ticker, entry_id,
+                )
+                self._write_dead_letter(
+                    entry_id=entry_id,
+                    fields=fields,
+                    reason="unsupported_ticker_format",
+                    attempts=attempts,
+                    error=f"ticker {news.ticker!r} is not a tradable US symbol",
+                )
+                self._health.mark_dead_lettered(entry_id, "unsupported ticker format")
+                return True
 
             age = self._signal_age_seconds(news)
             if age is not None and age > config.AGENT_MAX_AUDIT_SIGNAL_AGE_SECONDS:

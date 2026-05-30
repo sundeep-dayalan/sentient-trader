@@ -17,7 +17,7 @@ import logging
 import os
 from dataclasses import asdict, dataclass
 from types import SimpleNamespace
-from typing import Optional
+from typing import Any, Optional
 
 try:
     from alpaca.common.exceptions import APIError
@@ -89,6 +89,26 @@ def _boolish(value) -> Optional[bool]:
     return bool(value)
 
 
+def _normalize_status(value: Any) -> str:
+    """
+    Normalize Alpaca's `status` to a stable, lowercase, prefix-free token.
+    Alpaca's Python SDK sometimes returns the OrderStatus enum (whose `str()`
+    is `OrderStatus.PENDING_NEW`) and sometimes a raw lowercase string
+    (`"accepted"`). Mixed forms in the DB break every `== "filled"` check.
+
+    Returns "" for empty/None so callers can still distinguish "no status".
+    """
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    # Strip Python enum prefix if present (e.g. "OrderStatus.PENDING_NEW")
+    if "." in text:
+        text = text.rsplit(".", 1)[-1]
+    return text.lower()
+
+
 class AlpacaTrader:
     """
     Wraps alpaca-py's TradingClient for paper trading.
@@ -106,10 +126,40 @@ class AlpacaTrader:
             secret_key=os.environ["ALPACA_SECRET_KEY"],
             paper=True,  # Hardcoded — this service must never touch live funds
         )
+        # Lazy data client for last-mile bracket-price sanity checks.
+        self._data_client = None
         if self._dry_run:
             log.info("Alpaca trader initialized in MOCK mode (Dry run)")
         else:
             log.info("Alpaca trader initialized (paper trading mode)")
+
+    def _latest_trade_price(self, ticker: str) -> Optional[float]:
+        """
+        Re-fetch the live trade price immediately before order submission.
+        Used to validate bracket TP/SL against Alpaca's `base_price` so we
+        don't get rejected for stale snapshots. Returns None on any failure
+        — callers must treat None as "skip the sanity check" not an error.
+        """
+        if self._dry_run:
+            return None
+        try:
+            if self._data_client is None:
+                from alpaca.data.historical import StockHistoricalDataClient
+                from alpaca.data.requests import StockLatestTradeRequest
+                self._data_client = StockHistoricalDataClient(
+                    api_key=os.environ["ALPACA_API_KEY"],
+                    secret_key=os.environ["ALPACA_SECRET_KEY"],
+                )
+                self._StockLatestTradeRequest = StockLatestTradeRequest
+            trades = self._data_client.get_stock_latest_trade(
+                self._StockLatestTradeRequest(symbol_or_symbols=ticker)
+            )
+            trade = trades.get(ticker) if trades else None
+            if trade and getattr(trade, "price", None):
+                return float(trade.price)
+        except Exception as exc:
+            log.debug("Live price re-fetch failed for %s: %s", ticker, exc)
+        return None
 
     def place_order(
         self,
@@ -161,6 +211,51 @@ class AlpacaTrader:
             and take_profit_price > 0
             and stop_loss_price > 0
         )
+
+        # ── Bracket sanity guard ──────────────────────────────────────────────
+        # Alpaca rejects brackets where TP/SL violate the live `base_price`:
+        #   - take_profit.limit_price must be >= base_price + 0.01
+        #   - stop_loss.stop_price    must be <= base_price - 0.01
+        # If the live quote drifted past either bound (we saw +6.71% on NTAP,
+        # -3.87% on ATS), nudge the offending leg by a tiny epsilon so the
+        # whole order isn't rejected and the position ends up unprotected.
+        # If a leg is still infeasible after the nudge, drop the bracket
+        # entirely and submit a simple order — better a naked fill than no
+        # fill at all (the position monitor will attach a stop afterwards).
+        if use_bracket:
+            live_price = self._latest_trade_price(ticker)
+            if live_price and live_price > 0:
+                tp_min = round(live_price + 0.01, 2)
+                sl_max = round(live_price - 0.01, 2)
+                tp_adjusted = max(round(take_profit_price, 2), tp_min)
+                sl_adjusted = min(round(stop_loss_price, 2), sl_max)
+                tp_drift = abs(tp_adjusted - take_profit_price) / max(take_profit_price, 0.01)
+                sl_drift = abs(sl_adjusted - stop_loss_price) / max(stop_loss_price, 0.01)
+                # Cap the auto-adjust at 2% — beyond that the price has run
+                # too far for the original thesis; abandon the bracket.
+                if tp_drift > 0.02 or sl_drift > 0.02 or tp_adjusted <= sl_adjusted:
+                    log.warning(
+                        "Bracket aborted for %s: live=$%.2f drifted past TP=$%.2f / SL=$%.2f "
+                        "(tp_drift=%.2f%% sl_drift=%.2f%%). Falling back to simple order.",
+                        ticker, live_price, take_profit_price, stop_loss_price,
+                        tp_drift * 100, sl_drift * 100,
+                    )
+                    use_bracket = False
+                    take_profit_price = None
+                    stop_loss_price = None
+                else:
+                    if tp_adjusted != round(take_profit_price, 2):
+                        log.info(
+                            "Bracket TP nudged for %s: $%.2f → $%.2f (live=$%.2f)",
+                            ticker, take_profit_price, tp_adjusted, live_price,
+                        )
+                        take_profit_price = tp_adjusted
+                    if sl_adjusted != round(stop_loss_price, 2):
+                        log.info(
+                            "Bracket SL nudged for %s: $%.2f → $%.2f (live=$%.2f)",
+                            ticker, stop_loss_price, sl_adjusted, live_price,
+                        )
+                        stop_loss_price = sl_adjusted
 
         # Use limit order if price provided, otherwise market order
         if limit_price is not None and limit_price > 0:
@@ -219,14 +314,14 @@ class AlpacaTrader:
         try:
             order = self._client.submit_order(order_data=order_request)
             order_id = str(getattr(order, "id", "") or "")
-            status = str(getattr(order, "status", "") or "")
+            status = _normalize_status(getattr(order, "status", None))
             lookup_error: Optional[str] = None
 
             if not order_id and client_order_id:
                 try:
                     order = self._client.get_order_by_client_id(client_order_id)
                     order_id = str(getattr(order, "id", "") or "")
-                    status = str(getattr(order, "status", "") or status or "")
+                    status = _normalize_status(getattr(order, "status", None)) or status
                 except Exception as exc:
                     lookup_error = str(exc)
 
@@ -328,7 +423,7 @@ class AlpacaTrader:
             return {
                 "filled_qty": _floatish(getattr(order, "filled_qty", None)) or 0,
                 "filled_avg_price": _floatish(getattr(order, "filled_avg_price", None)) or 0,
-                "status": str(getattr(order, "status", "") or ""),
+                "status": _normalize_status(getattr(order, "status", None)),
             }
         except Exception as exc:
             log.warning("Could not verify fill for order %s: %s", order_id, exc)
@@ -473,7 +568,7 @@ class AlpacaTrader:
                     "qty": _floatish(getattr(o, "qty", None)) or 0.0,
                     "stop_price": _floatish(getattr(o, "stop_price", None)),
                     "limit_price": _floatish(getattr(o, "limit_price", None)),
-                    "status": str(getattr(o, "status", "") or ""),
+                    "status": _normalize_status(getattr(o, "status", None)),
                     "order_class": str(getattr(o, "order_class", "") or ""),
                     "legs": [
                         {
@@ -482,7 +577,7 @@ class AlpacaTrader:
                             "side": str(getattr(leg, "side", "") or ""),
                             "stop_price": _floatish(getattr(leg, "stop_price", None)),
                             "limit_price": _floatish(getattr(leg, "limit_price", None)),
-                            "status": str(getattr(leg, "status", "") or ""),
+                            "status": _normalize_status(getattr(leg, "status", None)),
                         }
                         for leg in (getattr(o, "legs", None) or [])
                     ],
@@ -539,7 +634,7 @@ class AlpacaTrader:
             )
             order = self._client.submit_order(order_data=order_request)
             order_id = str(getattr(order, "id", "") or "")
-            status = str(getattr(order, "status", "") or "")
+            status = _normalize_status(getattr(order, "status", None))
             log.info(
                 "Stop order submitted: %s %d %s @ stop=$%.2f → order_id=%s",
                 side, quantity, ticker, stop_price, order_id,

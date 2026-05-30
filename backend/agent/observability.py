@@ -332,12 +332,20 @@ def build_feature_report(
                 "macd": tech.get("macd"),
                 "sma_20": tech.get("sma_20"),
                 "volume_ratio": tech.get("volume_ratio"),
+                "source": tech.get("_source"),
             },
             impact=f"RSI={tech.get('rsi_14')}, MACD={tech.get('macd')} injected into LLM prompts.",
         )
         metrics.increment("technical_indicators", "computed", ticker)
     elif ti_enabled:
-        report.record("technical_indicators", enabled=True, activated=False, outcome="data_unavailable")
+        ti_reason = ctx.get("technical_indicators_unavailable_reason") or "unknown"
+        report.record(
+            "technical_indicators",
+            enabled=True,
+            activated=False,
+            outcome="data_unavailable",
+            details={"reason": ti_reason},
+        )
         metrics.increment("technical_indicators", "data_unavailable", ticker)
     else:
         report.record("technical_indicators", enabled=False, outcome="disabled")

@@ -26,6 +26,18 @@ from uuid import uuid4
 
 log = logging.getLogger("agent.logger")
 
+# Alpaca order lifecycle states that mean the broker has accepted the order
+# and we own the position (or are committed to owning it). `filled` is terminal;
+# the others are en-route to fill but the trade IS happening.
+_ACCEPTED_BROKER_STATES = frozenset({
+    "filled", "partially_filled",
+    "accepted", "new", "pending_new", "held",
+    "accepted_for_bidding", "pending_replace", "replaced",
+})
+_TERMINAL_FAILURE_STATES = frozenset({
+    "rejected", "cancelled", "canceled", "expired", "suspended",
+})
+
 
 def _floatish(value: Any) -> Optional[float]:
     try:
@@ -34,6 +46,21 @@ def _floatish(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_status(value: Any) -> str:
+    """
+    Mirror of trader._normalize_status. Strip enum prefix, lowercase, trim.
+    Duplicated here so logger.py has no runtime dep on trader.py.
+    """
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if "." in text:
+        text = text.rsplit(".", 1)[-1]
+    return text.lower()
 
 
 def _decision_path(decision_trace: Optional[dict], trade_action: str) -> str:
@@ -102,25 +129,44 @@ def trade_observability_fields(
         execution_order_id = str(execution.get("order_id") or order_id or "").strip()
         submitted = execution.get("submitted") is True
         fields["client_order_id"] = execution.get("client_order_id")
-        fields["order_status"] = execution.get("status")
+        # Always store normalized status — mixed-case "OrderStatus.PENDING_NEW"
+        # vs "accepted" used to break every downstream `== "filled"` check.
+        submit_status = _normalize_status(execution.get("status"))
+        fill_status = _normalize_status(execution.get("fill_status"))
+        # Prefer the post-verification fill status over the submission status
+        # since it reflects the broker's latest view of the order.
+        effective_status = fill_status or submit_status
+        if effective_status:
+            fields["order_status"] = effective_status
         error = execution.get("error")
         if isinstance(error, str) and error.strip():
             fields["execution_error"] = error.strip()
 
-        # ── Fix #3: only mark executed_action when Alpaca confirms fill ──
-        # Previously we set executed_action as soon as submitted=True,
-        # which recorded intent not reality. Now we check the fill
-        # verification status — only filled/partially_filled orders
-        # count as actual executions.
-        fill_status = str(execution.get("fill_status") or "").strip().lower()
-        is_confirmed_fill = fill_status in ("filled", "partially_filled")
+        # ── executed_action policy ────────────────────────────────────────
+        # Set executed_action when the broker has ACCEPTED the order — not
+        # only when it has filled. Reason: an accepted order is a real
+        # commitment with capital at risk, and downstream PnL/position
+        # tracking needs to see it. The separate `order_status` column
+        # carries the lifecycle state (filled vs pending vs partial).
+        # Failures (rejected/cancelled/expired) explicitly do NOT set it.
+        action_to_record = execution.get("action") or trade_action
+        is_recordable_action = action_to_record in ("BUY", "SELL")
+        broker_accepted = effective_status in _ACCEPTED_BROKER_STATES
+        broker_failed = effective_status in _TERMINAL_FAILURE_STATES
 
-        if submitted and execution_order_id and is_confirmed_fill:
-            fields["executed_action"] = execution.get("action") or trade_action
-        elif submitted and execution_order_id and not is_confirmed_fill:
-            # Order was submitted but not yet confirmed as filled.
-            # Record as pending — the outcome labeler will reconcile later.
-            fields["order_status"] = fill_status or fields.get("order_status") or "pending_fill"
+        if submitted and execution_order_id and is_recordable_action and broker_accepted:
+            fields["executed_action"] = action_to_record
+        elif submitted and execution_order_id and is_recordable_action and not effective_status:
+            # No status yet but broker returned an order_id — treat as accepted.
+            # This guards against intermittent fill_verification failures.
+            fields["executed_action"] = action_to_record
+            fields["order_status"] = fields.get("order_status") or "pending_fill"
+        elif submitted and execution_order_id and broker_failed:
+            # Broker rejected/cancelled — DON'T record as executed.
+            fields["execution_error"] = (
+                fields.get("execution_error")
+                or f"Broker terminated order without fill (status={effective_status})."
+            )
         elif submitted and not execution_order_id:
             fields["order_status"] = fields.get("order_status") or "missing_order_id"
             fields["execution_error"] = (

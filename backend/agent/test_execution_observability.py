@@ -41,8 +41,8 @@ class ExecutionObservabilityTests(unittest.TestCase):
         self.assertEqual(fields["decision_path"], "full_debate")
         self.assertEqual(fields["calibrated_confidence"], 0.82)
 
-    def test_submitted_with_order_id_but_not_filled_has_no_executed_action(self) -> None:
-        """Fix #3: submitted=True + order_id but fill_status='new' should NOT set executed_action."""
+    def test_submitted_with_order_id_accepted_sets_executed_action(self) -> None:
+        """Accepted/new/pending_new orders are real broker commitments — set executed_action."""
         fields = trade_observability_fields(
             decision_trace={
                 "llm_operations": [{"step": "portfolio_manager_synthesis"}],
@@ -60,11 +60,33 @@ class ExecutionObservabilityTests(unittest.TestCase):
             order_id="alpaca-123",
         )
 
-        self.assertNotIn("executed_action", fields)
+        self.assertEqual(fields["executed_action"], "BUY")
         self.assertEqual(fields["order_status"], "new")
 
+    def test_pending_new_enum_repr_is_normalized_and_recorded(self) -> None:
+        """Mixed-case 'OrderStatus.PENDING_NEW' must collapse to 'pending_new'."""
+        fields = trade_observability_fields(
+            decision_trace={
+                "llm_operations": [{"step": "portfolio_manager_synthesis"}],
+                "risk_gate": {"should_trade": True},
+                "execution": {
+                    "submitted": True,
+                    "action": "BUY",
+                    "order_id": "alpaca-enum-1",
+                    "status": "OrderStatus.PENDING_NEW",
+                    "fill_status": None,
+                    "error": None,
+                },
+            },
+            trade_action="BUY",
+            order_id="alpaca-enum-1",
+        )
+
+        self.assertEqual(fields["order_status"], "pending_new")
+        self.assertEqual(fields["executed_action"], "BUY")
+
     def test_submitted_and_filled_sets_executed_action(self) -> None:
-        """Fix #3: submitted=True + order_id + fill_status='filled' SHOULD set executed_action."""
+        """submitted=True + order_id + fill_status='filled' SHOULD set executed_action."""
         fields = trade_observability_fields(
             decision_trace={
                 "llm_operations": [{"step": "portfolio_manager_synthesis"}],
@@ -87,7 +109,7 @@ class ExecutionObservabilityTests(unittest.TestCase):
         self.assertEqual(fields["order_status"], "filled")
 
     def test_partially_filled_sets_executed_action(self) -> None:
-        """Fix #3: partially_filled also counts as a real execution."""
+        """partially_filled also counts as a real execution."""
         fields = trade_observability_fields(
             decision_trace={
                 "llm_operations": [{"step": "portfolio_manager_synthesis"}],
@@ -106,6 +128,29 @@ class ExecutionObservabilityTests(unittest.TestCase):
         )
 
         self.assertEqual(fields["executed_action"], "BUY")
+
+    def test_rejected_order_does_not_set_executed_action(self) -> None:
+        """Broker-rejected orders must NOT record executed_action."""
+        fields = trade_observability_fields(
+            decision_trace={
+                "llm_operations": [{"step": "portfolio_manager_synthesis"}],
+                "risk_gate": {"should_trade": True},
+                "execution": {
+                    "submitted": True,
+                    "action": "BUY",
+                    "order_id": "alpaca-rej",
+                    "status": "rejected",
+                    "fill_status": "rejected",
+                    "error": "buying power exceeded",
+                },
+            },
+            trade_action="BUY",
+            order_id="alpaca-rej",
+        )
+
+        self.assertNotIn("executed_action", fields)
+        self.assertEqual(fields["order_status"], "rejected")
+        self.assertIn("buying power", fields.get("execution_error", ""))
 
     def test_price_move_blocked_has_no_executed_action(self) -> None:
         """Fix #4: price-move gate blocks should record the error but no executed_action."""
