@@ -147,7 +147,8 @@ export interface DashboardStats {
 }
 
 export interface PortfolioPoint {
-  timestamp: string; // ISO string
+  t: number; // epoch milliseconds — used for the time-scale X-axis
+  timestamp: string; // ISO string — used for tooltips
   equity: number; // dollar value
 }
 

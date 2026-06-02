@@ -45,8 +45,8 @@ const CHART_TYPES: { value: ChartType; label: string }[] = [
 
 const fmt = (v: number) => `$${v.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
 
-function tickLabel(ts: string, period: PeriodKey) {
-  const date = new Date(ts);
+function tickLabel(value: number, period: PeriodKey) {
+  const date = new Date(value);
   if (period === 'D') return date.toLocaleTimeString('en-US', { hour: 'numeric' });
   if (period === '5Y') return date.toLocaleDateString('en-US', { year: 'numeric' });
   if (period === '6M' || period === 'Y')
@@ -61,7 +61,7 @@ function ChartTooltip({
 }: {
   active?: boolean;
   payload?: Array<{ value: number }>;
-  label?: string;
+  label?: number | string;
 }) {
   if (!active || !payload?.[0]) return null;
   return (
@@ -178,8 +178,11 @@ export default function PnLChart() {
   const chartMargin = { top: 12, right: 10, left: 0, bottom: 0 };
   const xAxis = (
     <XAxis
-      dataKey="timestamp"
-      tickFormatter={(value) => tickLabel(String(value), period)}
+      dataKey="t"
+      type="number"
+      scale="time"
+      domain={['dataMin', 'dataMax']}
+      tickFormatter={(value) => tickLabel(Number(value), period)}
       tick={{ fill: 'var(--dashboard-subtle)', fontSize: 12 }}
       axisLine={false}
       tickLine={false}

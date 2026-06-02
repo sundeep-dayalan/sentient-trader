@@ -89,24 +89,21 @@ LEGACY_TRADE_DETAIL_SELECT = (
     f"{TRADE_SUMMARY_SELECT}, reasoning, article_source, article_id, decision_trace"
 )
 TRACE_DETAIL_SELECT = "decision_trace, reasoning, article_source, article_id"
-TRADE_STATS_SELECT = (
-    "trade_action, pm_recommendation, executed_action, order_id, "
-    "risk_should_trade, decision_path, sentiment_score"
-)
-
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.I
 )
 TICKER_REGEX = re.compile(r"^[A-Z]{1,6}$")
 ALLOWED_ORDER_STATUSES = {"open", "closed", "all"}
+# Per Alpaca portfolio-history docs: timeframe must be 1D for periods > 30 days,
+# and intraday_reporting only applies to intraday timeframes (1Min/5Min/15Min/1H).
 RANGE_CONFIG = {
-    "D": {"period": "1D", "timeframe": "5Min"},
-    "W": {"period": "1W", "timeframe": "1H"},
-    "M": {"period": "1M", "timeframe": "1D"},
-    "3M": {"period": "3M", "timeframe": "1D"},
-    "6M": {"period": "6M", "timeframe": "1D"},
-    "Y": {"period": "1A", "timeframe": "1D"},
-    "5Y": {"period": "5A", "timeframe": "1D"},
+    "D": {"period": "1D", "timeframe": "5Min", "intraday": True},
+    "W": {"period": "1W", "timeframe": "1H", "intraday": True},
+    "M": {"period": "1M", "timeframe": "1D", "intraday": False},
+    "3M": {"period": "3M", "timeframe": "1D", "intraday": False},
+    "6M": {"period": "6M", "timeframe": "1D", "intraday": False},
+    "Y": {"period": "1A", "timeframe": "1D", "intraday": False},
+    "5Y": {"period": "5A", "timeframe": "1D", "intraday": False},
 }
 
 INJECTION_MARKERS = [
@@ -323,59 +320,6 @@ def number_value(value: Any) -> float | None:
 
 def string_value(value: Any) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
-
-
-def is_risk_gated(row: dict[str, Any]) -> bool:
-    if row.get("risk_should_trade") is False and not (
-        str(row.get("executed_action") or "").strip()
-        or str(row.get("order_id") or "").strip()
-    ):
-        return True
-    trace = row.get("decision_trace")
-    if isinstance(trace, dict):
-        risk_gate = trace.get("risk_gate")
-        if (
-            isinstance(risk_gate, dict)
-            and risk_gate.get("should_trade") is False
-            and not str(row.get("order_id") or "").strip()
-        ):
-            return True
-    return row.get("trade_action") == "HOLD"
-
-
-def compute_dashboard_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    sentiment_total = 0.0
-    buy_orders = sell_orders = risk_gated = executed = 0
-    pre_screened = full_debates = 0
-    for row in rows:
-        recommendation = row.get("pm_recommendation") or row.get("trade_action")
-        if recommendation == "BUY":
-            buy_orders += 1
-        if recommendation == "SELL":
-            sell_orders += 1
-        if is_risk_gated(row):
-            risk_gated += 1
-        if (
-            str(row.get("executed_action") or "").strip()
-            or str(row.get("order_id") or "").strip()
-        ):
-            executed += 1
-        if row.get("decision_path") == "pre_screen":
-            pre_screened += 1
-        if row.get("decision_path") == "full_debate":
-            full_debates += 1
-        sentiment_total += number_value(row.get("sentiment_score")) or 0
-
-    return {
-        "analyzed": len(rows),
-        "executed": executed,
-        "buyOrders": buy_orders,
-        "sellOrders": sell_orders,
-        "riskGated": risk_gated,
-        "preScreened": pre_screened,
-        "fullDebates": full_debates,
-        "avgSentiment": sentiment_total / len(rows) if rows else 0,
-    }
 
 
 def reasoning_from_trace(value: Any) -> str:
@@ -809,12 +753,31 @@ def trade_detail(trade_id: str) -> dict[str, Any]:
     }
 
 
+DASHBOARD_STAT_KEYS = (
+    "analyzed",
+    "executed",
+    "buyOrders",
+    "sellOrders",
+    "riskGated",
+    "preScreened",
+    "fullDebates",
+    "avgSentiment",
+)
+
+
 @app.get("/stats")
 def stats() -> dict[str, Any]:
-    result = (
-        get_supabase().table("trades").select(TRADE_STATS_SELECT).limit(10000).execute()
-    )
-    return {"stats": compute_dashboard_stats(result.data or []), "fetchedAt": now_iso()}
+    # Aggregate in the database (single atomic snapshot) instead of fetching rows
+    # and counting in Python. PostgREST caps row responses at db-max-rows and
+    # returns an arbitrary unordered subset, which made the old fetch-and-count
+    # approach jitter on every refresh and badly understate the true totals.
+    result = get_supabase().rpc("dashboard_stats").execute()
+    payload = result.data if isinstance(result.data, dict) else {}
+    stats_data = {
+        key: payload.get(key, 0) or (0.0 if key == "avgSentiment" else 0)
+        for key in DASHBOARD_STAT_KEYS
+    }
+    return {"stats": stats_data, "fetchedAt": now_iso()}
 
 
 
@@ -1168,7 +1131,10 @@ def portfolio(range: str = "D") -> dict[str, Any]:
     try:
         range_key = range if range in RANGE_CONFIG else "D"
         config = RANGE_CONFIG[range_key]
-        query = f"period={config['period']}&timeframe={config['timeframe']}&intraday_reporting=extended_hours"
+        query = f"period={config['period']}&timeframe={config['timeframe']}"
+        if config["intraday"]:
+            # intraday_reporting only applies to intraday timeframes per Alpaca docs
+            query += "&intraday_reporting=extended_hours"
         data, account = alpaca_fetch(
             f"/v2/account/portfolio/history?{query}"
         ), alpaca_fetch("/v2/account")
@@ -1186,38 +1152,40 @@ def portfolio(range: str = "D") -> dict[str, Any]:
             else []
         )
 
-        history = []
+        # Build points keyed by epoch-ms so the series is strictly sorted and free
+        # of duplicate timestamps regardless of what Alpaca returns. The numeric
+        # `t` lets the frontend use a real time-scale axis (proportional spacing,
+        # unique tick labels) instead of treating timestamps as categories.
+        points: dict[int, dict[str, Any]] = {}
         for index, ts in enumerate(timestamps):
+            ts_value = number_value(ts)
             equity = number_value(equities[index] if index < len(equities) else None)
-            if equity is not None:
-                history.append(
-                    {
-                        "timestamp": datetime.fromtimestamp(ts, timezone.utc)
-                        .isoformat()
-                        .replace("+00:00", "Z"),
-                        "equity": equity,
-                    }
-                )
+            if ts_value is None or equity is None:
+                continue
+            t_ms = int(ts_value * 1000)
+            points[t_ms] = {
+                "t": t_ms,
+                "timestamp": datetime.fromtimestamp(ts_value, timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "equity": equity,
+            }
+        history = [points[key] for key in sorted(points)]
 
         live_equity = number_value(
             account.get("portfolio_value") or account.get("equity")
         )
         latest = history[-1] if history else None
         if live_equity and live_equity > 0:
-            latest_age_ms = (
-                time.time() * 1000
-                - datetime.fromisoformat(
-                    latest["timestamp"].replace("Z", "+00:00")
-                ).timestamp()
-                * 1000
-                if latest
-                else float("inf")
-            )
+            now_ms = int(time.time() * 1000)
+            latest_age_ms = now_ms - latest["t"] if latest else float("inf")
             value_changed = (
                 abs(latest["equity"] - live_equity) >= 0.005 if latest else True
             )
             if not latest or latest_age_ms > 45_000 or value_changed:
-                history.append({"timestamp": now_iso(), "equity": live_equity})
+                history.append(
+                    {"t": now_ms, "timestamp": now_iso(), "equity": live_equity}
+                )
 
         base_value = number_value(data.get("base_value"))
         raw_profit_loss = number_value(profit_loss[-1] if profit_loss else None)
