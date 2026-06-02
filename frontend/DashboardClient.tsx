@@ -14,7 +14,6 @@ import PipelinePage from '@/components/PipelinePage';
 import SettingsPage from '@/components/SettingsPage';
 import { useAuth } from '@/components/AuthProvider';
 import { ApiError, apiFetch } from '@/lib/api';
-import { isRiskGated } from '@/lib/dashboardStats';
 import { DashboardStats, Trade } from '@/lib/types';
 import { unescapeHtml } from '@/lib/news';
 
@@ -651,23 +650,6 @@ function AlpacaBalanceCard({
   );
 }
 
-function addTradeToStats(stats: DashboardStats, trade: Trade): DashboardStats {
-  const analyzed = stats.analyzed + 1;
-  const sentimentTotal = stats.avgSentiment * stats.analyzed + trade.sentiment_score;
-  const recommendation = trade.pm_recommendation ?? trade.trade_action;
-
-  return {
-    analyzed,
-    executed: stats.executed + (trade.executed_action || trade.order_id?.trim() ? 1 : 0),
-    buyOrders: stats.buyOrders + (recommendation === 'BUY' ? 1 : 0),
-    sellOrders: stats.sellOrders + (recommendation === 'SELL' ? 1 : 0),
-    riskGated: stats.riskGated + (isRiskGated(trade) ? 1 : 0),
-    preScreened: (stats.preScreened ?? 0) + (trade.decision_path === 'pre_screen' ? 1 : 0),
-    fullDebates: (stats.fullDebates ?? 0) + (trade.decision_path === 'full_debate' ? 1 : 0),
-    avgSentiment: sentimentTotal / analyzed,
-  };
-}
-
 const NAV_ICONS: Record<string, React.ReactNode> = {
   Dashboard: (
     <svg
@@ -881,8 +863,10 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   }, [loadAlpacaSummary]);
 
   useEffect(() => {
-    if (!dashboardStats) loadDashboardStats();
-  }, [dashboardStats, loadDashboardStats]);
+    loadDashboardStats();
+    const interval = setInterval(loadDashboardStats, 15_000);
+    return () => clearInterval(interval);
+  }, [loadDashboardStats]);
 
   const latestTrade = trades[0] ?? null;
   const lastSignalTime = latestTrade
@@ -912,12 +896,10 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
     setTrades((prev) => [...uniqueTrades, ...prev]);
     setSelectedTrade((current) => current ?? uniqueTrades[0]);
-    setDashboardStats((current) =>
-      uniqueTrades.reduce(
-        (nextStats, trade) => (nextStats ? addTradeToStats(nextStats, trade) : nextStats),
-        current,
-      ),
-    );
+    // Dashboard counters come exclusively from the /stats aggregate (the single
+    // source of truth, re-polled below). Deriving them from the trade feed here
+    // double-counted rows already included in the snapshot and made the cards
+    // jitter on every refresh.
     setNewIds((prev) => {
       const next = new Set(prev);
       uniqueTrades.forEach((trade) => next.add(trade.id));
