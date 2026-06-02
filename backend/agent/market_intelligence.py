@@ -165,6 +165,148 @@ def format_technical_prompt_block(tech: dict[str, Any]) -> str:
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
+# ── Price-Confirmation Co-Signal ─────────────────────────────────────────────
+
+
+def evaluate_price_confirmation(
+    *,
+    action: str,
+    closes: list[float],
+    volumes: list[float],
+    anchor_index: int,
+    min_move_pct: float,
+    max_move_pct: float,
+    min_volume_ratio: float,
+) -> dict[str, Any]:
+    """
+    Decide whether the intraday tape confirms a news-driven trade direction.
+
+    The committee and risk gate have already approved a BUY/SELL from the
+    headline. This is the final market-structure check: did price actually react
+    in the trade's direction, on real volume, in the minutes after the catalyst —
+    without already overextending past the chase threshold?
+
+    Confirmation "band": the in-direction move must be at least `min_move_pct`
+    (the tape believes the news) but no more than `max_move_pct` (we are not
+    chasing a move that already happened — the execution-time price-move gate
+    owns that upper bound too; we mirror it here so the band is explicit). Volume
+    must be elevated versus the pre-news baseline so the move reflects
+    participation rather than a single print.
+
+    `anchor_index` is the index of the first bar at/after the news timestamp;
+    bars before it form the pre-news volume baseline, bars from it onward are the
+    post-news reaction. Pure and side-effect free for unit testing. `confirmed`
+    is the gate decision; the remaining fields are recorded in the decision trace
+    for auditing and threshold tuning.
+    """
+    side = "BUY" if str(action).upper() == "BUY" else "SELL"
+    result: dict[str, Any] = {
+        "action": side,
+        "min_move_pct": min_move_pct,
+        "max_move_pct": max_move_pct,
+        "min_volume_ratio": min_volume_ratio,
+        "bars_total": len(closes),
+        "bars_pre_news": max(0, anchor_index),
+        "bars_post_news": max(0, len(closes) - anchor_index),
+        "data_available": False,
+        "confirmed": False,
+        "reaction_pct": None,
+        "directional_move_pct": None,
+        "volume_ratio": None,
+        "checks": {},
+        "reason": "",
+    }
+
+    # Need a valid anchor and at least one bar after the reference to measure a
+    # reaction.
+    if (
+        not closes
+        or anchor_index < 0
+        or anchor_index >= len(closes)
+        or len(closes) < 2
+    ):
+        result["reason"] = "Insufficient intraday bars to measure a post-news reaction."
+        return result
+
+    # Reference price = the close just BEFORE the news (anchor_index - 1) so the
+    # reaction captures the full move since the catalyst rather than starting
+    # mid-move. With no preceding bar we fall back to the first available close
+    # (the volume baseline will then be absent).
+    ref_index = anchor_index - 1 if anchor_index >= 1 else 0
+    if ref_index >= len(closes) - 1:
+        result["reason"] = "No post-news bar after the reference price."
+        return result
+
+    anchor_price = closes[ref_index]
+    current_price = closes[-1]
+    if not anchor_price or anchor_price <= 0:
+        result["reason"] = "Invalid anchor price; cannot compute reaction."
+        return result
+
+    result["data_available"] = True
+    result["anchor_price"] = round(anchor_price, 4)
+    result["current_price"] = round(current_price, 4)
+
+    reaction_pct = (current_price - anchor_price) / anchor_price
+    directional = reaction_pct if side == "BUY" else -reaction_pct
+    result["reaction_pct"] = round(reaction_pct, 5)
+    result["directional_move_pct"] = round(directional, 5)
+
+    # Volume confirmation: post-news participation vs the pre-news baseline.
+    volume_ratio: Optional[float] = None
+    pre = [v for v in volumes[:anchor_index] if v is not None]
+    post = [v for v in volumes[anchor_index:] if v is not None]
+    if pre and post:
+        pre_avg = sum(pre) / len(pre)
+        post_avg = sum(post) / len(post)
+        if pre_avg > 0:
+            volume_ratio = round(post_avg / pre_avg, 3)
+    result["volume_ratio"] = volume_ratio
+
+    direction_ok = directional >= min_move_pct
+    not_overextended = directional <= max_move_pct
+    if min_volume_ratio <= 0:
+        volume_ok = True
+    elif volume_ratio is None:
+        volume_ok = False
+    else:
+        volume_ok = volume_ratio >= min_volume_ratio
+
+    result["checks"] = {
+        "direction_ok": direction_ok,
+        "not_overextended": not_overextended,
+        "volume_ok": volume_ok,
+    }
+    confirmed = direction_ok and not_overextended and volume_ok
+    result["confirmed"] = confirmed
+
+    if confirmed:
+        vol_text = f"{volume_ratio:.2f}x" if volume_ratio is not None else "n/a"
+        result["reason"] = (
+            f"Tape confirms {side}: price moved {directional:+.2%} in-direction on "
+            f"{vol_text} volume (band {min_move_pct:.2%}-{max_move_pct:.2%})."
+        )
+    else:
+        fails: list[str] = []
+        if not direction_ok:
+            fails.append(
+                f"in-direction move {directional:+.2%} < {min_move_pct:.2%} minimum"
+            )
+        if not not_overextended:
+            fails.append(
+                f"move {directional:+.2%} exceeds {max_move_pct:.2%} (already ran)"
+            )
+        if not volume_ok:
+            if volume_ratio is None:
+                fails.append("no volume baseline to confirm participation")
+            else:
+                fails.append(
+                    f"volume {volume_ratio:.2f}x < {min_volume_ratio:.2f}x minimum"
+                )
+        result["reason"] = f"Tape did not confirm {side}: " + "; ".join(fails) + "."
+    return result
+
+
 # ── Signal Momentum Aggregator ───────────────────────────────────────────────
 
 

@@ -75,6 +75,13 @@ def _decision_path(decision_trace: Optional[dict], trade_action: str) -> str:
     if isinstance(pm, dict) and pm.get("model") == "deterministic-pre-screen":
         return "pre_screen"
 
+    # Approved by the committee/risk gate but blocked because the intraday tape
+    # did not confirm the direction. `passed is False` means a real block (a
+    # lenient missing-data pass-through keeps passed True).
+    pc = decision_trace.get("price_confirmation")
+    if isinstance(pc, dict) and pc.get("passed") is False:
+        return "unconfirmed"
+
     llm_operations = decision_trace.get("llm_operations")
     if isinstance(llm_operations, list) and llm_operations:
         return "full_debate"

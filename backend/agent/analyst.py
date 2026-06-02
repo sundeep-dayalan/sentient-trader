@@ -52,7 +52,7 @@ import hashlib
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, TypedDict
 
 from alpaca.data import StockHistoricalDataClient
@@ -121,6 +121,7 @@ class AgentState(TypedDict):
     analysis: Optional[TradeAnalysis]  # assembled after synthesis
     should_trade: bool
     risk_gate: Optional[dict[str, Any]]
+    price_confirmation: Optional[dict[str, Any]]  # intraday tape-confirmation verdict
     execution_plan: Optional[dict[str, Any]]
     trade_order_id: Optional[str]
     execution: Optional[dict[str, Any]]
@@ -1533,6 +1534,167 @@ def _make_assess_risk_node():
     return assess_risk
 
 
+def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO-8601 string (with 'Z' or offset) to an aware UTC datetime."""
+    if not value:
+        return None
+    try:
+        text = value.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _make_confirm_signal_node():
+    """
+    Price-confirmation co-signal (config-gated).
+
+    Runs only for signals the committee + risk gate already approved. Fetches
+    1-minute bars around the news timestamp and requires the intraday tape to
+    confirm the trade direction on elevated volume before the order is allowed
+    through. Complements the execution-time price-move (anti-chase) gate: this
+    sets the LOWER bound of the entry band (tape must react), the price-move gate
+    enforces the UPPER bound (don't chase a move that already happened).
+
+    Disabled → pure pass-through: no API calls, no added latency.
+
+    Missing-data policy is deliberate: free IEX minute bars are sparse on the
+    small-caps that dominate this flow, so by default we FAIL OPEN (allow the
+    trade, degrade to current behavior, logged). CONFIRM_REQUIRE_DATA flips this
+    to strict (block when the tape can't be verified).
+    """
+    try:
+        _conf_data_client = StockHistoricalDataClient(
+            api_key=os.environ["ALPACA_API_KEY"],
+            secret_key=os.environ["ALPACA_SECRET_KEY"],
+        )
+    except Exception as exc:
+        log.warning("Confirmation data client init failed: %s", exc)
+        _conf_data_client = None
+
+    def _fetch_minute_bars(ticker: str, start: datetime):
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+
+        bars = _conf_data_client.get_stock_bars(
+            StockBarsRequest(
+                symbol_or_symbols=ticker,
+                timeframe=TimeFrame.Minute,
+                start=start,
+            )
+        )
+        return bars.get(ticker) if bars else None
+
+    def confirm_signal(state: AgentState) -> dict:
+        # Disabled → pass-through; should_trade stays as assess_risk left it.
+        if not config.PRICE_CONFIRMATION_ENABLED:
+            return {}
+
+        news = state["news"]
+        action = state["analysis"].action
+        rg = state.get("risk_gate") or {}
+        original_reason = str(rg.get("reason") or "")
+
+        def _block(pc: dict[str, Any]) -> dict:
+            return {
+                "should_trade": False,
+                "price_confirmation": pc,
+                "risk_gate": {
+                    **rg,
+                    "should_trade": False,
+                    "reason": pc["reason"],
+                    "pre_confirmation_reason": original_reason,
+                    "price_confirmation": pc,
+                },
+            }
+
+        def _handle_insufficient(detail: str) -> dict:
+            pc = {
+                "enabled": True,
+                "data_available": False,
+                "confirmed": False,
+                "passed": not config.CONFIRM_REQUIRE_DATA,
+                "reason": detail,
+            }
+            if config.CONFIRM_REQUIRE_DATA:
+                pc["reason"] = f"Price-confirmation gate (strict): {detail}"
+                log.info("Confirmation [%s]: BLOCK (strict, no data) — %s", news.ticker, detail)
+                return _block(pc)
+            log.info("Confirmation [%s]: PASS (lenient, no data) — %s", news.ticker, detail)
+            return {"price_confirmation": pc}
+
+        if _conf_data_client is None:
+            return _handle_insufficient("intraday data client unavailable")
+
+        published = _parse_iso_timestamp(news.published_at) or datetime.now(timezone.utc)
+        start = published - timedelta(minutes=config.CONFIRM_LOOKBACK_MINUTES)
+
+        try:
+            bar_list = _fetch_minute_bars(news.ticker, start)
+        except Exception as exc:
+            log.debug("Confirmation bar fetch failed for %s: %s", news.ticker, exc)
+            return _handle_insufficient(f"intraday bar fetch failed ({type(exc).__name__})")
+
+        if not bar_list or len(bar_list) < 3:
+            return _handle_insufficient("insufficient intraday minute bars")
+
+        closes = [float(b.close) for b in bar_list]
+        volumes = [float(b.volume) for b in bar_list]
+
+        # The first bar at/after the news timestamp is the reaction anchor;
+        # earlier bars form the pre-news volume baseline.
+        anchor_index: Optional[int] = None
+        for i, bar in enumerate(bar_list):
+            ts = getattr(bar, "timestamp", None)
+            if ts is not None and ts >= published:
+                anchor_index = i
+                break
+        if anchor_index is None:
+            return _handle_insufficient("no intraday bars after the news timestamp")
+        if anchor_index < 1:
+            # No pre-news bars → no volume baseline to confirm participation.
+            # Treat as missing data (fail-open by default) rather than a hard
+            # reject, so a late-starting bar window doesn't silently block.
+            return _handle_insufficient("no pre-news baseline bars before the news timestamp")
+
+        from market_intelligence import evaluate_price_confirmation
+
+        verdict = evaluate_price_confirmation(
+            action=action,
+            closes=closes,
+            volumes=volumes,
+            anchor_index=anchor_index,
+            min_move_pct=config.CONFIRM_MIN_MOVE_PCT,
+            max_move_pct=config.CONFIRM_MAX_MOVE_PCT,
+            min_volume_ratio=config.CONFIRM_MIN_VOLUME_RATIO,
+        )
+        verdict["enabled"] = True
+        verdict["passed"] = verdict["confirmed"]
+
+        log.info(
+            "Confirmation [%s]: %s action=%s reaction=%s in_dir=%s vol=%s — %s",
+            news.ticker,
+            "CONFIRMED" if verdict["confirmed"] else "REJECTED",
+            action,
+            verdict.get("reaction_pct"),
+            verdict.get("directional_move_pct"),
+            verdict.get("volume_ratio"),
+            verdict["reason"],
+        )
+
+        if verdict["confirmed"]:
+            return {"price_confirmation": verdict}
+        verdict["reason"] = f"Price-confirmation gate: {verdict['reason']}"
+        return _block(verdict)
+
+    return confirm_signal
+
+
 def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
     """Build a data-client once for the price-move gate re-check."""
     try:
@@ -1909,6 +2071,7 @@ def _build_decision_trace(state: AgentState) -> dict[str, Any]:
         "committee_debate": committee,
         "portfolio_manager_decision": portfolio_manager_decision,
         "risk_gate": state.get("risk_gate"),
+        "price_confirmation": state.get("price_confirmation"),
         "execution": execution,
         "error": state.get("error"),
     }
@@ -1986,6 +2149,10 @@ def _route_after_pre_screen(state: AgentState) -> str:
 
 
 def _route_after_risk_assessment(state: AgentState) -> str:
+    return "confirm_signal" if state["should_trade"] else "log_result"
+
+
+def _route_after_confirmation(state: AgentState) -> str:
     return "execute_trade" if state["should_trade"] else "log_result"
 
 
@@ -2016,6 +2183,7 @@ def build_agent_graph(
     graph.add_node("risk_analyst", _make_risk_analyst_node(router, llm_client))
     graph.add_node("synthesizer", _make_synthesizer_node(router, llm_client))
     graph.add_node("assess_risk", _make_assess_risk_node())
+    graph.add_node("confirm_signal", _make_confirm_signal_node())
     graph.add_node("execute_trade", _make_execute_trade_node(trader, cache))
     graph.add_node("log_result", _make_log_result_node(db, cache))
 
@@ -2039,9 +2207,16 @@ def build_agent_graph(
     graph.add_edge("risk_analyst", "synthesizer")
     graph.add_edge("synthesizer", "assess_risk")
 
+    # assess_risk → confirm_signal (when approved) → execute_trade.
+    # confirm_signal is a pass-through when PRICE_CONFIRMATION_ENABLED is off.
     graph.add_conditional_edges(
         "assess_risk",
         _route_after_risk_assessment,
+        {"confirm_signal": "confirm_signal", "log_result": "log_result"},
+    )
+    graph.add_conditional_edges(
+        "confirm_signal",
+        _route_after_confirmation,
         {"execute_trade": "execute_trade", "log_result": "log_result"},
     )
 

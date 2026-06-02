@@ -154,6 +154,18 @@ STRUCTURED_SYNTHESIS_ENABLED: bool = False
 PRICE_MOVE_GATE_ENABLED: bool = False
 MAX_PRICE_MOVE_PCT: float = 0.03  # 3% default — block if price moved >3%
 
+# Price-confirmation co-signal: after the committee approves a BUY/SELL, require
+# the intraday tape to confirm the direction on elevated volume before sending
+# the order. Sets the LOWER bound of the entry band (tape must react); the
+# price-move gate above enforces the UPPER (anti-chase) bound. Disabled →
+# pure pass-through (no API calls, no added latency).
+PRICE_CONFIRMATION_ENABLED: bool = False
+CONFIRM_MIN_MOVE_PCT: float = 0.002        # ≥0.2% in-direction reaction required
+CONFIRM_MAX_MOVE_PCT: float = 0.03         # don't confirm an already-overextended move
+CONFIRM_MIN_VOLUME_RATIO: float = 1.2      # post-news vol ≥1.2× pre-news baseline
+CONFIRM_LOOKBACK_MINUTES: int = 30         # pre-news baseline window (minutes)
+CONFIRM_REQUIRE_DATA: bool = False         # strict: block when intraday data is missing
+
 CONFIG_FINGERPRINT = ""
 LAST_CONFIG_REFRESH_EPOCH = 0.0
 
@@ -201,6 +213,8 @@ def reload_from_supabase() -> bool:
     global USE_LIMIT_ORDERS, LIMIT_ORDER_BUFFER_PCT
     global MARKET_HOURS_AWARENESS_ENABLED, STRUCTURED_SYNTHESIS_ENABLED
     global PRICE_MOVE_GATE_ENABLED, MAX_PRICE_MOVE_PCT
+    global PRICE_CONFIRMATION_ENABLED, CONFIRM_MIN_MOVE_PCT, CONFIRM_MAX_MOVE_PCT
+    global CONFIRM_MIN_VOLUME_RATIO, CONFIRM_LOOKBACK_MINUTES, CONFIRM_REQUIRE_DATA
 
     from supabase import create_client
     from supabase.client import ClientOptions
@@ -261,6 +275,12 @@ def reload_from_supabase() -> bool:
     STRUCTURED_SYNTHESIS_ENABLED = _safe_bool(enhanced.get("structured_synthesis"), False)
     PRICE_MOVE_GATE_ENABLED = _safe_bool(enhanced.get("price_move_gate"), False)
     MAX_PRICE_MOVE_PCT = _safe_float(enhanced.get("max_price_move_pct"), 0.03)
+    PRICE_CONFIRMATION_ENABLED = _safe_bool(enhanced.get("price_confirmation"), False)
+    CONFIRM_MIN_MOVE_PCT = _safe_float(enhanced.get("confirm_min_move_pct"), 0.002)
+    CONFIRM_MAX_MOVE_PCT = _safe_float(enhanced.get("confirm_max_move_pct"), 0.03)
+    CONFIRM_MIN_VOLUME_RATIO = _safe_float(enhanced.get("confirm_min_volume_ratio"), 1.2)
+    CONFIRM_LOOKBACK_MINUTES = _safe_int(enhanced.get("confirm_lookback_minutes"), 30)
+    CONFIRM_REQUIRE_DATA = _safe_bool(enhanced.get("confirm_require_data"), False)
 
     CONFIG_FINGERPRINT = fingerprint
     LAST_CONFIG_REFRESH_EPOCH = time.time()
@@ -288,6 +308,7 @@ def reload_from_supabase() -> bool:
             ("market_hours", MARKET_HOURS_AWARENESS_ENABLED),
             ("structured_synth", STRUCTURED_SYNTHESIS_ENABLED),
             ("price_move_gate", PRICE_MOVE_GATE_ENABLED),
+            ("price_confirmation", PRICE_CONFIRMATION_ENABLED),
         ] if enabled]
         if active_features:
             log.info("Enhanced features active: %s", ", ".join(active_features))
