@@ -8,12 +8,15 @@ from outcome_labeler import (
     alpaca_bar_error_message,
     build_no_bars_record,
     build_outcome_record,
+    build_pending_record,
+    first_bar_at_or_after,
     first_close_at_or_after,
     is_supported_alpaca_stock_symbol,
     label_status_for_record,
     market_close_for_signal,
     maybe_single_data,
     next_attempt_count,
+    outcome_label_status,
     return_pct,
     should_skip_existing,
 )
@@ -108,6 +111,76 @@ class OutcomeLabelerTests(unittest.TestCase):
         self.assertIn("No Alpaca bars", record["label_error"])
         self.assertTrue(should_skip_existing(record, force=False))
         self.assertFalse(should_skip_existing(record, force=True))
+
+    def test_first_bar_at_or_after_returns_bar(self) -> None:
+        bars = [
+            Bar(datetime(2026, 5, 26, 13, 31, tzinfo=timezone.utc), 101.0),
+            Bar(datetime(2026, 5, 26, 13, 30, tzinfo=timezone.utc), 100.0),
+        ]
+
+        bar = first_bar_at_or_after(
+            bars, datetime(2026, 5, 26, 13, 30, 30, tzinfo=timezone.utc)
+        )
+
+        self.assertIsNotNone(bar)
+        self.assertEqual(bar.close, 101.0)
+
+    def test_after_close_signal_anchors_on_next_session(self) -> None:
+        # Signal logged at 17:00 ET (after the close): forward windows must
+        # anchor on the next session's opening bar, not freeze as NO_BARS.
+        signal_at = datetime(2026, 5, 26, 21, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 5, 28, 0, 0, tzinfo=timezone.utc)
+        bars = [
+            Bar(datetime(2026, 5, 27, 13, 30, tzinfo=timezone.utc), 101.0),  # open
+            Bar(datetime(2026, 5, 27, 13, 45, tzinfo=timezone.utc), 102.0),  # +15m
+            Bar(datetime(2026, 5, 27, 14, 30, tzinfo=timezone.utc), 103.0),  # +1h
+            Bar(datetime(2026, 5, 27, 20, 0, tzinfo=timezone.utc), 105.0),  # close
+        ]
+
+        record = build_outcome_record(
+            trade_id="trade-1",
+            ticker="AAPL",
+            signal_at=signal_at,
+            signal_price=100.0,
+            bars=bars,
+            now=now,
+        )
+
+        self.assertEqual(record["price_15m"], 102.0)
+        self.assertEqual(record["return_15m"], 0.02)
+        self.assertEqual(record["return_1h"], 0.03)
+        self.assertEqual(record["return_eod"], 0.05)
+        self.assertEqual(record["label_status"], "LABELED")
+
+    def test_pending_record_is_retryable(self) -> None:
+        now = datetime(2026, 5, 26, 11, 0, tzinfo=timezone.utc)  # pre-market
+        record = build_pending_record(
+            trade_id="trade-1",
+            ticker="AAPL",
+            signal_at=datetime(2026, 5, 26, 10, 0, tzinfo=timezone.utc),
+            signal_price=None,
+            now=now,
+            note="Awaiting market-data bars for the signal's trading session.",
+        )
+
+        self.assertEqual(record["label_status"], "PARTIAL")
+        self.assertIsNone(record["return_15m"])
+        self.assertIn("Awaiting", record["label_error"])
+        # PARTIAL is non-terminal, so the row is retried on later runs.
+        self.assertFalse(should_skip_existing(record, force=False))
+
+    def test_outcome_label_status_pending_before_eod(self) -> None:
+        now = datetime(2026, 5, 26, 14, 30, tzinfo=timezone.utc)
+        status = outcome_label_status(
+            target_eod=datetime(2026, 5, 26, 20, 0, tzinfo=timezone.utc),
+            now=now,
+            return_eod=None,
+            return_15m=None,
+            return_1h=None,
+            signal_price=None,
+        )
+
+        self.assertEqual(status, "PARTIAL")
 
     def test_attempt_count_increments_existing_rows(self) -> None:
         self.assertEqual(next_attempt_count(None), 1)
