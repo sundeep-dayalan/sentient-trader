@@ -42,6 +42,17 @@ function errorMessage(payload: unknown, fallback: string): string {
   ) {
     return payload.error;
   }
+  if (payload && typeof payload === 'object' && 'error' in payload) {
+    const error = payload.error;
+    if (
+      error &&
+      typeof error === 'object' &&
+      'message' in error &&
+      typeof error.message === 'string'
+    ) {
+      return error.message;
+    }
+  }
   return fallback;
 }
 

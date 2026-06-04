@@ -18,12 +18,17 @@ import html
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 
 import httpx
 from dotenv import load_dotenv, find_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from supabase import create_client
 from supabase.client import ClientOptions
 
@@ -46,23 +51,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 log = logging.getLogger("backend.api")
-
-app = FastAPI(title="Sentient Trader Backend API")
-
-cors_origins = [
-    origin.strip()
-    for origin in os.environ.get(
-        "CORS_ORIGINS", os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
-    ).split(",")
-    if origin.strip()
-]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins or ["http://localhost:3000"],
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
-)
 
 ServiceStatus = Literal["ok", "stale", "error", "unknown"]
 UserTier = Literal["anonymous", "social", "super"]
@@ -155,6 +143,161 @@ FAMILY_HINTS = [
 
 _redis_client = None
 _supabase_client = None
+
+
+def env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def env_limit_list(name: str, default: str) -> list[str]:
+    raw = os.environ.get(name, default)
+    return [part.strip() for part in re.split(r"[,;]", raw) if part.strip()]
+
+
+def rate_limit_storage_uri() -> str:
+    explicit = os.environ.get("API_RATE_LIMIT_STORAGE_URI")
+    if explicit:
+        return explicit
+    if not os.environ.get("REDIS_HOST"):
+        return "memory://"
+
+    username = quote(os.environ.get("REDIS_USERNAME") or "")
+    password = quote(os.environ.get("REDIS_PASSWORD") or "")
+    auth = ""
+    if username and password:
+        auth = f"{username}:{password}@"
+    elif password:
+        auth = f":{password}@"
+    host = os.environ.get("REDIS_HOST", "127.0.0.1")
+    port = os.environ.get("REDIS_PORT", "6379")
+    db = os.environ.get("REDIS_DB", "0")
+    return f"redis://{auth}{host}:{port}/{db}"
+
+
+def client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip()
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    return request.client.host if request.client else "unknown"
+
+
+def rate_limit_key(request: Request) -> str:
+    token = auth_token(request.headers.get("authorization"))
+    if token:
+        salt = (
+            os.environ.get("API_RATE_LIMIT_KEY_SALT")
+            or os.environ.get("SUPABASE_JWT_SECRET")
+            or "sentient-trader-rate-limit"
+        ).encode()
+        digest = hmac.new(salt, token.encode(), "sha256").hexdigest()[:32]
+        return f"user:{digest}"
+    return f"ip:{client_ip(request)}"
+
+
+def retry_after_seconds(exc: RateLimitExceeded) -> int | None:
+    retry_after = getattr(exc, "retry_after", None)
+    if retry_after is None:
+        return None
+    try:
+        parsed = int(float(retry_after))
+    except (TypeError, ValueError):
+        return None
+    return max(parsed, 0)
+
+
+def rate_limit_window(request: Request) -> dict[str, int] | None:
+    view_rate_limit = getattr(request.state, "view_rate_limit", None)
+    if view_rate_limit is None:
+        return None
+    try:
+        reset_at, remaining = request.app.state.limiter.limiter.get_window_stats(
+            view_rate_limit[0], *view_rate_limit[1]
+        )
+        retry_after = max(int(1 + reset_at - time.time()), 0)
+        return {
+            "retryAfterSeconds": retry_after,
+            "remaining": int(remaining),
+            "resetAt": int(reset_at),
+        }
+    except Exception:
+        log.debug("Could not read SlowAPI window stats", exc_info=True)
+        return None
+
+
+def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    window = rate_limit_window(request)
+    retry_after = window["retryAfterSeconds"] if window else retry_after_seconds(exc)
+    detail = str(getattr(exc, "detail", "") or "global limit")
+    payload: dict[str, Any] = {
+        "error": {
+            "code": "RATE_LIMITED",
+            "message": "Too many requests. Please slow down and retry shortly.",
+            "status": 429,
+            "limit": detail,
+            "retryAfterSeconds": retry_after,
+            "rateLimit": window,
+            "requestId": request.headers.get("x-request-id"),
+        }
+    }
+    headers = {"Retry-After": str(retry_after)} if retry_after is not None else {}
+    response = JSONResponse(status_code=429, content=payload, headers=headers)
+
+    try:
+        view_rate_limit = getattr(request.state, "view_rate_limit", None)
+        if view_rate_limit is not None:
+            response = request.app.state.limiter._inject_headers(response, view_rate_limit)
+    except Exception:
+        log.debug("Could not inject SlowAPI rate-limit headers", exc_info=True)
+
+    log.warning(
+        "Rate limit exceeded path=%s method=%s client=%s limit=%s",
+        request.url.path,
+        request.method,
+        rate_limit_key(request),
+        detail,
+    )
+    return response
+
+
+app = FastAPI(title="Sentient Trader Backend API")
+
+api_rate_limit_enabled = env_bool("API_RATE_LIMIT_ENABLED", True)
+limiter = Limiter(
+    key_func=rate_limit_key,
+    default_limits=env_limit_list("API_DEFAULT_RATE_LIMITS", "120/minute"),
+    application_limits=env_limit_list("API_GLOBAL_RATE_LIMITS", "300/minute,5000/hour"),
+    storage_uri=rate_limit_storage_uri(),
+    headers_enabled=True,
+    strategy=os.environ.get("API_RATE_LIMIT_STRATEGY", "fixed-window"),
+    enabled=api_rate_limit_enabled,
+    swallow_errors=True,
+    in_memory_fallback=env_limit_list("API_RATE_LIMIT_FALLBACK_LIMITS", "120/minute"),
+    in_memory_fallback_enabled=True,
+)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+cors_origins = [
+    origin.strip()
+    for origin in os.environ.get(
+        "CORS_ORIGINS", os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
+    ).split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins or ["http://localhost:3000"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 
 
 class UserInfo(BaseModel):

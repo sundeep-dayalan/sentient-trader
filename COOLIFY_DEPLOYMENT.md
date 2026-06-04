@@ -118,6 +118,16 @@ REDIS_PASSWORD=
 WORKER_HEALTH_KEY=sentient:workers:health
 AGENT_WORKER_NAME=agent
 
+API_RATE_LIMIT_ENABLED=true
+API_DEFAULT_RATE_LIMITS=120/minute
+API_GLOBAL_RATE_LIMITS=300/minute,5000/hour
+API_RATE_LIMIT_FALLBACK_LIMITS=120/minute
+API_RATE_LIMIT_STRATEGY=fixed-window
+# Optional: leave blank to use REDIS_* storage automatically.
+API_RATE_LIMIT_STORAGE_URI=
+# Optional but recommended: stable random secret for hashing bearer tokens.
+API_RATE_LIMIT_KEY_SALT=<long-random-secret>
+
 SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_ANON_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...

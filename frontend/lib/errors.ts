@@ -34,6 +34,15 @@ function statusFromError(error: unknown, message: string): number | undefined {
   return statusFromMessage(message);
 }
 
+function errorCode(error: unknown): string | null {
+  if (!(error instanceof ApiError)) return null;
+  const payload = error.payload;
+  if (!payload || typeof payload !== 'object' || !('error' in payload)) return null;
+  const body = payload.error;
+  if (!body || typeof body !== 'object' || !('code' in body)) return null;
+  return typeof body.code === 'string' ? body.code : null;
+}
+
 function contextCopy(context: ErrorContext) {
   switch (context) {
     case 'alpaca-summary':
@@ -69,6 +78,17 @@ export function formatAlpacaError(error: unknown, context: ErrorContext = 'gener
   const lower = raw.toLowerCase();
   const status = statusFromError(error, raw);
   const detail = status ? `HTTP ${status}` : undefined;
+  const code = errorCode(error);
+
+  if (code === 'RATE_LIMITED') {
+    return {
+      title: 'Request rate limit reached',
+      message: 'The app is protecting the API from too many requests. Please wait briefly and retry.',
+      tone: 'warning',
+      detail,
+      status,
+    };
+  }
 
   if (status === 429 || lower.includes('rate limit') || lower.includes('too many requests')) {
     return {
