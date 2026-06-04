@@ -8,7 +8,9 @@ All database, Alpaca, LLM-provider, Redis, and admin operations live here.
 
 from __future__ import annotations
 
+import base64
 import hmac
+import json
 import logging
 import os
 import re
@@ -177,27 +179,69 @@ def rate_limit_storage_uri() -> str:
     return f"redis://{auth}{host}:{port}/{db}"
 
 
+def normalized_client_ip(value: str) -> str:
+    ip = value.strip().lower()
+    if ip in {"127.0.0.1", "::1", "localhost"} or ip.startswith("::ffff:127."):
+        return "localhost"
+    return ip or "unknown"
+
+
 def client_ip(request: Request) -> str:
     forwarded_for = request.headers.get("x-forwarded-for", "")
     if forwarded_for:
-        return forwarded_for.split(",", 1)[0].strip()
+        return normalized_client_ip(forwarded_for.split(",", 1)[0])
     real_ip = request.headers.get("x-real-ip")
     if real_ip:
-        return real_ip.strip()
-    return request.client.host if request.client else "unknown"
+        return normalized_client_ip(real_ip)
+    return normalized_client_ip(request.client.host if request.client else "unknown")
+
+
+def rate_limit_digest(value: str) -> str:
+    salt = (
+        os.environ.get("API_RATE_LIMIT_KEY_SALT")
+        or os.environ.get("SUPABASE_JWT_SECRET")
+        or "sentient-trader-rate-limit"
+    ).encode()
+    return hmac.new(salt, value.encode(), "sha256").hexdigest()[:32]
+
+
+def jwt_payload(token: str) -> dict[str, Any]:
+    parts = token.split(".")
+    if len(parts) < 2:
+        return {}
+    payload = parts[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(payload.encode())
+        parsed = json.loads(decoded)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def is_anonymous_jwt(payload: dict[str, Any]) -> bool:
+    if payload.get("is_anonymous") is True:
+        return True
+    app_metadata = payload.get("app_metadata")
+    if not isinstance(app_metadata, dict):
+        return False
+    provider = app_metadata.get("provider")
+    providers = app_metadata.get("providers")
+    return provider == "anonymous" or (
+        isinstance(providers, list) and "anonymous" in providers
+    )
 
 
 def rate_limit_key(request: Request) -> str:
     token = auth_token(request.headers.get("authorization"))
     if token:
-        salt = (
-            os.environ.get("API_RATE_LIMIT_KEY_SALT")
-            or os.environ.get("SUPABASE_JWT_SECRET")
-            or "sentient-trader-rate-limit"
-        ).encode()
-        digest = hmac.new(salt, token.encode(), "sha256").hexdigest()[:32]
-        return f"user:{digest}"
-    return f"ip:{client_ip(request)}"
+        payload = jwt_payload(token)
+        subject = str(payload.get("sub") or "").strip()
+        if subject and not is_anonymous_jwt(payload):
+            return f"user:{rate_limit_digest(subject)}"
+        if subject and is_anonymous_jwt(payload):
+            return f"anon-ip:{rate_limit_digest(client_ip(request))}"
+    return f"ip:{rate_limit_digest(client_ip(request))}"
 
 
 def retry_after_seconds(exc: RateLimitExceeded) -> int | None:
