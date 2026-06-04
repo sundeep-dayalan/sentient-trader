@@ -1,34 +1,45 @@
 import { useEffect, useState } from 'react';
+import { applyTheme, getStoredTheme, persistTheme, THEME_STORAGE_KEY, type ThemeMode } from '@/lib/theme';
 
 export default function ThemeToggle() {
-  const [isDark, setIsDark] = useState(false);
+  const [theme, setTheme] = useState<ThemeMode>(getStoredTheme);
 
   useEffect(() => {
-    const isDarkMode = localStorage.getItem('st-theme') === 'dark';
-    setIsDark(isDarkMode);
-    if (isDarkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+    applyTheme(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const syncTheme = () => setTheme(getStoredTheme());
+    const syncThemeFromEvent = (event: Event) => {
+      const next = (event as CustomEvent<ThemeMode>).detail;
+      setTheme(next === 'dark' ? 'dark' : 'light');
+    };
+    const syncThemeFromStorage = (event: StorageEvent) => {
+      if (event.key === THEME_STORAGE_KEY) syncTheme();
+    };
+
+    window.addEventListener('storage', syncThemeFromStorage);
+    window.addEventListener('st-theme-change', syncThemeFromEvent);
+
+    return () => {
+      window.removeEventListener('storage', syncThemeFromStorage);
+      window.removeEventListener('st-theme-change', syncThemeFromEvent);
+    };
   }, []);
 
   function toggle() {
-    const next = !isDark;
-    setIsDark(next);
-    document.documentElement.classList.toggle('dark', next);
-    try {
-      localStorage.setItem('st-theme', next ? 'dark' : 'light');
-    } catch {}
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    persistTheme(next);
   }
 
   return (
     <button
       onClick={toggle}
-      title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+      title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
       className="flex h-9 w-9 items-center justify-center rounded-xl border border-line bg-surface text-muted transition-all duration-200 hover:border-accent-border hover:text-accent"
     >
-      {isDark ? (
+      {theme === 'dark' ? (
         /* sun */
         <svg
           width="15"

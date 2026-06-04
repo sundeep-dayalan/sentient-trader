@@ -20,9 +20,11 @@
     <script>
       (function () {
         try {
-          if (localStorage.getItem('st-theme') === 'dark') {
-            document.documentElement.classList.add('dark');
-          }
+          var theme = localStorage.getItem('st-theme') === 'dark' ? 'dark' : 'light';
+          var root = document.documentElement;
+          root.classList.toggle('dark', theme === 'dark');
+          root.classList.toggle('light', theme === 'light');
+          root.dataset.theme = theme;
         } catch (e) {}
       })();
     </script>
