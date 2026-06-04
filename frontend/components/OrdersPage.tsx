@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError, apiFetch } from '@/lib/api';
+import AppErrorNotice from '@/components/AppErrorNotice';
+import { AppErrorCopy, formatAlpacaError } from '@/lib/errors';
 
 type OrderBucket = 'all' | 'open' | 'filled' | 'canceled' | 'rejected' | 'other';
+type ActionNotice = { message: string; tone: 'success' | 'error' };
 
 interface AlpacaAccount {
   status?: string;
@@ -52,6 +55,10 @@ interface OrdersResponse {
   positions: AlpacaPosition[];
   orders: AlpacaOrder[];
   fetchedAt: string;
+  error?: AppErrorCopy;
+}
+
+interface OrdersApiResponse extends Omit<OrdersResponse, 'error'> {
   error?: string;
 }
 
@@ -186,12 +193,15 @@ export default function OrdersPage() {
   const [selectedCancelIds, setSelectedCancelIds] = useState<Set<string>>(new Set());
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
   const [canceling, setCanceling] = useState(false);
-  const [cancelMessage, setCancelMessage] = useState<string | null>(null);
+  const [cancelNotice, setCancelNotice] = useState<ActionNotice | null>(null);
 
   const loadOrders = useCallback(async () => {
     try {
-      const json = await apiFetch<OrdersResponse>('/orders?status=all&limit=100');
-      setData(json);
+      const json = await apiFetch<OrdersApiResponse>('/orders?status=all&limit=100');
+      setData({
+        ...json,
+        error: json.error ? formatAlpacaError(json.error, 'alpaca-orders') : undefined,
+      });
       setSelectedId((current) => current ?? json.orders[0]?.id ?? null);
       setSelectedCancelIds((current) => {
         const liveCancelableIds = new Set(
@@ -204,7 +214,7 @@ export default function OrdersPage() {
         setLoading(false);
         return;
       }
-      setData((current) => ({ ...current, error: 'Could not load Alpaca orders' }));
+      setData((current) => ({ ...current, error: formatAlpacaError(error, 'alpaca-orders') }));
     } finally {
       setLoading(false);
     }
@@ -262,7 +272,7 @@ export default function OrdersPage() {
   }
 
   function openCancelConfirm(order?: AlpacaOrder) {
-    setCancelMessage(null);
+    setCancelNotice(null);
     if (order) {
       setSelectedCancelIds(new Set([order.id]));
     }
@@ -273,7 +283,7 @@ export default function OrdersPage() {
     if (selectedCancelOrders.length === 0) return;
 
     setCanceling(true);
-    setCancelMessage(null);
+    setCancelNotice(null);
 
     try {
       const result = await apiFetch<{
@@ -289,14 +299,18 @@ export default function OrdersPage() {
         throw new Error(result.error);
       }
 
-      setCancelMessage(
-        `${result.canceled ?? 0} cancel request(s) accepted${result.failed ? `, ${result.failed} failed` : ''}.`,
-      );
+      setCancelNotice({
+        message: `${result.canceled ?? 0} cancel request(s) accepted${result.failed ? `, ${result.failed} failed` : ''}.`,
+        tone: result.failed ? 'error' : 'success',
+      });
       setSelectedCancelIds(new Set());
       setConfirmCancelOpen(false);
       await loadOrders();
     } catch (error) {
-      setCancelMessage(error instanceof Error ? error.message : 'Cancel request failed');
+      setCancelNotice({
+        message: formatAlpacaError(error, 'cancel').message,
+        tone: 'error',
+      });
     } finally {
       setCanceling(false);
     }
@@ -352,14 +366,16 @@ export default function OrdersPage() {
                     {loading ? 'Loading orders...' : `Fetched ${dateTime(data.fetchedAt)}`}
                   </p>
                 </div>
-                {data.error && (
-                  <span className="rounded-md border border-negative-border bg-negative-soft px-2.5 py-1 text-[11px] font-semibold text-negative">
-                    {data.error}
-                  </span>
-                )}
-                {cancelMessage && (
-                  <span className="rounded-md border border-cyan-border bg-cyan-soft px-2.5 py-1 text-[11px] font-semibold text-cyan">
-                    {cancelMessage}
+                {cancelNotice && (
+                  <span
+                    className={[
+                      'rounded-md border px-2.5 py-1 text-[11px] font-semibold',
+                      cancelNotice.tone === 'success'
+                        ? 'border-cyan-border bg-cyan-soft text-cyan'
+                        : 'border-negative-border bg-negative-soft text-negative',
+                    ].join(' ')}
+                  >
+                    {cancelNotice.message}
                   </span>
                 )}
                 <button
@@ -376,6 +392,8 @@ export default function OrdersPage() {
                   {selectedCancelOrders.length > 0 ? `(${selectedCancelOrders.length})` : ''}
                 </button>
               </div>
+
+              {data.error && <AppErrorNotice error={data.error} compact className="mt-3" />}
 
               <div className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-center">
                 <div className="flex flex-wrap gap-1.5">
@@ -617,9 +635,16 @@ export default function OrdersPage() {
               ))}
             </div>
 
-            {cancelMessage && (
-              <p className="mt-3 rounded-lg border border-negative-border bg-negative-soft px-3 py-2 text-xs text-negative">
-                {cancelMessage}
+            {cancelNotice && (
+              <p
+                className={[
+                  'mt-3 rounded-lg border px-3 py-2 text-xs',
+                  cancelNotice.tone === 'success'
+                    ? 'border-cyan-border bg-cyan-soft text-cyan'
+                    : 'border-negative-border bg-negative-soft text-negative',
+                ].join(' ')}
+              >
+                {cancelNotice.message}
               </p>
             )}
 

@@ -1,4 +1,6 @@
 import PnLChart from '@/components/PnLChart';
+import AppErrorNotice from '@/components/AppErrorNotice';
+import { AppErrorCopy } from '@/lib/errors';
 
 interface AlpacaAccount {
   status?: string;
@@ -70,7 +72,7 @@ interface PortfolioPageProps {
   positions: AlpacaPosition[];
   orders: AlpacaOrder[];
   loading: boolean;
-  error?: string;
+  error?: AppErrorCopy;
   fetchedAt?: string;
 }
 
@@ -248,9 +250,7 @@ export default function PortfolioPage({
               </span>
             </div>
             {error && (
-              <p className="mt-3 rounded-lg border border-negative-border bg-negative-soft px-3 py-2 text-xs text-negative">
-                {error}
-              </p>
+              <AppErrorNotice error={error} compact className="mt-3" />
             )}
           </div>
 

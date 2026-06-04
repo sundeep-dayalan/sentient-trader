@@ -14,6 +14,8 @@ import {
 } from 'recharts';
 import { PortfolioAccountSummary, PortfolioPoint, PortfolioSummary } from '@/lib/types';
 import { ApiError, apiFetch } from '@/lib/api';
+import AppErrorNotice from '@/components/AppErrorNotice';
+import { AppErrorCopy, formatAlpacaError } from '@/lib/errors';
 
 type PeriodKey = 'D' | 'W' | 'M' | '3M' | '6M' | 'Y' | '5Y';
 type ChartType = 'line' | 'area' | 'bar';
@@ -127,7 +129,7 @@ export default function PnLChart() {
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [account, setAccount] = useState<PortfolioAccountSummary | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<AppErrorCopy | null>(null);
   const [period, setPeriod] = useState<PeriodKey>('D');
   const [chartType, setChartType] = useState<ChartType>('area');
 
@@ -140,7 +142,11 @@ export default function PnLChart() {
         error?: string;
       }>(`/portfolio?range=${period}`);
       if (json.error) {
-        throw new Error(json.error);
+        setData(json.history ?? []);
+        setSummary(json.summary ?? null);
+        setAccount(json.account ?? null);
+        setError(formatAlpacaError(json.error, 'portfolio'));
+        return;
       }
       setData(json.history ?? []);
       setSummary(json.summary ?? null);
@@ -151,7 +157,7 @@ export default function PnLChart() {
         setData([]);
         setError(null);
       } else {
-        setError('Could not load portfolio data');
+        setError(formatAlpacaError(error, 'portfolio'));
       }
     } finally {
       setLoading(false);
@@ -313,6 +319,8 @@ export default function PnLChart() {
           </div>
         </div>
 
+        {error && data.length > 0 && <AppErrorNotice error={error} compact />}
+
         <div className="relative z-10 h-[170px] md:h-[220px]">
           {loading && (
             <div className="flex h-full items-center justify-center gap-1.5">
@@ -325,9 +333,9 @@ export default function PnLChart() {
               ))}
             </div>
           )}
-          {error && (
-            <div className="flex h-full items-center justify-center text-sm text-negative">
-              {error}
+          {error && data.length === 0 && (
+            <div className="flex h-full items-center justify-center px-4">
+              <AppErrorNotice error={error} centered className="max-w-md" />
             </div>
           )}
           {!loading && !error && data.length === 0 && (
@@ -335,7 +343,7 @@ export default function PnLChart() {
               No portfolio history yet.
             </div>
           )}
-          {!loading && !error && data.length > 0 && (
+          {!loading && data.length > 0 && (
             <ResponsiveContainer width="100%" height="100%">
               {chartType === 'line' ? (
                 <LineChart data={data} margin={chartMargin}>

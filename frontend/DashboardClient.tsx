@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import AgentMonologue from '@/components/AgentMonologue';
+import AppErrorNotice from '@/components/AppErrorNotice';
 import AuthGate from '@/components/AuthGate';
 import CustomNewsForm from '@/components/CustomNewsForm';
 import LiveTicker from '@/components/LiveTicker';
@@ -16,6 +17,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { ApiError, apiFetch } from '@/lib/api';
 import { DashboardStats, Trade } from '@/lib/types';
 import { unescapeHtml } from '@/lib/news';
+import { AppErrorCopy, formatAlpacaError } from '@/lib/errors';
 
 const PAGE_SIZE = 20;
 const NAV_ITEMS = [
@@ -124,6 +126,10 @@ interface OrdersResponse {
   positions: AlpacaPosition[];
   orders: AlpacaOrder[];
   fetchedAt: string;
+  error?: AppErrorCopy;
+}
+
+interface OrdersApiResponse extends Omit<OrdersResponse, 'error'> {
   error?: string;
 }
 
@@ -359,7 +365,7 @@ function RecentOrdersCard({
 }: {
   orders: AlpacaOrder[];
   loading: boolean;
-  error?: string;
+  error?: AppErrorCopy;
   onSeeMore: () => void;
 }) {
   const visibleOrders = orders.slice(0, 3);
@@ -383,9 +389,10 @@ function RecentOrdersCard({
 
       <div className="space-y-1">
         {loading && visibleOrders.length === 0 && <EmptyDots />}
-        {!loading && error && (
-          <div className="flex min-h-[210px] items-center justify-center rounded-xl border border-negative-border bg-negative-soft px-4 text-center text-sm text-negative">
-            {error}
+        {error && <AppErrorNotice error={error} compact className="mb-3" />}
+        {!loading && error && visibleOrders.length === 0 && (
+          <div className="flex min-h-[172px] items-center justify-center rounded-xl border border-[var(--dashboard-border)] bg-[var(--dashboard-row)] px-4 text-center text-sm text-[var(--dashboard-muted)]">
+            Order activity will reappear after the next successful refresh.
           </div>
         )}
         {!loading && !error && visibleOrders.length === 0 && (
@@ -462,7 +469,7 @@ function AlpacaBalanceCard({
   positions: AlpacaPosition[];
   orders: AlpacaOrder[];
   loading: boolean;
-  error?: string;
+  error?: AppErrorCopy;
   fetchedAt?: string;
 }) {
   const accountValue = account?.portfolio_value ?? account?.equity;
@@ -568,9 +575,7 @@ function AlpacaBalanceCard({
         </div>
 
         {error && (
-          <p className="mb-4 rounded-xl border border-negative-border bg-negative-soft px-3 py-2 text-xs text-negative">
-            {error}
-          </p>
+          <AppErrorNotice error={error} compact className="mb-4" />
         )}
 
         <div className="grid grid-cols-2 gap-2.5">
@@ -838,8 +843,11 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
   const loadAlpacaSummary = useCallback(async () => {
     try {
-      const json = await apiFetch<OrdersResponse>('/orders?status=all&limit=25');
-      setAlpacaData(json);
+      const json = await apiFetch<OrdersApiResponse>('/orders?status=all&limit=25');
+      setAlpacaData({
+        ...json,
+        error: json.error ? formatAlpacaError(json.error, 'alpaca-summary') : undefined,
+      });
     } catch (error) {
       if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
         setAlpacaData(EMPTY_ALPACA_DATA);
@@ -848,7 +856,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
       }
       setAlpacaData((current) => ({
         ...current,
-        error: 'Could not load Alpaca summary',
+        error: formatAlpacaError(error, 'alpaca-summary'),
       }));
     } finally {
       setAlpacaLoading(false);
