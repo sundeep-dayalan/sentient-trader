@@ -1,5 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap');
-
+/* Fonts are loaded via <link> tags in index.html, not a CSS @import. A remote
+ * @import at the top of this sheet would delay the browser from applying the
+ * whole stylesheet until the font request resolves, causing a flash of
+ * unstyled content (flat cards / default font) on cold or fast refreshes. */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
