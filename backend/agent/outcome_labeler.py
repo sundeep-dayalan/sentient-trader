@@ -14,7 +14,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Protocol
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -67,6 +67,33 @@ def market_close_for_signal(signal_at: datetime) -> datetime:
     local = signal_at.astimezone(MARKET_TZ)
     close = datetime.combine(local.date(), time(16, 0), tzinfo=MARKET_TZ)
     return close.astimezone(timezone.utc)
+
+
+def next_regular_session_close(signal_at: datetime) -> datetime:
+    """
+    The 16:00 ET close of the regular session whose end-of-day return a signal
+    should be measured against.
+
+    Intraday/pre-market signals use the current weekday's close; signals at or
+    after the close (and weekend signals) roll to the next weekday's close. This
+    keeps the EOD label anchored to a real regular session even when 15m/1h are
+    measured from an after-hours bar. Holidays are not modeled; a rolled-to
+    holiday simply yields no EOD bar and the row stays retryable.
+    """
+    local = signal_at.astimezone(MARKET_TZ)
+
+    def close_on(day) -> datetime:
+        return datetime.combine(day, time(16, 0), tzinfo=MARKET_TZ).astimezone(
+            timezone.utc
+        )
+
+    if local.weekday() < 5 and local.timetz().replace(tzinfo=None) < time(16, 0):
+        return close_on(local.date())
+
+    day = local.date() + timedelta(days=1)
+    while day.weekday() >= 5:  # skip Saturday/Sunday
+        day += timedelta(days=1)
+    return close_on(day)
 
 
 def first_bar_at_or_after(bars: list[Bar], target: datetime) -> Optional[Bar]:
@@ -188,6 +215,179 @@ def fetch_bars(ticker: str, start: datetime, end: datetime) -> list[Bar]:
     return bars
 
 
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def is_extended_hours(signal_at: datetime) -> bool:
+    """True when the signal falls outside the 9:30-16:00 ET regular session."""
+    local = signal_at.astimezone(MARKET_TZ)
+    if local.weekday() >= 5:  # Saturday/Sunday
+        return True
+    return not (time(9, 30) <= local.timetz().replace(tzinfo=None) < time(16, 0))
+
+
+class BarProvider(Protocol):
+    """A pluggable source of 1-minute close bars for a ticker/time window.
+
+    Add a new source by implementing this protocol and registering it in
+    BAR_PROVIDER_REGISTRY; nothing else in the labeler needs to change.
+    """
+
+    name: str
+
+    def fetch_bars(self, ticker: str, start: datetime, end: datetime) -> list[Bar]:
+        ...
+
+
+class AlpacaBarProvider:
+    """Primary provider: Alpaca historical bars (IEX on the free tier)."""
+
+    name = "alpaca"
+
+    def fetch_bars(self, ticker: str, start: datetime, end: datetime) -> list[Bar]:
+        return fetch_bars(ticker, start, end)
+
+
+class YFinanceBarProvider:
+    """
+    Fallback provider: Yahoo Finance 1-minute bars including pre/post-market.
+
+    Free and keyless, but unofficial and limited to ~7 days of 1-minute history,
+    which is ample for a labeler that runs within hours/days of each signal. Used
+    to fill the extended-hours windows where the free Alpaca/IEX feed is empty.
+    """
+
+    name = "yfinance"
+
+    def __init__(self) -> None:
+        # Import eagerly so an unavailable dependency disables this provider at
+        # resolution time instead of failing mid-run.
+        import yfinance  # noqa: F401
+
+    def fetch_bars(self, ticker: str, start: datetime, end: datetime) -> list[Bar]:
+        import yfinance as yf
+
+        frame = yf.download(
+            ticker,
+            start=start.astimezone(timezone.utc),
+            end=end.astimezone(timezone.utc),
+            interval="1m",
+            prepost=True,
+            progress=False,
+            auto_adjust=False,
+            threads=False,
+        )
+        if frame is None or frame.empty:
+            return []
+
+        closes = frame["Close"]
+        if hasattr(closes, "columns"):  # MultiIndex columns (single-ticker frame)
+            closes = closes.iloc[:, 0]
+
+        bars: list[Bar] = []
+        for index, close in closes.items():
+            try:
+                if close != close:  # NaN guard without importing pandas/math
+                    continue
+                timestamp = index.to_pydatetime()
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                bars.append(
+                    Bar(timestamp=timestamp.astimezone(timezone.utc), close=float(close))
+                )
+            except (AttributeError, TypeError, ValueError):
+                continue
+        return bars
+
+
+BAR_PROVIDER_REGISTRY: dict[str, type[BarProvider]] = {
+    "alpaca": AlpacaBarProvider,
+    "yfinance": YFinanceBarProvider,
+}
+
+
+def resolve_bar_providers() -> list[BarProvider]:
+    """
+    Build the provider chain: the Alpaca primary followed by any configured
+    fallbacks. Fallbacks are enabled by OUTCOME_LABELER_OFFHOURS_FALLBACK and
+    selected by name via OUTCOME_LABELER_FALLBACK_PROVIDERS (comma-separated,
+    default "yfinance"). Unknown or unavailable providers are skipped with a
+    warning so a missing optional dependency never breaks labeling.
+    """
+    providers: list[BarProvider] = [AlpacaBarProvider()]
+    if not env_bool("OUTCOME_LABELER_OFFHOURS_FALLBACK", default=True):
+        return providers
+
+    names = [
+        name.strip()
+        for name in os.environ.get(
+            "OUTCOME_LABELER_FALLBACK_PROVIDERS", "yfinance"
+        ).split(",")
+        if name.strip()
+    ]
+    for name in names:
+        provider_cls = BAR_PROVIDER_REGISTRY.get(name)
+        if provider_cls is None:
+            log.warning("Unknown bar provider '%s'; skipping", name)
+            continue
+        try:
+            providers.append(provider_cls())
+        except Exception as exc:
+            log.warning("Bar provider '%s' unavailable; skipping: %s", name, exc)
+    return providers
+
+
+def _earliest_timestamp(bars: list[Bar]) -> Optional[datetime]:
+    return min((bar.timestamp for bar in bars), default=None)
+
+
+def get_bars(
+    providers: list[BarProvider],
+    ticker: str,
+    start: datetime,
+    end: datetime,
+    *,
+    prefer_fallback: bool,
+) -> list[Bar]:
+    """
+    Resolve bars through the provider chain.
+
+    Uses the primary (Alpaca) result unless it is empty, or the window starts in
+    extended hours (prefer_fallback) where the free Alpaca/IEX feed has little
+    data. In those cases each fallback is queried and the result with the
+    earliest coverage of the window wins, so a single consistent source is used
+    per signal. If every provider fails and the primary raised, the primary
+    error is re-raised so the caller's transient/terminal handling still applies.
+    """
+    primary, *fallbacks = providers
+    primary_error: Optional[Exception] = None
+    try:
+        best = primary.fetch_bars(ticker, start, end)
+    except (httpx.HTTPStatusError, httpx.TransportError) as exc:
+        primary_error = exc
+        best = []
+
+    if fallbacks and (prefer_fallback or not best):
+        for fallback in fallbacks:
+            try:
+                candidate = fallback.fetch_bars(ticker, start, end)
+            except Exception as exc:  # pragma: no cover - defensive
+                log.info("Fallback %s failed for %s: %s", fallback.name, ticker, exc)
+                continue
+            if candidate:
+                best_earliest = _earliest_timestamp(best)
+                if best_earliest is None or _earliest_timestamp(candidate) < best_earliest:
+                    best = candidate
+
+    if not best and primary_error is not None:
+        raise primary_error
+    return best
+
+
 def build_outcome_record(
     *,
     trade_id: str,
@@ -208,7 +408,9 @@ def build_outcome_record(
     price_at_signal = signal_price or first_close_at_or_after(bars, signal_at)
     target_15m = anchor_ts + timedelta(minutes=15)
     target_1h = anchor_ts + timedelta(hours=1)
-    target_eod = market_close_for_signal(anchor_ts)
+    # EOD is the next regular session close from the signal time (not the anchor),
+    # so after-hours anchors still get a next-day EOD rather than a passed close.
+    target_eod = next_regular_session_close(signal_at)
 
     price_15m = first_close_at_or_after(bars, target_15m) if now >= target_15m else None
     price_1h = first_close_at_or_after(bars, target_1h) if now >= target_1h else None
@@ -441,6 +643,8 @@ def label_recent_signals(limit: int, *, force: bool = False) -> int:
     now = datetime.now(timezone.utc)
     min_age = (now - timedelta(minutes=15)).isoformat()
     sb = get_supabase_client()
+    providers = resolve_bar_providers()
+    log.info("Bar providers: %s", ", ".join(p.name for p in providers))
     candidates = gather_label_candidates(sb, limit=limit, min_age=min_age)
 
     labeled = 0
@@ -497,7 +701,13 @@ def label_recent_signals(limit: int, *, force: bool = False) -> int:
         end = min(now, signal_at + MAX_LABEL_HORIZON)
 
         try:
-            bars = fetch_bars(str(ticker), signal_at, end)
+            bars = get_bars(
+                providers,
+                str(ticker),
+                signal_at,
+                end,
+                prefer_fallback=is_extended_hours(signal_at),
+            )
         except httpx.HTTPStatusError as exc:
             error = alpaca_bar_error_message(exc)
             transient = exc.response.status_code in RETRYABLE_HTTP_STATUSES or (

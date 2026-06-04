@@ -11,15 +11,32 @@ from outcome_labeler import (
     build_pending_record,
     first_bar_at_or_after,
     first_close_at_or_after,
+    get_bars,
+    is_extended_hours,
     is_supported_alpaca_stock_symbol,
     label_status_for_record,
     market_close_for_signal,
     maybe_single_data,
     next_attempt_count,
+    next_regular_session_close,
     outcome_label_status,
     return_pct,
     should_skip_existing,
 )
+
+
+class _FakeProvider:
+    def __init__(self, name, bars=None, error=None):
+        self.name = name
+        self._bars = bars or []
+        self._error = error
+        self.calls = 0
+
+    def fetch_bars(self, ticker, start, end):
+        self.calls += 1
+        if self._error is not None:
+            raise self._error
+        return list(self._bars)
 
 
 class OutcomeLabelerTests(unittest.TestCase):
@@ -181,6 +198,105 @@ class OutcomeLabelerTests(unittest.TestCase):
         )
 
         self.assertEqual(status, "PARTIAL")
+
+    def test_next_regular_session_close(self) -> None:
+        # Pre-market Tuesday -> same-day 16:00 ET (20:00 UTC).
+        self.assertEqual(
+            next_regular_session_close(
+                datetime(2026, 5, 26, 11, 0, tzinfo=timezone.utc)
+            ),
+            datetime(2026, 5, 26, 20, 0, tzinfo=timezone.utc),
+        )
+        # After-close Tuesday (21:00 UTC == 17:00 ET) -> Wednesday's close.
+        self.assertEqual(
+            next_regular_session_close(
+                datetime(2026, 5, 26, 21, 0, tzinfo=timezone.utc)
+            ),
+            datetime(2026, 5, 27, 20, 0, tzinfo=timezone.utc),
+        )
+        # Saturday -> Monday's close.
+        self.assertEqual(
+            next_regular_session_close(
+                datetime(2026, 5, 30, 14, 0, tzinfo=timezone.utc)
+            ),
+            datetime(2026, 6, 1, 20, 0, tzinfo=timezone.utc),
+        )
+
+    def test_is_extended_hours(self) -> None:
+        # 14:00 UTC == 10:00 ET (regular session) on a Tuesday.
+        self.assertFalse(
+            is_extended_hours(datetime(2026, 5, 26, 14, 0, tzinfo=timezone.utc))
+        )
+        # 11:00 UTC == 07:00 ET (pre-market).
+        self.assertTrue(
+            is_extended_hours(datetime(2026, 5, 26, 11, 0, tzinfo=timezone.utc))
+        )
+        # 21:00 UTC == 17:00 ET (after close).
+        self.assertTrue(
+            is_extended_hours(datetime(2026, 5, 26, 21, 0, tzinfo=timezone.utc))
+        )
+        # Saturday is always extended hours.
+        self.assertTrue(
+            is_extended_hours(datetime(2026, 5, 30, 14, 0, tzinfo=timezone.utc))
+        )
+
+    def test_get_bars_uses_primary_when_covered(self) -> None:
+        start = datetime(2026, 5, 26, 14, 0, tzinfo=timezone.utc)
+        primary = _FakeProvider("alpaca", [Bar(start, 100.0)])
+        fallback = _FakeProvider("yfinance", [Bar(start, 999.0)])
+
+        bars = get_bars(
+            [primary, fallback], "AAPL", start, start, prefer_fallback=False
+        )
+
+        self.assertEqual([b.close for b in bars], [100.0])
+        self.assertEqual(fallback.calls, 0)  # fallback not queried
+
+    def test_get_bars_prefers_earlier_fallback_offhours(self) -> None:
+        signal = datetime(2026, 5, 26, 11, 0, tzinfo=timezone.utc)  # pre-market
+        # Primary (IEX) only has the regular-session open, missing pre-market.
+        primary = _FakeProvider(
+            "alpaca", [Bar(datetime(2026, 5, 26, 13, 30, tzinfo=timezone.utc), 105.0)]
+        )
+        # Fallback covers the pre-market window from the signal time.
+        fallback = _FakeProvider(
+            "yfinance",
+            [
+                Bar(signal, 100.0),
+                Bar(datetime(2026, 5, 26, 13, 30, tzinfo=timezone.utc), 105.0),
+            ],
+        )
+
+        bars = get_bars(
+            [primary, fallback], "AAPL", signal, signal, prefer_fallback=True
+        )
+
+        self.assertEqual(bars[0].close, 100.0)
+        self.assertEqual(fallback.calls, 1)
+
+    def test_get_bars_falls_back_when_primary_empty(self) -> None:
+        start = datetime(2026, 5, 26, 11, 0, tzinfo=timezone.utc)
+        primary = _FakeProvider("alpaca", [])
+        fallback = _FakeProvider("yfinance", [Bar(start, 100.0)])
+
+        bars = get_bars(
+            [primary, fallback], "AAPL", start, start, prefer_fallback=False
+        )
+
+        self.assertEqual([b.close for b in bars], [100.0])
+
+    def test_get_bars_reraises_primary_error_when_all_empty(self) -> None:
+        start = datetime(2026, 5, 26, 11, 0, tzinfo=timezone.utc)
+        request = httpx.Request("GET", "https://data.alpaca.markets/v2/stocks/X/bars")
+        response = httpx.Response(429, request=request)
+        primary = _FakeProvider(
+            "alpaca",
+            error=httpx.HTTPStatusError("rate", request=request, response=response),
+        )
+        fallback = _FakeProvider("yfinance", [])
+
+        with self.assertRaises(httpx.HTTPStatusError):
+            get_bars([primary, fallback], "AAPL", start, start, prefer_fallback=True)
 
     def test_attempt_count_increments_existing_rows(self) -> None:
         self.assertEqual(next_attempt_count(None), 1)
