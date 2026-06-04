@@ -114,6 +114,9 @@ interface AlpacaOrder {
   submitted_at?: string;
   filled_at?: string | null;
   updated_at?: string;
+  // Bracket/OCO child legs, nested under the parent when fetched with
+  // nested=true. These keep working after the parent order fills.
+  legs?: AlpacaOrder[] | null;
 }
 
 interface OrdersResponse {
@@ -468,7 +471,14 @@ function AlpacaBalanceCard({
   const dailyChange = equity !== null && lastEquity !== null ? equity - lastEquity : 0;
   const dailyChangePct = lastEquity ? (dailyChange / lastEquity) * 100 : 0;
   const isUp = dailyChange >= 0;
-  const openOrders = orders.filter((order) => orderBucket(order.status) === 'open').length;
+  // Bracket orders nest their take-profit / stop legs under the (filled) parent
+  // when fetched with nested=true. Those legs keep working after the parent
+  // fills, so open orders must be counted across parents AND their legs —
+  // otherwise a live TP/SL is invisible and the count shows 0.
+  const workingOrders = orders.flatMap((order) => [order, ...(order.legs ?? [])]);
+  const openOrders = workingOrders.filter((order) => orderBucket(order.status) === 'open').length;
+  // "Filled recent" counts placed (parent) orders so a closed bracket's exit
+  // leg is not double-counted as a separate fill.
   const filledOrders = orders.filter((order) => orderBucket(order.status) === 'filled').length;
   const topPositions = [...positions]
     .sort(

@@ -60,6 +60,9 @@ interface AlpacaOrder {
   submitted_at?: string;
   filled_at?: string | null;
   updated_at?: string;
+  // Bracket/OCO child legs, nested under the parent when fetched with
+  // nested=true. These keep working after the parent order fills.
+  legs?: AlpacaOrder[] | null;
 }
 
 interface PortfolioPageProps {
@@ -211,7 +214,11 @@ export default function PortfolioPage({
     (sum, position) => sum + Math.abs(numberValue(position.market_value) ?? 0),
     0,
   );
-  const openOrders = orders.filter((order) => orderBucket(order.status) === 'open').length;
+  // Count open orders across bracket parents AND their nested legs: with
+  // nested=true the working take-profit / stop legs sit under a filled parent,
+  // so a top-level-only count reports 0 while orders are still live.
+  const workingOrders = orders.flatMap((order) => [order, ...(order.legs ?? [])]);
+  const openOrders = workingOrders.filter((order) => orderBucket(order.status) === 'open').length;
   const filledOrders = orders.filter((order) => orderBucket(order.status) === 'filled').length;
   const sortedPositions = [...positions].sort(
     (a, b) =>
