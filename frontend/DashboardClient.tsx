@@ -1451,18 +1451,13 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                   totalCount={dashboardStats?.analyzed}
                 />
                 <div className="flex min-w-0 flex-col gap-3">
-                  {selectedTrade && (
-                    <button
-                      onClick={() => navigate(`/pipeline/${selectedTrade.id}`)}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-accent-border bg-accent-soft px-4 py-2 text-xs font-semibold text-accent transition hover:brightness-110"
-                    >
-                      🔬 View full pipeline replay →
-                    </button>
-                  )}
                   <AgentMonologue
                     trade={selectedTrade}
                     isLoadingTrace={Boolean(selectedTrade && traceLoadingId === selectedTrade.id)}
                     traceError={traceError}
+                    onViewTrace={
+                      selectedTrade ? () => navigate(`/pipeline/${selectedTrade.id}`) : undefined
+                    }
                   />
                 </div>
               </div>

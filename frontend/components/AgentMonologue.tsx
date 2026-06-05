@@ -12,6 +12,7 @@ interface AgentMonologueProps {
   trade: Trade | null;
   isLoadingTrace?: boolean;
   traceError?: string | null;
+  onViewTrace?: () => void;
 }
 
 const PERSONA_META: Record<string, { initial: string; colour: string }> = {
@@ -149,6 +150,7 @@ export default function AgentMonologue({
   trade,
   isLoadingTrace = false,
   traceError = null,
+  onViewTrace,
 }: AgentMonologueProps) {
   if (!trade) {
     return (
@@ -218,16 +220,28 @@ export default function AgentMonologue({
               </span>
             </div>
           </div>
-          {/* Action badge with tooltip */}
-          <span
-            className={`group relative inline-flex cursor-default items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold ${actionColor} ${actionBg}`}
-          >
-            {trade.trade_action}
-            <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-line bg-surface px-3 py-2.5 text-[11px] font-normal leading-relaxed text-secondary shadow-xl opacity-0 transition-opacity duration-150 group-hover:opacity-100">
-              {TOOLTIPS.action}
-              <span className="absolute bottom-full right-3 border-4 border-transparent border-b-line" />
+          <div className="flex shrink-0 items-center gap-2">
+            {onViewTrace && (
+              <button
+                type="button"
+                onClick={onViewTrace}
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-accent-border bg-accent-soft px-3 py-1.5 text-xs font-semibold text-accent transition hover:brightness-110"
+              >
+                <TraceIcon />
+                View trace
+              </button>
+            )}
+            {/* Action badge with tooltip */}
+            <span
+              className={`group relative inline-flex cursor-default items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold ${actionColor} ${actionBg}`}
+            >
+              {trade.trade_action}
+              <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-line bg-surface px-3 py-2.5 text-[11px] font-normal leading-relaxed text-secondary shadow-xl opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+                {TOOLTIPS.action}
+                <span className="absolute bottom-full right-3 border-4 border-transparent border-b-line" />
+              </span>
             </span>
-          </span>
+          </div>
         </div>
       </div>
 
@@ -733,6 +747,26 @@ function ExternalLinkIcon() {
       <path d="M14 3h7v7" />
       <path d="M10 14 21 3" />
       <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+    </svg>
+  );
+}
+
+function TraceIcon() {
+  return (
+    <svg
+      className="h-3.5 w-3.5"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="6" cy="6" r="3" />
+      <circle cx="18" cy="18" r="3" />
+      <path d="M9 6h3a6 6 0 0 1 6 6v3" />
+      <path d="M6 9v3a6 6 0 0 0 6 6h3" />
     </svg>
   );
 }
