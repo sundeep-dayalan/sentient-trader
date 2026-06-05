@@ -17,6 +17,7 @@ import {
   Handle,
   Position,
   MarkerType,
+  useNodesState,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
@@ -340,9 +341,9 @@ const nodePositions: Record<string, { x: number; y: number }> = {
   stream: { x: 360, y: 140 },
   prescreen: { x: 360, y: 280 },
   committee: { x: 360, y: 420 },
-  risk: { x: 360, y: 560 },
-  trader: { x: 90, y: 710 },
-  database: { x: 630, y: 710 },
+  risk: { x: 130, y: 575 },
+  trader: { x: -35, y: 800 },
+  database: { x: 655, y: 800 },
 };
 
 const edgeLabel = {
@@ -403,7 +404,6 @@ function node(
     type: 'custom',
     position: nodePositions[id],
     data: { ...data, isSelected: selectedNodeId === id },
-    draggable: false,
   };
 }
 
@@ -1149,6 +1149,21 @@ function PipelineFlow({
     }
     return aggregateNodes({ stats, trades, isPulsing, lastTradeType, selectedNodeId });
   }, [mode, trade, selectedNodeId, stats, trades, isPulsing, lastTradeType]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node<PipelineNodeData>>(graphNodes);
+
+  useEffect(() => {
+    setNodes((currentNodes) => {
+      const currentById = new Map(currentNodes.map((currentNode) => [currentNode.id, currentNode]));
+      return graphNodes.map((nextNode) => {
+        const currentNode = currentById.get(nextNode.id);
+        if (!currentNode) return nextNode;
+        return {
+          ...nextNode,
+          position: currentNode.position,
+        };
+      });
+    });
+  }, [graphNodes, setNodes]);
 
   const graphEdges = useMemo(() => {
     if (mode === 'signal') return trade ? signalEdges(trade) : inactiveSignalEdges();
@@ -1214,8 +1229,9 @@ function PipelineFlow({
 
       <div className="relative h-full min-h-[760px] w-full overflow-hidden rounded-xl border border-[var(--dashboard-border)] bg-[var(--dashboard-bg)]">
         <ReactFlow
-          nodes={graphNodes}
+          nodes={nodes}
           edges={graphEdges}
+          onNodesChange={onNodesChange}
           onNodeClick={(_, clickedNode) => setSelectedNodeId(clickedNode.id)}
           nodeTypes={pipelineNodeTypes}
           fitView
@@ -1223,7 +1239,7 @@ function PipelineFlow({
           className="bg-transparent"
           minZoom={0.35}
           maxZoom={1.5}
-          nodesDraggable={false}
+          nodesDraggable
           nodesConnectable={false}
           proOptions={{ hideAttribution: true }}
           defaultEdgeOptions={{
