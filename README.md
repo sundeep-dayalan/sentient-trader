@@ -85,15 +85,15 @@ stances and reasoning, the risk gate's verdict, and the final call.
 - 🔍 **See it live, no login** — open any signal on the **[live dashboard](https://apps.sundeepdayalan.in/sentient-trader)** to read the full four-agent debate behind the decision.
 - 🛰️ **Traced end-to-end** — every LLM call is captured in **LangSmith** (project `Sentient-Trader-PROD`) for latency, quota, and prompt-level observability.
 
-#### 🔬 Real committee traces — public, no login
+#### 🔬 Replay any decision — full pipeline, in-house & permanent
 
-Watch the four-agent debate actually happen on a live **BUY**, **SELL**, and **HOLD**:
+Every signal is replayable as an **interactive pipeline** — news → pre-screen → market context → 4-agent debate → risk gate → execution — reconstructed from the decision trace. No login, no expiry:
 
-| Decision | Signal | Raw trace |
+| Decision | Signal | Pipeline replay |
 |:--:|---|:--:|
-| 🟢 **BUY** | `GOOG` — *"Palantir Expands Google Cloud AI Partnership"* | **[View in LangSmith ↗](https://smith.langchain.com/public/9317f6f8-17b2-40e6-b8c7-00a744d99117/r)** |
-| 🔴 **SELL** | `LULU` — *"Root Of The Challenges Not Fully Diagnosed"* | **[View in LangSmith ↗](https://smith.langchain.com/public/b6b99632-ac72-47e5-afd8-5a88a544fe8c/r)** |
-| 🟡 **HOLD** | `LEN` — *"Lennar Appoints Jim Parker As COO"* | **[View in LangSmith ↗](https://smith.langchain.com/public/a7ee3880-ebf2-4c97-9912-dab9f85a9c23/r)** |
+| 🟢 **BUY** | `GOOG` — *"Palantir Expands Google Cloud AI Partnership"* | **[▶ Replay](https://apps.sundeepdayalan.in/sentient-trader/signal/be963ddb-285a-42f8-832a-f40303be8b3d)** |
+| 🔴 **SELL** | `LULU` — *"Root Of The Challenges Not Fully Diagnosed"* | **[▶ Replay](https://apps.sundeepdayalan.in/sentient-trader/signal/8266a5dc-35c2-4e79-9d58-59e741975dd1)** |
+| 🟡 **HOLD** | `LEN` — *"Lennar Appoints Jim Parker As COO"* | **[▶ Replay](https://apps.sundeepdayalan.in/sentient-trader/signal/12ce41b2-22d9-401b-b3b5-9b2193bf88f8)** |
 
 **[▶ Explore the live decision traces »](https://apps.sundeepdayalan.in/sentient-trader)**
 

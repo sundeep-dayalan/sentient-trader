@@ -13,6 +13,7 @@ import SystemStatus from '@/components/SystemStatus';
 import ThemeToggle from '@/components/ThemeToggle';
 import PipelinePage from '@/components/PipelinePage';
 import SettingsPage from '@/components/SettingsPage';
+import SignalPipeline from '@/components/SignalPipeline';
 import { useAuth } from '@/components/AuthProvider';
 import { ApiError, apiFetch } from '@/lib/api';
 import { DashboardStats, Trade } from '@/lib/types';
@@ -786,6 +787,9 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(initialTrades[0] ?? null);
   const [traceLoadingId, setTraceLoadingId] = useState<string | null>(null);
   const [traceError, setTraceError] = useState<string | null>(null);
+  const [routeTrade, setRouteTrade] = useState<Trade | null>(null);
+  const [routeTradeLoading, setRouteTradeLoading] = useState(false);
+  const [routeTradeError, setRouteTradeError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(initialTrades.length === PAGE_SIZE);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
@@ -805,6 +809,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   const navigate = useNavigate();
   const pathname = location.pathname;
   const activeView: ViewName = PATH_VIEW_MAP[pathname] ?? 'Dashboard';
+  const signalRouteId = pathname.match(/^\/signal\/(.+)$/)?.[1] ?? null;
 
   const setActiveView = useCallback(
     (view: ViewName) => {
@@ -1017,6 +1022,37 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
     return () => controller.abort();
   }, [activeView, selectedTrade]);
+
+  // ── Per-signal pipeline route (/signal/:id) ───────────────────
+  useEffect(() => {
+    if (!signalRouteId) return;
+    const cached = tradeDetailCacheRef.current.get(signalRouteId);
+    if (cached && hasTracePayload(cached)) {
+      setRouteTrade(cached);
+      setRouteTradeLoading(false);
+      setRouteTradeError(null);
+      return;
+    }
+    const controller = new AbortController();
+    setRouteTrade(cached ?? null);
+    setRouteTradeLoading(true);
+    setRouteTradeError(null);
+
+    apiFetch<{ trade: Trade }>(`/trades/${signalRouteId}`, { signal: controller.signal })
+      .then(({ trade }) => {
+        tradeDetailCacheRef.current.set(trade.id, trade);
+        setRouteTrade(trade);
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setRouteTradeError(
+          error instanceof Error ? error.message : 'Could not load this signal.',
+        );
+      })
+      .finally(() => setRouteTradeLoading(false));
+
+    return () => controller.abort();
+  }, [signalRouteId]);
 
   // ── Pagination ────────────────────────────────────────────────
   const loadMore = useCallback(async () => {
@@ -1365,6 +1401,15 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
               </section>
             )}
 
+            {signalRouteId ? (
+              <SignalPipeline
+                trade={routeTrade}
+                loading={routeTradeLoading}
+                error={routeTradeError}
+                onBack={() => navigate('/signals')}
+              />
+            ) : (
+              <>
             {/* Dashboard view */}
             {activeView === 'Dashboard' && (
               <div className="w-full space-y-6">
@@ -1412,11 +1457,21 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                   hasMore={hasMore}
                   totalCount={dashboardStats?.analyzed}
                 />
-                <AgentMonologue
-                  trade={selectedTrade}
-                  isLoadingTrace={Boolean(selectedTrade && traceLoadingId === selectedTrade.id)}
-                  traceError={traceError}
-                />
+                <div className="flex min-w-0 flex-col gap-3">
+                  {selectedTrade && (
+                    <button
+                      onClick={() => navigate(`/signal/${selectedTrade.id}`)}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-accent-border bg-accent-soft px-4 py-2 text-xs font-semibold text-accent transition hover:brightness-110"
+                    >
+                      🔬 View full pipeline replay →
+                    </button>
+                  )}
+                  <AgentMonologue
+                    trade={selectedTrade}
+                    isLoadingTrace={Boolean(selectedTrade && traceLoadingId === selectedTrade.id)}
+                    traceError={traceError}
+                  />
+                </div>
               </div>
             )}
 
@@ -1455,6 +1510,8 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                   </div>
                 </div>
               )}
+              </>
+            )}
           </main>
         </div>
       </div>

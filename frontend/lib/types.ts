@@ -100,6 +100,8 @@ export interface DecisionTrace {
   } | null;
   risk_gate?: RiskGateTrace | unknown;
   execution?: unknown;
+  enhanced_features?: unknown;
+  price_confirmation?: unknown;
   error?: string | null;
 }
 

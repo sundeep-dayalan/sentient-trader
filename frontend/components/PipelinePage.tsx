@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -29,13 +29,12 @@ type PipelineNodeData = {
 function PipelineNode({ data, isConnectable }: NodeProps<Node<PipelineNodeData>>) {
   return (
     <div
-      className={`relative min-w-[200px] rounded-2xl border border-[var(--dashboard-border)] p-4 shadow-[var(--dashboard-shadow)] backdrop-blur-md transition-all duration-300 ${
+      className={`relative min-w-[210px] rounded-2xl border border-[var(--dashboard-border)] p-4 shadow-[var(--dashboard-shadow)] backdrop-blur-md transition-all duration-300 ${
         data.isActive
           ? 'border-accent bg-accent/10 shadow-[0_0_20px_rgba(var(--accent-rgb),0.2)]'
           : 'bg-[var(--dashboard-card)]'
       }`}
     >
-      {/* Top Handle */}
       <Handle
         type="target"
         position={Position.Top}
@@ -76,6 +75,11 @@ function PipelineNode({ data, isConnectable }: NodeProps<Node<PipelineNodeData>>
               </span>
             </p>
           )}
+          {data.value === undefined && data.subValue && (
+            <p className="mt-0.5 text-[10px] font-normal text-[var(--dashboard-subtle)]">
+              {data.subValue}
+            </p>
+          )}
         </div>
       </div>
 
@@ -86,7 +90,6 @@ function PipelineNode({ data, isConnectable }: NodeProps<Node<PipelineNodeData>>
         </div>
       )}
 
-      {/* Bottom Handle */}
       <Handle
         type="source"
         position={Position.Bottom}
@@ -101,169 +104,158 @@ const nodeTypes = {
   custom: PipelineNode,
 };
 
-// --- INITIAL LAYOUT ---
+// --- ICONS ---
+
+const ICON = (paths: React.ReactNode) => (
+  <svg
+    width="20"
+    height="20"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    {paths}
+  </svg>
+);
+
+// --- INITIAL LAYOUT (mirrors the real agent pipeline) ---
 
 const initialNodes: Node<PipelineNodeData>[] = [
   {
     id: 'ingestion',
     type: 'custom',
-    position: { x: 350, y: 50 },
+    position: { x: 360, y: 0 },
     data: {
-      label: 'Data Ingestion',
-      subValue: 'News & Events',
-      icon: (
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
+      label: 'News Ingestion',
+      subValue: 'Alpaca news + backfill',
+      icon: ICON(
+        <>
           <path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8l-4 4v14a2 2 0 0 0 2 2z" />
           <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-        </svg>
+        </>,
       ),
     },
   },
   {
     id: 'stream',
     type: 'custom',
-    position: { x: 350, y: 180 },
+    position: { x: 360, y: 130 },
     data: {
       label: 'Event Stream',
       subValue: 'Valkey / Redis',
-      icon: (
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-        </svg>
-      ),
+      icon: ICON(<polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />),
     },
   },
   {
-    id: 'agent',
+    id: 'prescreen',
     type: 'custom',
-    position: { x: 350, y: 310 },
+    position: { x: 360, y: 260 },
     data: {
-      label: 'Agent Analysis',
-      subValue: 'Articles analyzed',
-      icon: (
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <circle cx="12" cy="12" r="10" />
-          <path d="M12 16v-4" />
-          <path d="M12 8h.01" />
-        </svg>
+      label: 'Pre-Screen',
+      subValue: 'filtered (no LLM)',
+      icon: ICON(<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />),
+    },
+  },
+  {
+    id: 'committee',
+    type: 'custom',
+    position: { x: 360, y: 390 },
+    data: {
+      label: 'AI Committee',
+      subValue: 'full 4-LLM debates',
+      icon: ICON(
+        <>
+          <circle cx="9" cy="7" r="4" />
+          <path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2" />
+          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+          <path d="M21 21v-2a4 4 0 0 0-3-3.87" />
+        </>,
       ),
     },
   },
   {
     id: 'risk',
     type: 'custom',
-    position: { x: 350, y: 440 },
+    position: { x: 360, y: 520 },
     data: {
       label: 'Risk Gate',
-      subValue: 'Trades blocked',
-      icon: (
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-        </svg>
-      ),
+      subValue: 'held / blocked',
+      icon: ICON(<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />),
     },
   },
   {
     id: 'trader',
     type: 'custom',
-    position: { x: 150, y: 570 },
+    position: { x: 150, y: 650 },
     data: {
-      label: 'Alpaca Trader',
-      subValue: 'Orders executed',
-      icon: (
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
+      label: 'Execution',
+      subValue: 'orders filled',
+      icon: ICON(
+        <>
           <line x1="12" y1="2" x2="12" y2="22" />
           <line x1="17" y1="5" x2="7" y2="5" />
           <line x1="17" y1="19" x2="7" y2="19" />
           <polyline points="15 9 9 12 15 15" />
-        </svg>
+        </>,
       ),
     },
   },
   {
     id: 'database',
     type: 'custom',
-    position: { x: 550, y: 570 },
+    position: { x: 570, y: 650 },
     data: {
       label: 'Supabase Log',
-      subValue: 'Total records',
-      icon: (
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
+      subValue: 'signals stored',
+      icon: ICON(
+        <>
           <ellipse cx="12" cy="5" rx="9" ry="3" />
           <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
           <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-        </svg>
+        </>,
       ),
     },
   },
 ];
 
+const labelStyle = {
+  labelBgStyle: { fill: 'var(--dashboard-bg)' },
+  labelStyle: { fill: 'var(--dashboard-text)', fontSize: 10, fontWeight: 600 },
+};
+
 const initialEdges: Edge[] = [
   { id: 'e-ingestion-stream', source: 'ingestion', target: 'stream', animated: true },
-  { id: 'e-stream-agent', source: 'stream', target: 'agent', animated: true },
-  { id: 'e-agent-risk', source: 'agent', target: 'risk', animated: true },
+  { id: 'e-stream-prescreen', source: 'stream', target: 'prescreen', animated: true },
+  {
+    id: 'e-prescreen-committee',
+    source: 'prescreen',
+    target: 'committee',
+    animated: true,
+    label: 'tradeable',
+    style: { stroke: 'var(--accent)' },
+    ...labelStyle,
+  },
+  {
+    id: 'e-prescreen-database',
+    source: 'prescreen',
+    target: 'database',
+    animated: true,
+    label: 'filtered',
+    style: { stroke: 'var(--muted)' },
+    ...labelStyle,
+  },
+  { id: 'e-committee-risk', source: 'committee', target: 'risk', animated: true },
   {
     id: 'e-risk-trader',
     source: 'risk',
     target: 'trader',
     animated: true,
     label: 'BUY / SELL',
-    labelBgStyle: { fill: 'var(--dashboard-bg)', color: 'var(--dashboard-text)' },
     style: { stroke: 'var(--positive)' },
+    ...labelStyle,
   },
   {
     id: 'e-risk-database',
@@ -271,8 +263,8 @@ const initialEdges: Edge[] = [
     target: 'database',
     animated: true,
     label: 'HOLD',
-    labelBgStyle: { fill: 'var(--dashboard-bg)', color: 'var(--dashboard-text)' },
     style: { stroke: 'var(--muted)' },
+    ...labelStyle,
   },
   { id: 'e-trader-database', source: 'trader', target: 'database', animated: true },
 ];
@@ -287,67 +279,51 @@ export default function PipelinePage({ stats, trades, newIds }: PipelinePageProp
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
-  // We want to trigger a visual pulse when `newIds` changes
   const [isPulsing, setIsPulsing] = useState(false);
   const [lastTradeType, setLastTradeType] = useState<'BUY' | 'SELL' | 'HOLD' | null>(null);
 
   useEffect(() => {
     if (newIds.size > 0) {
       setIsPulsing(true);
-
-      // Look at the most recent trade among the new ones
       const recentTrade = trades.find((t) => newIds.has(t.id));
       if (recentTrade) {
         setLastTradeType(recentTrade.trade_action);
       }
-
       const timer = setTimeout(() => setIsPulsing(false), 2000);
       return () => clearTimeout(timer);
     }
   }, [newIds, trades]);
 
   useEffect(() => {
-    // Update node values based on stats
     setNodes((nds) =>
       nds.map((node) => {
         const newData = { ...node.data };
 
-        // Update stats
-        if (node.id === 'agent') newData.value = stats?.analyzed ?? 0;
+        if (node.id === 'prescreen') newData.value = stats?.preScreened ?? 0;
+        if (node.id === 'committee') newData.value = stats?.fullDebates ?? 0;
         if (node.id === 'risk') newData.value = stats?.riskGated ?? 0;
         if (node.id === 'trader') newData.value = stats?.executed ?? 0;
         if (node.id === 'database') newData.value = trades.length;
 
-        // Visual pulsing logic
         newData.isActive = isPulsing;
         newData.isProcessing = isPulsing;
 
-        // Specific routing logic for pulses
-        if (isPulsing) {
-          if (node.id === 'trader' && lastTradeType === 'HOLD') {
-            newData.isActive = false; // Trader doesn't pulse on HOLD
-          }
+        // Trader doesn't light up on a HOLD.
+        if (isPulsing && node.id === 'trader' && lastTradeType === 'HOLD') {
+          newData.isActive = false;
         }
 
         return { ...node, data: newData };
       }),
     );
 
-    // Update edge animations
     setEdges((eds) =>
       eds.map((edge) => {
         let active = isPulsing;
 
-        // Edge specific logic
-        if (edge.id === 'e-risk-trader' && lastTradeType === 'HOLD') {
-          active = false;
-        }
-        if (edge.id === 'e-trader-database' && lastTradeType === 'HOLD') {
-          active = false;
-        }
-        if (edge.id === 'e-risk-database' && lastTradeType !== 'HOLD') {
-          active = false;
-        }
+        if (edge.id === 'e-risk-trader' && lastTradeType === 'HOLD') active = false;
+        if (edge.id === 'e-trader-database' && lastTradeType === 'HOLD') active = false;
+        if (edge.id === 'e-risk-database' && lastTradeType !== 'HOLD') active = false;
 
         return {
           ...edge,
@@ -355,7 +331,7 @@ export default function PipelinePage({ stats, trades, newIds }: PipelinePageProp
           style: {
             ...edge.style,
             strokeWidth: active ? 3 : 1.5,
-            opacity: active ? 1 : 0.4,
+            opacity: active ? 1 : 0.45,
           },
         };
       }),
@@ -363,7 +339,7 @@ export default function PipelinePage({ stats, trades, newIds }: PipelinePageProp
   }, [stats, trades, isPulsing, lastTradeType, setNodes, setEdges]);
 
   return (
-    <div className="h-full min-h-[640px] w-full rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-bg)] overflow-hidden">
+    <div className="h-full min-h-[680px] w-full rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-bg)] overflow-hidden">
       <ReactFlow
         nodes={nodes}
         edges={edges}
