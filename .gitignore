@@ -20,6 +20,9 @@ dist/
 # macOS
 .DS_Store
 
+# Internal analysis artifacts / scratch outputs
+outputs/
+
 # Claude Code session data (contains permission tokens)
 .claude/
 graphify-out/

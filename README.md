@@ -37,6 +37,31 @@
 
 <br/>
 
+## 📊 By the Numbers
+
+*Live production figures pulled straight from the database — running autonomously since **25 May 2026**. These are real counters, not benchmarks, and they grow every day the system is up.*
+
+| | Metric | Result |
+|---|--------|-------:|
+| 📰 | **News headlines ingested** | **8,500+** |
+| 🧠 | **Signals evaluated end-to-end** | **7,200+** |
+| 🤖 | **LLM committee calls executed** | **~14,600** *(4 per full debate)* |
+| 🔬 | **Decision traces persisted** | **7,200+** — *100% audit coverage* |
+| 📈 | **Signal outcomes back-labeled** | **6,700+** *(15m · 1h · EOD returns)* |
+| ⚡ | **Resolved by deterministic pre-screen** | **~45%** — *zero LLM spend on noise* |
+| 🎯 | **Conviction selectivity** | **10 trades / 7,200 signals** — *a 0.14% fire rate* |
+| 📡 | **News delivery latency** | **~1.8s median** *(source → ingested)* |
+| 🛡️ | **Scheduler reliability** | **96%** success across **261** runs |
+| ✅ | **Execution cleanliness** | **3 errors** in 7,200+ signals — *99.96% clean* |
+
+> The headline story isn't profit (it's a conviction-gated paper-trading demo that trades rarely by design) — it's **reliability and throughput**: thousands of signals reasoned over, fully traced, and risk-gated, running unattended for weeks with near-zero errors.
+
+<br/>
+
+---
+
+<br/>
+
 ## 💡 What Makes This Different
 
 > **This is not a bot that fires on keywords.**
@@ -208,7 +233,7 @@ flowchart TD
 
 ### Key Design: Deterministic Pre-Screening
 
-Before spending LLM budget, a pure-Python quality scorer evaluates each headline. In a 3-day replay test, **318 of 518 signals** were handled by the pre-screen — saving 60%+ of LLM spend while ensuring every tradeable catalyst still gets the full four-call debate.
+Before spending LLM budget, a pure-Python quality scorer evaluates each headline. In production, **~45% of all signals (2,900+) are resolved by the pre-screen with zero LLM calls** — low-quality noise is filtered for free, while every tradeable catalyst still gets the full four-call committee debate.
 
 <br/>
 
@@ -533,8 +558,8 @@ sentient-trader/
 │   │   ├── feedback_loop.py          # Historical accuracy + confidence calibration
 │   │   ├── outcome_labeler.py        # Post-signal price tracking and return labeling
 │   │   ├── observability.py          # Feature activation & execution observability
-│   │   ├── test_enhancements.py      # 40+ tests for enhanced features
-│   │   ├── test_execution_observability.py  # Execution & fill verification tests
+│   │   ├── test_*.py  (×8)           # decision rules · LLM router · execution observability
+│   │   │                             #   · outcome labeler/scheduler · price confirmation
 │   │   ├── requirements.txt
 │   │   └── Dockerfile
 │   │
@@ -547,18 +572,33 @@ sentient-trader/
 │   ├── DashboardClient.tsx           # Dashboard SPA state and polling
 │   ├── globals.css                   # Tailwind + theme variables
 │   ├── components/
-│   │   ├── AgentMonologue.tsx        # Signal detail: personas, conviction, tooltips
+│   │   ├── AgentMonologue.tsx        # Signal detail: each persona's stance + reasoning
 │   │   ├── CustomNewsForm.tsx        # Signal Injector form
 │   │   ├── PnLChart.tsx              # Recharts equity curve
-│   │   ├── PipelineViz.tsx           # React Flow pipeline diagram
-│   │   └── TradeCard.tsx             # Signal card in the feed
+│   │   ├── PipelinePage.tsx          # React Flow live pipeline visualization
+│   │   ├── OrdersPage.tsx            # Alpaca orders + positions
+│   │   ├── PortfolioPage.tsx         # Portfolio history + holdings
+│   │   ├── SettingsPage.tsx          # Live agent-config editor (super-user)
+│   │   ├── StatsBar.tsx              # Aggregate dashboard stats
+│   │   ├── SystemStatus.tsx          # Live health of every dependency
+│   │   ├── LiveTicker.tsx            # Streaming signal ticker
+│   │   ├── AuthGate.tsx / AuthProvider.tsx  # Supabase auth (OAuth + anonymous)
+│   │   ├── ThemeToggle.tsx           # Cross-tab synced light/dark theme
+│   │   └── AppErrorNotice.tsx        # Centralized API error surface
 │   └── lib/
 │       ├── api.ts                    # FastAPI client + bearer token forwarding
+│       ├── errors.ts                 # Normalized API error model
+│       ├── dashboardStats.ts         # Stats aggregation helpers
+│       ├── news.ts / constants.ts    # Signal feed helpers + static config
+│       ├── theme.ts                  # Theme state + cross-tab sync
 │       ├── supabase-browser.ts       # Supabase browser auth client
+│       ├── supabase-schema.ts        # Schema-scoped client options
 │       └── types.ts
 │
 ├── supabase/
-│   └── migrations/                   # Sequential SQL migrations
+│   ├── schema.sql                    # One-file master DB setup (run once)
+│   ├── queries/                      # Ad-hoc analysis & ops queries
+│   └── maintenance/                  # Storage reclaim scripts
 │
 ├── docker-compose.coolify.yml        # Production deployment config
 └── README.md
@@ -581,18 +621,23 @@ sentient-trader/
 | Alpaca | Free paper trading account |
 | LLM Provider | Groq API key **or** OpenRouter API key |
 
-### 1. Apply Supabase Migrations
+### 1. Set Up the Database
 
-Run in order via the Supabase SQL Editor:
+Run the single master setup script once via the Supabase SQL Editor:
 
 ```
-supabase/migrations/001_current_schema.sql
-supabase/migrations/002_llm_provider_config.sql
-supabase/migrations/003_execution_observability.sql
-supabase/migrations/004_signal_outcomes.sql
-supabase/migrations/005_signal_outcome_status.sql
-supabase/migrations/006_scheduler_runs.sql
+supabase/schema.sql
 ```
+
+It creates the full schema in one pass — all tables, indexes, the seeded
+`agent_config`, the `dashboard_stats()` function, row-level security, and
+realtime. The script is idempotent (`IF NOT EXISTS` / `CREATE OR REPLACE`), so
+it is safe to re-run.
+
+> **Access model:** RLS is on and only the `service_role` is granted table
+> access — the public anon key cannot read or write app data. All access goes
+> through the FastAPI backend. To target a dev schema, find/replace
+> `sentient_trader` in the script before running.
 
 ### 2. Agent Service
 

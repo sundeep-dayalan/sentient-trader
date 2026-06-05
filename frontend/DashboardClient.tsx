@@ -1219,7 +1219,10 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                             {/* Provider + super user badge */}
                             <div className="mt-2 flex items-center gap-1.5">
                               <span className="rounded-md border border-line bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold text-muted">
-                                {user.app_metadata?.provider ?? 'email'}
+                                {(
+                                  (user.app_metadata?.providers as string[] | undefined) ??
+                                  [user.app_metadata?.provider ?? 'email']
+                                ).join(' · ')}
                               </span>
                               {isSuperUser && (
                                 <span className="rounded-md border border-accent-border bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent">

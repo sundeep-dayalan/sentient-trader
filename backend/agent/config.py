@@ -232,7 +232,7 @@ def reload_from_supabase() -> bool:
     row: dict = result.data.get("config", {}) if result.data else {}
     if not row:
         raise RuntimeError(
-            "agent_config table is empty - run supabase/migrations/001_current_schema.sql"
+            "agent_config table is empty - run supabase/schema.sql"
         )
 
     fingerprint = _fingerprint_config(row)
