@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 280" width="1200" height="280" role="img" aria-label="Sentient Trader">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#070b14"/>
+      <stop offset="55%" stop-color="#0a1422"/>
+      <stop offset="100%" stop-color="#0d1b2a"/>
+    </linearGradient>
+    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#22c55e"/>
+      <stop offset="50%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+      <animateTransform attributeName="gradientTransform" type="translate"
+                        values="-0.3 0; 0.3 0; -0.3 0" dur="8s" repeatCount="indefinite"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#22c55e"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="280" fill="url(#bg)"/>
+
+  <!-- subtle grid -->
+  <g stroke="#16263a" stroke-width="1" opacity="0.5">
+    <line x1="0" y1="70" x2="1200" y2="70"/>
+    <line x1="0" y1="140" x2="1200" y2="140"/>
+    <line x1="0" y1="210" x2="1200" y2="210"/>
+    <line x1="200" y1="0" x2="200" y2="280"/>
+    <line x1="400" y1="0" x2="400" y2="280"/>
+    <line x1="600" y1="0" x2="600" y2="280"/>
+    <line x1="800" y1="0" x2="800" y2="280"/>
+    <line x1="1000" y1="0" x2="1000" y2="280"/>
+  </g>
+
+  <!-- animated market line -->
+  <path d="M0,210 L120,196 L200,212 L300,150 L380,176 L470,120 L560,148 L660,86 L760,120 L860,70 L960,104 L1060,58 L1200,90"
+        fill="none" stroke="url(#line)" stroke-width="3" stroke-linecap="round"
+        stroke-linejoin="round" filter="url(#glow)" stroke-dasharray="1600" stroke-dashoffset="1600">
+    <animate attributeName="stroke-dashoffset" from="1600" to="0" dur="3.2s" begin="0.2s" fill="freeze"/>
+    <animate attributeName="opacity" values="0.9;1;0.9" dur="4s" begin="3.2s" repeatCount="indefinite"/>
+  </path>
+
+  <!-- pulsing scan dot riding the line -->
+  <circle r="5" fill="#a5f3c0" filter="url(#glow)">
+    <animateMotion dur="6s" begin="3.2s" repeatCount="indefinite"
+      path="M0,210 L120,196 L200,212 L300,150 L380,176 L470,120 L560,148 L660,86 L760,120 L860,70 L960,104 L1060,58 L1200,90"/>
+    <animate attributeName="opacity" values="0;1;1;0" dur="6s" begin="3.2s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- wordmark -->
+  <g text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+    <text x="600" y="150" font-size="68" font-weight="800" letter-spacing="6"
+          fill="url(#title)" filter="url(#glow)">
+      SENTIENT TRADER
+      <animate attributeName="opacity" values="0;1" dur="1s" begin="0.3s" fill="freeze"/>
+    </text>
+    <text x="600" y="192" font-size="20" font-weight="500" letter-spacing="4" fill="#7d93ab">
+      AUTONOMOUS  AI  TRADING  INTELLIGENCE
+      <animate attributeName="opacity" values="0;0.95" dur="1.2s" begin="0.8s" fill="freeze"/>
+    </text>
+  </g>
+
+  <!-- live badge -->
+  <g transform="translate(600,228)" text-anchor="middle"
+     font-family="'Segoe UI', Arial, sans-serif">
+    <circle cx="-78" cy="-4" r="5" fill="#22c55e">
+      <animate attributeName="opacity" values="1;0.25;1" dur="1.6s" repeatCount="indefinite"/>
+    </circle>
+    <text x="6" y="0" font-size="14" letter-spacing="2" fill="#9fb3c8" font-weight="600">
+      LIVE · 4-LLM COMMITTEE · GROQ · LANGGRAPH · ALPACA
+    </text>
+  </g>
+</svg>

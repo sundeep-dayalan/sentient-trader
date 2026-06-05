@@ -1,11 +1,11 @@
 <div align="center">
 
-# 🧠 Sentient Trader
+<img src="./.github/assets/banner.svg" alt="Sentient Trader" width="100%" />
 
-### Autonomous AI-Powered Paper Trading System
+<br/>
 
-*A multi-agent LLM committee debates every market headline in real-time,*
-*then executes paper trades only when conviction, risk, and quality gates all clear.*
+**Autonomous AI paper-trading system** — a four-LLM committee *debates* every market headline in real time,
+then trades **only** when conviction, risk, and quality gates all clear.
 
 <br/>
 
@@ -27,7 +27,22 @@
 
 <br/>
 
-**[🚀 Live Demo](https://apps.sundeepdayalan.in/sentient-trader)** · **[📖 Architecture](#architecture)** · **[⚡ Quick Start](#running-locally)** · **[🧪 Testing](#controlled-proof-test)** · **[🚢 Deployment](#deployment)**
+**[🚀 Live Demo](https://apps.sundeepdayalan.in/sentient-trader)** · **[📖 How It Works](#how-it-works)** · **[⚡ Quick Start](#quick-start)**
+
+<br/>
+
+<!-- ──────────────────────────────────────────────────────────────────────────
+     DEMO CLIP — swap the poster below for a real recording of the dashboard.
+       1. Screen-record ~20–40s of the live app: signals streaming in, a card
+          expanding into the 4-agent debate, the PnL chart, a trade firing.
+       2. Optimize it (keep under ~10 MB):
+            ffmpeg -i demo.mov -vf "fps=12,scale=1280:-1" -loop 0 .github/assets/demo.gif
+          (or drag an .mp4 into the GitHub web editor and paste the hosted URL)
+       3. Save as .github/assets/demo.gif and change the src below to demo.gif.
+────────────────────────────────────────────────────────────────────────── -->
+<a href="https://apps.sundeepdayalan.in/sentient-trader">
+  <img src="./.github/assets/demo-poster.svg" alt="Watch the Sentient Trader live dashboard" width="92%" />
+</a>
 
 </div>
 
@@ -55,6 +70,32 @@
 | ✅ | **Execution cleanliness** | **3 errors** in 7,200+ signals — *99.96% clean* |
 
 > The headline story isn't profit (it's a conviction-gated paper-trading demo that trades rarely by design) — it's **reliability and throughput**: thousands of signals reasoned over, fully traced, and risk-gated, running unattended for weeks with near-zero errors.
+
+<br/>
+
+---
+
+<br/>
+
+## 👁️ Full Transparency — Watch It Reason
+
+No black box. Every signal persists its **complete decision trace** — all four agents'
+stances and reasoning, the risk gate's verdict, and the final call.
+
+- 🔍 **See it live, no login** — open any signal on the **[live dashboard](https://apps.sundeepdayalan.in/sentient-trader)** to read the full four-agent debate behind the decision.
+- 🛰️ **Traced end-to-end** — every LLM call is captured in **LangSmith** (project `Sentient-Trader-PROD`) for latency, quota, and prompt-level observability.
+
+#### 🔬 Real committee traces — public, no login
+
+Watch the four-agent debate actually happen on a live **BUY**, **SELL**, and **HOLD**:
+
+| Decision | Signal | Raw trace |
+|:--:|---|:--:|
+| 🟢 **BUY** | `GOOG` — *"Palantir Expands Google Cloud AI Partnership"* | **[View in LangSmith ↗](https://smith.langchain.com/public/9317f6f8-17b2-40e6-b8c7-00a744d99117/r)** |
+| 🔴 **SELL** | `LULU` — *"Root Of The Challenges Not Fully Diagnosed"* | **[View in LangSmith ↗](https://smith.langchain.com/public/b6b99632-ac72-47e5-afd8-5a88a544fe8c/r)** |
+| 🟡 **HOLD** | `LEN` — *"Lennar Appoints Jim Parker As COO"* | **[View in LangSmith ↗](https://smith.langchain.com/public/a7ee3880-ebf2-4c97-9912-dab9f85a9c23/r)** |
+
+**[▶ Explore the live decision traces »](https://apps.sundeepdayalan.in/sentient-trader)**
 
 <br/>
 
@@ -128,6 +169,13 @@ Most trading bots pattern-match headlines and fire orders. Sentient Trader runs 
 <br/>
 
 ---
+
+<a id="how-it-works"></a>
+
+<details>
+<summary><b>🔬 How It Works — architecture, the AI committee &amp; the risk gate</b> &nbsp;<sub>(click to expand)</sub></summary>
+
+<br/>
 
 ## 🏛️ Architecture
 
@@ -298,7 +346,14 @@ flowchart LR
 
 <br/>
 
+</details>
+
 ---
+
+<details>
+<summary><b>🧰 Features, data model &amp; tech stack</b> &nbsp;<sub>(click to expand)</sub></summary>
+
+<br/>
 
 ## 📊 Enhanced Trading Features
 
@@ -516,7 +571,16 @@ OUTCOME_LABELER_LIMIT=250
 
 <br/>
 
+</details>
+
 ---
+
+<a id="quick-start"></a>
+
+<details>
+<summary><b>🚀 Run It Yourself — structure, setup, testing &amp; deploy</b> &nbsp;<sub>(click to expand)</sub></summary>
+
+<br/>
 
 ## 📁 Project Structure
 
@@ -825,7 +889,14 @@ Update agent parameters via the **Settings** page in the dashboard. The worker r
 
 <br/>
 
+</details>
+
 ---
+
+<details>
+<summary><b>🎯 Key design decisions &amp; trade-offs</b> &nbsp;<sub>(click to expand)</sub></summary>
+
+<br/>
 
 ## 🎯 Key Design Decisions
 
@@ -861,6 +932,8 @@ Update agent parameters via the **Settings** page in the dashboard. The worker r
 </table>
 
 <br/>
+
+</details>
 
 ---
 
