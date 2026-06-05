@@ -91,9 +91,9 @@ Every signal is replayable as an **interactive pipeline** — news → pre-scree
 
 | Decision | Signal | Pipeline replay |
 |:--:|---|:--:|
-| 🟢 **BUY** | `GOOG` — *"Palantir Expands Google Cloud AI Partnership"* | **[▶ Replay](https://apps.sundeepdayalan.in/sentient-trader/signal/be963ddb-285a-42f8-832a-f40303be8b3d)** |
-| 🔴 **SELL** | `LULU` — *"Root Of The Challenges Not Fully Diagnosed"* | **[▶ Replay](https://apps.sundeepdayalan.in/sentient-trader/signal/8266a5dc-35c2-4e79-9d58-59e741975dd1)** |
-| 🟡 **HOLD** | `LEN` — *"Lennar Appoints Jim Parker As COO"* | **[▶ Replay](https://apps.sundeepdayalan.in/sentient-trader/signal/12ce41b2-22d9-401b-b3b5-9b2193bf88f8)** |
+| 🟢 **BUY** | `GOOG` — *"Palantir Expands Google Cloud AI Partnership"* | **[▶ Replay](https://apps.sundeepdayalan.in/sentient-trader/pipeline/be963ddb-285a-42f8-832a-f40303be8b3d)** |
+| 🔴 **SELL** | `LULU` — *"Root Of The Challenges Not Fully Diagnosed"* | **[▶ Replay](https://apps.sundeepdayalan.in/sentient-trader/pipeline/8266a5dc-35c2-4e79-9d58-59e741975dd1)** |
+| 🟡 **HOLD** | `LEN` — *"Lennar Appoints Jim Parker As COO"* | **[▶ Replay](https://apps.sundeepdayalan.in/sentient-trader/pipeline/12ce41b2-22d9-401b-b3b5-9b2193bf88f8)** |
 
 **[▶ Explore the live decision traces »](https://apps.sundeepdayalan.in/sentient-trader)**
 
