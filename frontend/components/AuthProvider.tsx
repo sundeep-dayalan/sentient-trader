@@ -28,6 +28,7 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { apiFetch } from '@/lib/api';
 import { createBrowserClient } from '@/lib/supabase-browser';
+import { posthog } from '@/lib/posthog';
 import type { User, Session } from '@supabase/supabase-js';
 
 // ── Types ──────────────────────────────────────────────────────
@@ -93,6 +94,15 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
       return;
     }
     fetchUserRole().then(({ isSuperUser }) => setIsSuperUser(isSuperUser));
+  }, [user]);
+
+  // ── Tie analytics identity to real (non-anonymous) users ──────
+  // No-op when PostHog isn't initialized (no key configured).
+  useEffect(() => {
+    if (!posthog.__loaded) return;
+    if (user && !user.is_anonymous) {
+      posthog.identify(user.id, { email: user.email });
+    }
   }, [user]);
 
   // ── Initialize: check session, exchange OAuth code, or sign in anonymously ──
@@ -188,6 +198,7 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
 
   // ── Sign out ─────────────────────────────────────────────────
   const signOut = useCallback(async () => {
+    if (posthog.__loaded) posthog.reset();
     await supabase.auth.signOut();
     // Full page reload to reset all data and re-create anonymous session
     window.location.reload();
