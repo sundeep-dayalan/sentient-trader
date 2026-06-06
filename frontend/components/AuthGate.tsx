@@ -6,7 +6,7 @@
  *   1. User lands → auto-signed in anonymously → can browse freely
  *   2. User uses their 1 free simulation → allowed
  *   3. User tries a 2nd simulation → this modal pops up
- *   4. User signs in with GitHub/Google/Magic Link
+ *   4. User signs in with GitHub/Google
  *   5. User gets 2 more simulations per day
  *
  * Props:
@@ -15,7 +15,6 @@
  *   reason   — why the modal appeared ("auth_required" or "limit_reached")
  */
 
-import { useState } from 'react';
 import { useAuth } from './AuthProvider';
 
 interface AuthGateProps {
@@ -25,29 +24,9 @@ interface AuthGateProps {
 }
 
 export default function AuthGate({ isOpen, onClose, reason = 'auth_required' }: AuthGateProps) {
-  const { signInWithGithub, signInWithGoogle, signInWithMagicLink } = useAuth();
-  const [email, setEmail] = useState('');
-  const [magicLinkSent, setMagicLinkSent] = useState(false);
-  const [magicLinkError, setMagicLinkError] = useState('');
-  const [isSending, setIsSending] = useState(false);
+  const { signInWithGithub, signInWithGoogle } = useAuth();
 
   if (!isOpen) return null;
-
-  // ── Handle magic link submission ──────────────────────────────
-  async function handleMagicLink() {
-    if (!email.trim() || isSending) return;
-    setIsSending(true);
-    setMagicLinkError('');
-
-    const result = await signInWithMagicLink(email.trim());
-
-    if (result.error) {
-      setMagicLinkError(result.error);
-    } else {
-      setMagicLinkSent(true);
-    }
-    setIsSending(false);
-  }
 
   // ── Title and description based on why we're showing this ─────
   const title =
@@ -133,72 +112,6 @@ export default function AuthGate({ isOpen, onClose, reason = 'auth_required' }: 
             Continue with Google
           </button>
         </div>
-
-        {/* ── Divider ──────────────────────────────────────────── */}
-        <div className="my-4 flex items-center gap-3">
-          <div className="flex-1 border-t border-line" />
-          <span className="text-xs font-medium text-muted">or</span>
-          <div className="flex-1 border-t border-line" />
-        </div>
-
-        {/* ── Magic Link ───────────────────────────────────────── */}
-        {magicLinkSent ? (
-          <div className="rounded-xl border border-positive-border bg-positive-soft px-4 py-3 text-center">
-            <p className="text-sm font-semibold text-positive">Check your email!</p>
-            <p className="mt-1 text-xs text-positive opacity-80">
-              We sent a sign-in link to <strong>{email}</strong>
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-2.5">
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleMagicLink()}
-              placeholder="you@example.com"
-              disabled={isSending}
-              className="w-full rounded-xl border border-line bg-surface-2 px-4 py-3 text-sm text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
-            />
-            <button
-              onClick={handleMagicLink}
-              disabled={!email.trim() || isSending}
-              className={[
-                'flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold transition-all',
-                email.trim() && !isSending
-                  ? 'bg-accent border-accent text-white hover:opacity-90 cursor-pointer'
-                  : 'bg-surface-2 border-line text-muted cursor-not-allowed',
-              ].join(' ')}
-            >
-              {isSending ? (
-                <>
-                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                  Sending...
-                </>
-              ) : (
-                <>
-                  <svg
-                    className="h-4 w-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75"
-                    />
-                  </svg>
-                  Send Magic Link
-                </>
-              )}
-            </button>
-            {magicLinkError && (
-              <p className="text-xs text-negative text-center">{magicLinkError}</p>
-            )}
-          </div>
-        )}
 
         {/* ── Footer note ──────────────────────────────────────── */}
         <p className="mt-4 text-center text-[11px] text-muted leading-relaxed">

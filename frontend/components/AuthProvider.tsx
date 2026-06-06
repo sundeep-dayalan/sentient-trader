@@ -6,7 +6,7 @@
  *   - isAnonymous:    Whether the user is anonymously signed in
  *   - isSuperUser:    Whether the server confirms this user is an admin
  *   - isLoading:      Whether we're still checking the auth state
- *   - signInWithGithub(), signInWithGoogle(), signInWithMagicLink(email)
+ *   - signInWithGithub(), signInWithGoogle()
  *   - signOut()
  *
  * HOW IT WORKS:
@@ -39,7 +39,6 @@ interface AuthContextValue {
   isSuperUser: boolean;
   signInWithGithub: () => Promise<void>;
   signInWithGoogle: () => Promise<void>;
-  signInWithMagicLink: (email: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
 }
 
@@ -187,24 +186,6 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
     });
   }, [supabase]);
 
-  // ── Sign in with Magic Link ──────────────────────────────────
-  const signInWithMagicLink = useCallback(
-    async (email: string) => {
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          emailRedirectTo: getAuthCallbackUrl(),
-        },
-      });
-
-      if (error) {
-        return { error: error.message };
-      }
-      return {};
-    },
-    [supabase],
-  );
-
   // ── Sign out ─────────────────────────────────────────────────
   const signOut = useCallback(async () => {
     await supabase.auth.signOut();
@@ -223,7 +204,6 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
         isSuperUser: isSuperUser_,
         signInWithGithub,
         signInWithGoogle,
-        signInWithMagicLink,
         signOut,
       }}
     >
