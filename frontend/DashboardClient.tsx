@@ -31,6 +31,12 @@ const NAV_ITEMS = [
 ] as const;
 type ViewName = (typeof NAV_ITEMS)[number];
 
+// The four views surfaced directly in the mobile bottom tab bar (thumb reach).
+// Everything else lives behind the "More" sheet / hamburger drawer.
+const BOTTOM_NAV_ITEMS: ViewName[] = ['Dashboard', 'Signals', 'Orders', 'Portfolio'];
+// Shorter captions so four tabs + "More" fit a narrow phone without truncating.
+const BOTTOM_NAV_LABELS: Partial<Record<ViewName, string>> = { Dashboard: 'Home' };
+
 const VIEW_PATH_MAP: Record<ViewName, string> = {
   Dashboard: '/',
   Signals: '/signals',
@@ -797,6 +803,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     'auth_required',
   );
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const [paperBannerDismissed, setPaperBannerDismissed] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('st-paper-banner-dismissed') === 'true';
@@ -846,6 +853,27 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [isSimulatorOpen]);
+
+  // A nav tap inside the drawer navigates and then this dismisses the overlay,
+  // so a route change always closes the mobile nav.
+  useEffect(() => {
+    setNavDrawerOpen(false);
+  }, [pathname]);
+
+  // While the drawer is open, lock the page behind it and wire Escape to close.
+  useEffect(() => {
+    if (!navDrawerOpen) return;
+    const closeOnEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setNavDrawerOpen(false);
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [navDrawerOpen]);
 
   const loadAlpacaSummary = useCallback(async () => {
     try {
@@ -1160,9 +1188,30 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
           {/* Header */}
           <header className="z-50 shrink-0 border-b border-line bg-surface">
             <div className="flex min-h-[60px] items-center gap-3 px-4 py-3 md:px-6">
-              {/* Mobile brand */}
-              <div className="flex min-w-0 items-center gap-3 xl:hidden">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-white">
+              {/* Mobile: hamburger + brand */}
+              <div className="flex min-w-0 items-center gap-2 xl:hidden">
+                <button
+                  onClick={() => setNavDrawerOpen(true)}
+                  aria-label="Open navigation menu"
+                  aria-expanded={navDrawerOpen}
+                  className="tap-target -ml-1 flex h-10 w-10 items-center justify-center rounded-xl text-secondary transition hover:bg-hover hover:text-primary active:scale-95"
+                >
+                  <svg
+                    className="h-5 w-5"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <line x1="3" y1="6" x2="21" y2="6" />
+                    <line x1="3" y1="12" x2="21" y2="12" />
+                    <line x1="3" y1="18" x2="21" y2="18" />
+                  </svg>
+                </button>
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-white">
                   <svg
                     width="15"
                     height="15"
@@ -1176,7 +1225,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                   </svg>
                 </div>
-                <p className="text-sm font-bold text-primary">Sentient Trader</p>
+                <p className="truncate text-sm font-bold text-primary">Sentient Trader</p>
               </div>
 
               <div className="ml-auto flex items-center gap-2">
@@ -1339,7 +1388,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
           {/* Page content */}
           <main
             className={[
-              'mx-auto flex w-full max-w-[1660px] flex-1 flex-col overflow-y-auto bg-[var(--dashboard-bg)] px-4 py-5 md:px-6 xl:min-h-0',
+              'pb-bottom-nav mx-auto flex w-full max-w-[1660px] flex-1 flex-col overflow-y-auto bg-[var(--dashboard-bg)] px-4 py-5 md:px-6 xl:min-h-0',
               activeView === 'Dashboard' ? 'xl:overflow-y-auto' : 'gap-4 xl:overflow-y-auto',
             ].join(' ')}
           >
@@ -1521,6 +1570,156 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
         </div>
       </div>
 
+      {/* ── Mobile bottom tab bar ──────────────────────────────────── */}
+      <nav
+        className="pb-safe fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface shadow-[0_-4px_24px_var(--panel-shadow)] xl:hidden"
+        aria-label="Primary"
+      >
+        <div className="mx-auto flex max-w-lg items-stretch justify-around">
+          {BOTTOM_NAV_ITEMS.map((item) => {
+            const active = activeView === item;
+            return (
+              <button
+                key={item}
+                onClick={() => setActiveView(item)}
+                aria-current={active ? 'page' : undefined}
+                className={[
+                  'tap-target flex flex-1 flex-col items-center justify-center gap-1 px-1 py-2 text-[10px] font-semibold transition-colors',
+                  active ? 'text-accent' : 'text-muted hover:text-secondary',
+                ].join(' ')}
+              >
+                {NAV_ICONS[item]}
+                <span className="leading-none">{BOTTOM_NAV_LABELS[item] ?? item}</span>
+              </button>
+            );
+          })}
+          {/* "More" surfaces the views that don't fit the bar and is highlighted
+              whenever one of those views (Risk Gate, Pipeline, Settings) is active. */}
+          <button
+            onClick={() => setNavDrawerOpen(true)}
+            aria-label="More views"
+            aria-expanded={navDrawerOpen}
+            className={[
+              'tap-target flex flex-1 flex-col items-center justify-center gap-1 px-1 py-2 text-[10px] font-semibold transition-colors',
+              navDrawerOpen || !BOTTOM_NAV_ITEMS.includes(activeView)
+                ? 'text-accent'
+                : 'text-muted hover:text-secondary',
+            ].join(' ')}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="5" cy="12" r="1" />
+              <circle cx="12" cy="12" r="1" />
+              <circle cx="19" cy="12" r="1" />
+            </svg>
+            <span className="leading-none">More</span>
+          </button>
+        </div>
+      </nav>
+
+      {/* ── Mobile nav drawer ──────────────────────────────────────── */}
+      {navDrawerOpen && (
+        <div
+          className="fixed inset-0 z-[120] xl:hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Navigation"
+        >
+          <div
+            className="modal-backdrop backdrop-in absolute inset-0"
+            onClick={() => setNavDrawerOpen(false)}
+          />
+          <aside className="drawer-in absolute inset-y-0 left-0 flex w-[82%] max-w-[300px] flex-col border-r border-line bg-surface px-5 py-6 shadow-card-lg">
+            {/* Brand + close */}
+            <div className="flex items-center justify-between gap-3 px-1">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-white shadow-sm">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                  </svg>
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold leading-none text-primary">
+                    Sentient Trader
+                  </p>
+                  <p className="mt-0.5 text-[11px] font-medium text-muted">AI Market Intelligence</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setNavDrawerOpen(false)}
+                aria-label="Close navigation"
+                className="tap-target -mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted transition hover:bg-hover hover:text-primary active:scale-95"
+              >
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Navigation */}
+            <nav className="modern-scroll mt-6 min-h-0 flex-1 space-y-0.5 overflow-y-auto">
+              <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted">
+                Navigation
+              </p>
+              {NAV_ITEMS.map((item) => (
+                <button
+                  key={item}
+                  onClick={() => setActiveView(item)}
+                  className={[
+                    'tap-target flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium transition-all duration-150',
+                    activeView === item
+                      ? 'bg-accent-soft text-accent'
+                      : 'text-secondary hover:bg-hover hover:text-primary',
+                  ].join(' ')}
+                >
+                  <span className={activeView === item ? 'text-accent' : 'text-muted'}>
+                    {NAV_ICONS[item]}
+                  </span>
+                  {item}
+                </button>
+              ))}
+            </nav>
+
+            {/* Status */}
+            <div className="mt-4 shrink-0">
+              <div className="flex items-center gap-2 rounded-xl border border-positive-border bg-positive-soft px-3 py-2.5">
+                <span className="pulse-dot h-2 w-2 shrink-0 rounded-full bg-positive" />
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-positive">Autonomous</p>
+                  <p className="mt-0.5 text-[10px] text-positive opacity-70">
+                    Last signal {lastSignalTime}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      )}
+
       {/* ── Auth Gate modal ────────────────────────────────────────── */}
       <AuthGate
         isOpen={authGateOpen}
@@ -1531,12 +1730,12 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
       {/* ── Simulate modal ────────────────────────────────────────── */}
       {isSimulatorOpen && (
         <div
-          className="modal-backdrop fixed inset-0 z-[100] flex items-center justify-center px-4 py-6 backdrop-blur-sm"
+          className="modal-backdrop fixed inset-0 z-[100] flex items-end justify-center backdrop-blur-sm sm:items-center sm:px-4 sm:py-6"
           role="presentation"
           onMouseDown={() => setIsSimulatorOpen(false)}
         >
           <div
-            className="glass-panel max-h-[calc(100vh-3rem)] w-full max-w-2xl overflow-y-auto rounded-xl p-5"
+            className="glass-panel sheet-up pb-safe modern-scroll max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-t-2xl p-5 sm:max-h-[calc(100vh-3rem)] sm:rounded-xl"
             role="dialog"
             aria-modal="true"
             aria-label="Simulate signal"

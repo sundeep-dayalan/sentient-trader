@@ -133,11 +133,12 @@ export default function SettingsPage() {
   }, []);
 
   return (
-    // GitHub-style: full-height panel, left sidebar + scrollable right content
-    <div className="glass-panel flex min-h-[600px] flex-1 overflow-hidden rounded-2xl">
-      {/* ── Left nav ─────────────────────────────────────────────── */}
-      <nav className="w-52 shrink-0 border-r border-line px-2 py-4">
-        <p className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted">
+    // GitHub-style: full-height panel. Sidebar + content side-by-side on md+;
+    // stacked with a horizontal, scrollable tab strip on mobile.
+    <div className="glass-panel flex min-h-[600px] flex-1 flex-col overflow-hidden rounded-2xl md:flex-row">
+      {/* ── Nav: horizontal strip on mobile, left sidebar on md+ ──── */}
+      <nav className="modern-scroll flex shrink-0 gap-1 overflow-x-auto border-b border-line px-2 py-2 md:w-52 md:flex-col md:gap-0 md:space-y-0.5 md:overflow-x-visible md:border-b-0 md:border-r md:py-4">
+        <p className="mb-1 hidden px-3 text-[10px] font-semibold uppercase tracking-widest text-muted md:block">
           Settings
         </p>
         {TABS.map((tab) => (
@@ -145,7 +146,7 @@ export default function SettingsPage() {
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={[
-              'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors duration-150',
+              'flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors duration-150 md:w-full',
               activeTab === tab.id
                 ? 'bg-accent-soft text-accent'
                 : 'text-secondary hover:bg-hover hover:text-primary',
@@ -158,7 +159,7 @@ export default function SettingsPage() {
       </nav>
 
       {/* ── Right content ─────────────────────────────────────────── */}
-      <div className="modern-scroll min-w-0 flex-1 overflow-y-auto px-6 py-6">
+      <div className="modern-scroll min-w-0 flex-1 overflow-y-auto px-4 py-5 md:px-6 md:py-6">
         {loading && (
           <div className="flex h-48 items-center justify-center gap-2.5 text-sm text-muted">
             <span className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-accent" />

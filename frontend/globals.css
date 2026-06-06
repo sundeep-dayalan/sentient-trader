@@ -295,3 +295,84 @@ body {
 html.dark .modal-backdrop {
   background: rgba(0, 0, 0, 0.6);
 }
+
+/* ─── Mobile foundations ────────────────────────────────────────── */
+/* Lock the page to its viewport so the fixed bottom nav never reveals a
+ * rubber-band gap on iOS and a stray wide child can't sideways-scroll the
+ * whole app. Inner panes still scroll via their own overflow containers. */
+html,
+body {
+  overscroll-behavior-y: none;
+}
+
+/* Safe-area helpers for the notch / home indicator on modern phones. */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Reserve room under scrolling content for the fixed bottom tab bar
+ * (its height + the home-indicator inset). Cleared at xl where the bar
+ * is replaced by the persistent sidebar. */
+.pb-bottom-nav {
+  padding-bottom: calc(4.25rem + env(safe-area-inset-bottom));
+}
+@media (min-width: 1280px) {
+  .pb-bottom-nav {
+    padding-bottom: 0;
+  }
+}
+
+/* Larger, comfortable hit area for icon-only controls on touch devices. */
+@media (pointer: coarse) {
+  .tap-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* ─── Drawer + bottom-sheet motion ──────────────────────────────── */
+@keyframes drawerIn {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+.drawer-in {
+  animation: drawerIn 0.24s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+
+@keyframes sheetUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.sheet-up {
+  animation: sheetUp 0.26s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+
+@keyframes backdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.backdrop-in {
+  animation: backdropIn 0.2s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer-in,
+  .sheet-up,
+  .backdrop-in {
+    animation-duration: 0.01ms;
+  }
+}

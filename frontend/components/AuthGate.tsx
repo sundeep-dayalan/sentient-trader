@@ -39,12 +39,12 @@ export default function AuthGate({ isOpen, onClose, reason = 'auth_required' }: 
 
   return (
     <div
-      className="modal-backdrop fixed inset-0 z-[200] flex items-center justify-center px-4 py-6 backdrop-blur-sm"
+      className="modal-backdrop fixed inset-0 z-[200] flex items-end justify-center backdrop-blur-sm sm:items-center sm:px-4 sm:py-6"
       role="presentation"
       onMouseDown={onClose}
     >
       <div
-        className="glass-panel w-full max-w-sm rounded-xl p-6"
+        className="glass-panel sheet-up pb-safe max-h-[90vh] w-full overflow-y-auto rounded-t-2xl p-6 sm:max-w-sm sm:rounded-xl"
         role="dialog"
         aria-modal="true"
         aria-label="Sign in"

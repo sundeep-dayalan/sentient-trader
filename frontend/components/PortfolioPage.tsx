@@ -261,7 +261,99 @@ export default function PortfolioPage({
               </div>
             )}
 
+            {/* Mobile / tablet: stacked position cards (the dense table needs
+                ~900px, which doesn't fit a phone, so we reflow it below lg). */}
             {sortedPositions.length > 0 && (
+              <div className="space-y-2.5 px-4 py-4 lg:hidden">
+                {sortedPositions.map((position) => {
+                  const marketValue = numberValue(position.market_value) ?? 0;
+                  const positionShare =
+                    equity > 0 ? Math.min((Math.abs(marketValue) / equity) * 100, 100) : 0;
+                  const pl = numberValue(position.unrealized_pl) ?? 0;
+                  const intraday = numberValue(position.unrealized_intraday_pl) ?? 0;
+                  const isUp = pl >= 0;
+
+                  return (
+                    <div
+                      key={position.symbol ?? `${position.asset_class}-${marketValue}`}
+                      className="rounded-xl border border-[var(--dashboard-divider)] bg-[var(--dashboard-row)] p-3.5"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate font-mono text-sm font-bold text-[var(--dashboard-text)]">
+                            {position.symbol ?? '-'}
+                          </p>
+                          <p className="mt-0.5 truncate text-[10px] uppercase text-[var(--dashboard-muted)]">
+                            {position.asset_class ?? 'asset'} · {position.exchange ?? 'alpaca'}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-mono text-sm font-semibold text-[var(--dashboard-text)]">
+                            {money(position.market_value)}
+                          </p>
+                          <p
+                            className={`mt-0.5 font-mono text-[11px] font-semibold ${isUp ? 'text-positive' : 'text-negative'}`}
+                          >
+                            {signedMoney(position.unrealized_pl)} ·{' '}
+                            {percentFromRatio(position.unrealized_plpc)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        <div>
+                          <span className="block text-[10px] text-[var(--dashboard-muted)]">Qty</span>
+                          <span className="mt-0.5 block font-mono text-xs text-[var(--dashboard-text)]">
+                            {shareQuantity(position.qty)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block text-[10px] text-[var(--dashboard-muted)]">
+                            Current
+                          </span>
+                          <span className="mt-0.5 block font-mono text-xs text-[var(--dashboard-text)]">
+                            {money(position.current_price)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block text-[10px] text-[var(--dashboard-muted)]">
+                            Avg entry
+                          </span>
+                          <span className="mt-0.5 block font-mono text-xs text-[var(--dashboard-text)]">
+                            {money(position.avg_entry_price)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-3">
+                        <div className="flex items-center justify-between gap-2 text-[10px]">
+                          <span
+                            className={`font-mono ${intraday >= 0 ? 'text-positive' : 'text-negative'}`}
+                          >
+                            Today {signedMoney(position.unrealized_intraday_pl)} ·{' '}
+                            {percentFromRatio(position.unrealized_intraday_plpc)}
+                          </span>
+                          <span className="font-mono text-[var(--dashboard-muted)]">
+                            {positionShare.toFixed(1)}% exposure
+                          </span>
+                        </div>
+                        <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[var(--dashboard-control)]">
+                          <div
+                            className={isUp ? 'h-full rounded-full bg-positive' : 'h-full rounded-full bg-negative'}
+                            style={{ width: `${Math.max(positionShare, marketValue ? 2 : 0)}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Desktop: dense table, kept scroll-contained so it can never
+                push the page sideways. */}
+            {sortedPositions.length > 0 && (
+              <div className="hidden overflow-x-auto lg:block">
               <div className="min-w-[900px]">
                 <div className="grid grid-cols-[110px_90px_110px_110px_120px_120px_120px_minmax(0,1fr)] border-b border-[var(--dashboard-divider)] px-5 py-3 text-[10px] font-semibold uppercase tracking-wide text-[var(--dashboard-muted)]">
                   <span>Symbol</span>
@@ -349,6 +441,7 @@ export default function PortfolioPage({
                     </div>
                   );
                 })}
+              </div>
               </div>
             )}
           </div>
