@@ -569,6 +569,20 @@ def check_simulate_limit(user_id: str, tier: UserTier) -> dict[str, Any]:
     }
 
 
+def peek_simulate_limit(user_id: str, tier: UserTier) -> dict[str, Any]:
+    """Read remaining simulations without consuming one (no INCR)."""
+    limit, window_ms, prefix = RATE_LIMITS[tier]
+    now_ms = int(time.time() * 1000)
+    window_start = (now_ms // window_ms) * window_ms
+    reset = window_start + window_ms
+    key = f"{prefix}:{window_start}:{user_id}"
+
+    raw = get_redis().get(key)
+    count = int(raw) if raw is not None else 0
+    remaining = max(limit - count, 0)
+    return {"limit": limit, "remaining": remaining, "reset": reset, "tier": tier}
+
+
 def validate_simulation(payload: SimulateRequest) -> tuple[str, str, str]:
     ticker = payload.ticker.strip().upper()
     headline = html.unescape(payload.headline.strip())
@@ -1563,6 +1577,12 @@ def status() -> dict[str, Any]:
         "checkedAt": now_iso(),
         "details": details,
     }
+
+
+@app.get("/simulate/quota")
+def simulate_quota(user: UserInfo = Depends(require_user)) -> dict[str, Any]:
+    """Current remaining simulations for the caller, without consuming one."""
+    return peek_simulate_limit(user.id, user_tier(user))
 
 
 @app.post("/simulate")

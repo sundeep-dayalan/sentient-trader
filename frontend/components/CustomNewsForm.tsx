@@ -8,7 +8,7 @@
  * - On 401: triggers the AuthGate modal
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ApiError, apiFetch } from '@/lib/api';
 import { useAuth } from '@/components/AuthProvider';
 
@@ -28,7 +28,7 @@ export default function CustomNewsForm({
   onOpenSignals,
   onOpenPipeline,
 }: CustomNewsFormProps) {
-  const { isAnonymous } = useAuth();
+  const { isAnonymous, user, isLoading: authLoading } = useAuth();
   const [ticker, setTicker] = useState('');
   const [headline, setHeadline] = useState('');
   const [summary, setSummary] = useState('');
@@ -38,6 +38,23 @@ export default function CustomNewsForm({
   const [remaining, setRemaining] = useState<number | null>(null);
 
   const canSubmit = ticker.trim().length > 0 && headline.trim().length > 10 && state !== 'loading';
+
+  // Load the real remaining count as soon as auth is ready (without consuming one),
+  // so the badge reflects the live value on open and after a refresh.
+  useEffect(() => {
+    if (authLoading || !user) return;
+    let cancelled = false;
+    apiFetch<{ remaining?: number }>('/simulate/quota')
+      .then((json) => {
+        if (!cancelled && typeof json.remaining === 'number') setRemaining(json.remaining);
+      })
+      .catch(() => {
+        /* non-blocking: fall back to the static hint */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, user]);
 
   async function inject() {
     if (!canSubmit) return;
@@ -104,16 +121,16 @@ export default function CustomNewsForm({
           </svg>
         </div>
         <div>
-          <h3 className="text-sm font-semibold leading-tight">Simulate a Signal</h3>
+          <h3 className="text-sm font-semibold leading-tight">Try it with your own news</h3>
           <p className="text-[11px] text-muted">
             {variant === 'modal'
-              ? 'Create a test headline and send it through the live agent.'
-              : 'Manual headline test'}
+              ? 'Type a news headline and watch the AI decide whether to buy, sell, or pass.'
+              : 'Test a headline yourself'}
           </p>
           {/* Show remaining simulations */}
           {remaining !== null && (
             <p className="mt-0.5 text-[10px] font-medium text-accent">
-              {remaining} simulation{remaining !== 1 ? 's' : ''} remaining today
+              {remaining} free tr{remaining !== 1 ? 'ies' : 'y'} left today
             </p>
           )}
         </div>
@@ -121,9 +138,9 @@ export default function CustomNewsForm({
 
       {variant === 'modal' && (
         <div className="mt-4 grid gap-2 sm:grid-cols-3">
-          <StepHint number="1" label="Enter news" text="Ticker plus a market-moving headline." />
-          <StepHint number="2" label="Agent runs" text="The same screens, debate, and risk gate process it." />
-          <StepHint number="3" label="Observe" text="A SIM row appears in Signals; Pipeline shows the flow." />
+          <StepHint number="1" label="You add the news" text="Pick a company and type a headline about it — like one you'd see in the news." />
+          <StepHint number="2" label="The AI thinks it over" text="It reads the news, weighs the good and bad, and checks how risky a trade would be." />
+          <StepHint number="3" label="You see the decision" text="Its call shows up under Signals, and Pipeline lets you watch how it got there." />
         </div>
       )}
 
@@ -132,7 +149,7 @@ export default function CustomNewsForm({
         {/* Ticker */}
         <div>
           <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
-            Ticker *
+            Company symbol *
           </label>
           <input
             type="text"
@@ -144,7 +161,7 @@ export default function CustomNewsForm({
             className="w-full rounded-xl border border-line bg-surface-2 px-3.5 py-2.5 font-mono text-sm font-bold text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
           />
           <p className="mt-1 text-[10px] leading-relaxed text-muted">
-            The stock symbol tells the agent which company and market context to evaluate.
+            The short code for a company on the stock market — e.g. AAPL for Apple, TSLA for Tesla.
           </p>
         </div>
 
@@ -163,19 +180,19 @@ export default function CustomNewsForm({
             className="w-full resize-none rounded-xl border border-line bg-surface-2 px-3.5 py-2.5 text-sm leading-relaxed text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
           />
           {headline.length > 0 && headline.length <= 10 && (
-            <p className="mt-0.5 text-[10px] text-warning">Too short — add more context.</p>
+            <p className="mt-0.5 text-[10px] text-warning">Too short — add a bit more detail.</p>
           )}
           <p className="mt-1 text-[10px] leading-relaxed text-muted">
-            Write it like a real news headline. Stronger, specific headlines produce clearer traces.
+            Write it like a real news headline. The clearer and more specific it is, the better the AI can explain its thinking.
           </p>
         </div>
 
         {/* Summary */}
         <div>
           <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
-            Article Summary{' '}
+            More details{' '}
             <span className="text-muted font-normal normal-case">
-              (optional — gives personas richer context)
+              (optional — a few sentences gives the AI more to work with)
             </span>
           </label>
           <textarea
@@ -192,7 +209,7 @@ export default function CustomNewsForm({
         {/* Article URL */}
         <div>
           <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
-            Article URL <span className="text-muted font-normal normal-case">(optional)</span>
+            Link to the article <span className="text-muted font-normal normal-case">(optional)</span>
           </label>
           <input
             type="url"
@@ -227,7 +244,7 @@ export default function CustomNewsForm({
           {state === 'loading' && (
             <>
               <span className="h-3 w-3 animate-spin rounded-full border-2 border-line border-t-muted" />
-              Sending to pipeline...
+              Sending to the AI...
             </>
           )}
           {state === 'success' && (
@@ -241,7 +258,7 @@ export default function CustomNewsForm({
               >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
               </svg>
-              Sent to pipeline
+              Sent — the AI is on it
             </>
           )}
           {state === 'error' && (
@@ -263,7 +280,7 @@ export default function CustomNewsForm({
               <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M8 5.14v14l11-7-11-7z" />
               </svg>
-              Simulate signal
+              See what the AI decides
             </>
           )}
         </button>
@@ -271,10 +288,10 @@ export default function CustomNewsForm({
 
       {state === 'success' && (
         <div className="rounded-xl border border-positive-border bg-positive-soft p-3">
-          <p className="text-xs font-bold text-positive">Simulation queued</p>
+          <p className="text-xs font-bold text-positive">Done — the AI is working on it</p>
           <p className="mt-1 text-[11px] leading-relaxed text-positive opacity-80">
-            Watch the newest SIM row in Signals. Open Pipeline to see the agent flow, then use View
-            trace on the signal for the full decision replay.
+            Its decision will show up at the top of Signals in a moment. Open Pipeline to watch it
+            think step by step, or tap “View trace” on the result to replay exactly how it decided.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             {onOpenSignals && (
@@ -309,7 +326,9 @@ export default function CustomNewsForm({
       {/* Anonymous user hint */}
       {isAnonymous && state === 'idle' && (
         <p className="mt-2 text-center text-[10px] text-muted">
-          1 free simulation available · Sign in for more
+          {remaining === null
+            ? '1 free try · Sign in for more'
+            : `${remaining} free tr${remaining !== 1 ? 'ies' : 'y'} left · Sign in for more`}
         </p>
       )}
     </div>
