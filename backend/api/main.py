@@ -958,6 +958,47 @@ def trade_detail(trade_id: str) -> dict[str, Any]:
     }
 
 
+@app.delete("/trades/{trade_id}")
+def delete_trade(
+    trade_id: str, user: UserInfo = Depends(require_super_user)
+) -> dict[str, Any]:
+    """Super-admin only: delete a simulated signal (and its decision trace).
+
+    Hard-restricted to simulated rows so real, executed trades can never be
+    removed through this endpoint.
+    """
+    if not UUID_RE.match(trade_id):
+        raise HTTPException(status_code=400, detail="Invalid trade id.")
+
+    sb = get_supabase()
+    try:
+        existing = (
+            sb.table("trades")
+            .select("id, is_simulated")
+            .eq("id", trade_id)
+            .single()
+            .execute()
+            .data
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Trade not found.") from exc
+
+    if not existing.get("is_simulated"):
+        raise HTTPException(
+            status_code=403, detail="Only simulated signals can be deleted."
+        )
+
+    # Remove the decision trace first (no FK cascade assumed), then the trade.
+    try:
+        sb.table("trade_decision_traces").delete().eq("trade_id", trade_id).execute()
+    except Exception:
+        log.exception("Failed to delete decision trace for %s", trade_id)
+    sb.table("trades").delete().eq("id", trade_id).execute()
+
+    log.info("Super admin %s deleted simulated trade %s", user.email, trade_id)
+    return {"success": True, "id": trade_id}
+
+
 DASHBOARD_STAT_KEYS = (
     "analyzed",
     "executed",

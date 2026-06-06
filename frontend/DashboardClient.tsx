@@ -986,6 +986,15 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     setSelectedTrade(tradeDetailCacheRef.current.get(trade.id) ?? trade);
   }, []);
 
+  // Super-admin only: permanently delete a simulated signal.
+  const handleDeleteTrade = useCallback(async (trade: Trade) => {
+    if (!trade.is_simulated) return;
+    await apiFetch(`/trades/${trade.id}`, { method: 'DELETE' });
+    tradeDetailCacheRef.current.delete(trade.id);
+    setTrades((prev) => prev.filter((t) => t.id !== trade.id));
+    setSelectedTrade((current) => (current?.id === trade.id ? null : current));
+  }, []);
+
   useEffect(() => {
     if (activeView !== 'Signals' || !selectedTrade) return;
     if (hasTracePayload(selectedTrade)) {
@@ -1449,6 +1458,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                   isLoadingMore={isLoadingMore}
                   hasMore={hasMore}
                   totalCount={dashboardStats?.analyzed}
+                  onDeleteTrade={isSuperUser ? handleDeleteTrade : undefined}
                 />
                 <div className="flex min-w-0 flex-col gap-3">
                   <AgentMonologue

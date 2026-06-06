@@ -78,6 +78,8 @@ interface LiveTickerProps {
   hasMore: boolean;
   previewLimit?: number;
   totalCount?: number;
+  /** Super-admin only: when provided, simulated rows show a delete control. */
+  onDeleteTrade?: (trade: Trade) => Promise<void>;
 }
 
 export default function LiveTicker({
@@ -90,6 +92,7 @@ export default function LiveTicker({
   hasMore,
   previewLimit,
   totalCount,
+  onDeleteTrade,
 }: LiveTickerProps) {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const isPreview = Boolean(previewLimit);
@@ -97,6 +100,7 @@ export default function LiveTicker({
   const [rangeStart, setRangeStart] = useState('');
   const [rangeEnd, setRangeEnd] = useState('');
   const [isRangeOpen, setIsRangeOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const onLoadMoreRef = useRef(onLoadMore);
   const rangePickerRef = useRef<HTMLDivElement>(null);
   const hasRangeFilter = rangeStart !== '' || rangeEnd !== '';
@@ -401,6 +405,38 @@ export default function LiveTicker({
                       minute: '2-digit',
                     })}
                   </span>
+                  {onDeleteTrade && trade.is_simulated && (
+                    <button
+                      type="button"
+                      disabled={deletingId === trade.id}
+                      onClick={async (event) => {
+                        event.stopPropagation();
+                        if (
+                          !window.confirm(
+                            `Delete this simulated signal for ${trade.ticker}? This cannot be undone.`,
+                          )
+                        )
+                          return;
+                        setDeletingId(trade.id);
+                        try {
+                          await onDeleteTrade(trade);
+                        } catch {
+                          window.alert('Could not delete the simulated signal. Please try again.');
+                        } finally {
+                          setDeletingId((current) => (current === trade.id ? null : current));
+                        }
+                      }}
+                      aria-label={`Delete simulated signal for ${trade.ticker}`}
+                      title="Delete simulated signal"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-line bg-surface text-muted transition hover:border-negative-border hover:text-negative disabled:opacity-50"
+                    >
+                      {deletingId === trade.id ? (
+                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-line border-t-negative" />
+                      ) : (
+                        <TrashIcon />
+                      )}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -465,6 +501,27 @@ function ExternalLinkIcon() {
       <path d="M14 3h7v7" />
       <path d="M10 14 21 3" />
       <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      className="h-3.5 w-3.5"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
     </svg>
   );
 }
