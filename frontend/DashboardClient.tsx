@@ -1526,7 +1526,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
           onMouseDown={() => setIsSimulatorOpen(false)}
         >
           <div
-            className="glass-panel w-full max-w-md rounded-xl p-5"
+            className="glass-panel max-h-[calc(100vh-3rem)] w-full max-w-2xl overflow-y-auto rounded-xl p-5"
             role="dialog"
             aria-modal="true"
             aria-label="Simulate signal"
@@ -1559,6 +1559,14 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                 setIsSimulatorOpen(false);
                 setAuthGateReason('auth_required');
                 setAuthGateOpen(true);
+              }}
+              onOpenSignals={() => {
+                setIsSimulatorOpen(false);
+                navigate('/signals');
+              }}
+              onOpenPipeline={() => {
+                setIsSimulatorOpen(false);
+                navigate('/pipeline');
               }}
             />
           </div>

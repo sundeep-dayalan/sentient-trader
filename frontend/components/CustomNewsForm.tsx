@@ -18,9 +18,16 @@ interface CustomNewsFormProps {
   variant?: 'panel' | 'modal';
   /** Called when the user needs to sign in (triggers AuthGate) */
   onAuthRequired?: () => void;
+  onOpenSignals?: () => void;
+  onOpenPipeline?: () => void;
 }
 
-export default function CustomNewsForm({ variant = 'panel', onAuthRequired }: CustomNewsFormProps) {
+export default function CustomNewsForm({
+  variant = 'panel',
+  onAuthRequired,
+  onOpenSignals,
+  onOpenPipeline,
+}: CustomNewsFormProps) {
   const { isAnonymous } = useAuth();
   const [ticker, setTicker] = useState('');
   const [headline, setHeadline] = useState('');
@@ -54,7 +61,6 @@ export default function CustomNewsForm({ variant = 'panel', onAuthRequired }: Cu
       setHeadline('');
       setSummary('');
       setArticleUrl('');
-      setTimeout(() => setState('idle'), 4000);
     } catch (e) {
       if (e instanceof ApiError) {
         const detail =
@@ -98,10 +104,10 @@ export default function CustomNewsForm({ variant = 'panel', onAuthRequired }: Cu
           </svg>
         </div>
         <div>
-          <h3 className="text-sm font-semibold leading-tight">Signal Injector</h3>
+          <h3 className="text-sm font-semibold leading-tight">Simulate a Signal</h3>
           <p className="text-[11px] text-muted">
             {variant === 'modal'
-              ? 'Send a news article through the live AI pipeline.'
+              ? 'Create a test headline and send it through the live agent.'
               : 'Manual headline test'}
           </p>
           {/* Show remaining simulations */}
@@ -112,6 +118,14 @@ export default function CustomNewsForm({ variant = 'panel', onAuthRequired }: Cu
           )}
         </div>
       </div>
+
+      {variant === 'modal' && (
+        <div className="mt-4 grid gap-2 sm:grid-cols-3">
+          <StepHint number="1" label="Enter news" text="Ticker plus a market-moving headline." />
+          <StepHint number="2" label="Agent runs" text="The same screens, debate, and risk gate process it." />
+          <StepHint number="3" label="Observe" text="A SIM row appears in Signals; Pipeline shows the flow." />
+        </div>
+      )}
 
       {/* Inputs */}
       <div className="mt-3 flex flex-col gap-2.5">
@@ -129,6 +143,9 @@ export default function CustomNewsForm({ variant = 'panel', onAuthRequired }: Cu
             disabled={state === 'loading'}
             className="w-full rounded-xl border border-line bg-surface-2 px-3.5 py-2.5 font-mono text-sm font-bold text-primary outline-none transition-colors placeholder:text-muted focus:border-accent-border disabled:opacity-50"
           />
+          <p className="mt-1 text-[10px] leading-relaxed text-muted">
+            The stock symbol tells the agent which company and market context to evaluate.
+          </p>
         </div>
 
         {/* Headline */}
@@ -148,6 +165,9 @@ export default function CustomNewsForm({ variant = 'panel', onAuthRequired }: Cu
           {headline.length > 0 && headline.length <= 10 && (
             <p className="mt-0.5 text-[10px] text-warning">Too short — add more context.</p>
           )}
+          <p className="mt-1 text-[10px] leading-relaxed text-muted">
+            Write it like a real news headline. Stronger, specific headlines produce clearer traces.
+          </p>
         </div>
 
         {/* Summary */}
@@ -207,7 +227,7 @@ export default function CustomNewsForm({ variant = 'panel', onAuthRequired }: Cu
           {state === 'loading' && (
             <>
               <span className="h-3 w-3 animate-spin rounded-full border-2 border-line border-t-muted" />
-              Injecting...
+              Sending to pipeline...
             </>
           )}
           {state === 'success' && (
@@ -221,7 +241,7 @@ export default function CustomNewsForm({ variant = 'panel', onAuthRequired }: Cu
               >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
               </svg>
-              Injected
+              Sent to pipeline
             </>
           )}
           {state === 'error' && (
@@ -243,11 +263,48 @@ export default function CustomNewsForm({ variant = 'panel', onAuthRequired }: Cu
               <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M8 5.14v14l11-7-11-7z" />
               </svg>
-              Inject
+              Simulate signal
             </>
           )}
         </button>
       </div>
+
+      {state === 'success' && (
+        <div className="rounded-xl border border-positive-border bg-positive-soft p-3">
+          <p className="text-xs font-bold text-positive">Simulation queued</p>
+          <p className="mt-1 text-[11px] leading-relaxed text-positive opacity-80">
+            Watch the newest SIM row in Signals. Open Pipeline to see the agent flow, then use View
+            trace on the signal for the full decision replay.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {onOpenSignals && (
+              <button
+                type="button"
+                onClick={onOpenSignals}
+                className="rounded-lg border border-positive-border bg-surface px-3 py-1.5 text-xs font-semibold text-positive transition hover:brightness-110"
+              >
+                Open Signals
+              </button>
+            )}
+            {onOpenPipeline && (
+              <button
+                type="button"
+                onClick={onOpenPipeline}
+                className="rounded-lg border border-positive-border bg-surface px-3 py-1.5 text-xs font-semibold text-positive transition hover:brightness-110"
+              >
+                Open Pipeline
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setState('idle')}
+              className="rounded-lg border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-secondary transition hover:border-accent-border hover:text-accent"
+            >
+              New simulation
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Anonymous user hint */}
       {isAnonymous && state === 'idle' && (
@@ -255,6 +312,20 @@ export default function CustomNewsForm({ variant = 'panel', onAuthRequired }: Cu
           1 free simulation available · Sign in for more
         </p>
       )}
+    </div>
+  );
+}
+
+function StepHint({ number, label, text }: { number: string; label: string; text: string }) {
+  return (
+    <div className="rounded-xl border border-line bg-surface-2 p-3">
+      <div className="flex items-center gap-2">
+        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-accent-soft text-[10px] font-bold text-accent">
+          {number}
+        </span>
+        <p className="text-[11px] font-bold text-primary">{label}</p>
+      </div>
+      <p className="mt-1.5 text-[10px] leading-relaxed text-muted">{text}</p>
     </div>
   );
 }

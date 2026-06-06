@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { safeArticleUrl, unescapeHtml } from '@/lib/news';
 import { Trade } from '@/lib/types';
 
@@ -28,6 +28,46 @@ function decisionPathLabel(path?: string | null): string | null {
   return null;
 }
 
+type SignalFilter = 'ALL' | 'BUY' | 'SELL' | 'HOLD' | 'SIM';
+
+const FILTERS: Array<{ key: SignalFilter; label: string }> = [
+  { key: 'ALL', label: 'All' },
+  { key: 'BUY', label: 'Buy' },
+  { key: 'SELL', label: 'Sell' },
+  { key: 'HOLD', label: 'Hold' },
+  { key: 'SIM', label: 'Sim' },
+];
+
+function localTimestamp(value: string): number {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? -1 : date.getTime();
+}
+
+function dateTimeValueToMs(value: string): number | null {
+  if (!value) return null;
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? null : time;
+}
+
+function formatDateTimeLabel(value: string): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function rangeLabel(start: string, end: string): string {
+  if (start && end) return `${formatDateTimeLabel(start)} - ${formatDateTimeLabel(end)}`;
+  if (start) return `${formatDateTimeLabel(start)} ->`;
+  if (end) return `-> ${formatDateTimeLabel(end)}`;
+  return 'Date range';
+}
+
 interface LiveTickerProps {
   trades: Trade[];
   newIds: Set<string>;
@@ -52,12 +92,79 @@ export default function LiveTicker({
   totalCount,
 }: LiveTickerProps) {
   const sentinelRef = useRef<HTMLDivElement>(null);
-  const visibleTrades = previewLimit ? trades.slice(0, previewLimit) : trades;
   const isPreview = Boolean(previewLimit);
+  const [filter, setFilter] = useState<SignalFilter>('ALL');
+  const [rangeStart, setRangeStart] = useState('');
+  const [rangeEnd, setRangeEnd] = useState('');
+  const [isRangeOpen, setIsRangeOpen] = useState(false);
   const onLoadMoreRef = useRef(onLoadMore);
+  const rangePickerRef = useRef<HTMLDivElement>(null);
+  const hasRangeFilter = rangeStart !== '' || rangeEnd !== '';
+
+  const filterCounts = useMemo(
+    () =>
+      trades.reduce<Record<SignalFilter, number>>(
+        (counts, trade) => {
+          counts.ALL += 1;
+          counts[recommendationFor(trade)] += 1;
+          if (trade.is_simulated) counts.SIM += 1;
+          return counts;
+        },
+        { ALL: 0, BUY: 0, SELL: 0, HOLD: 0, SIM: 0 },
+      ),
+    [trades],
+  );
+
+  const filteredTrades = useMemo(() => {
+    if (isPreview) return trades;
+    const fromMs = dateTimeValueToMs(rangeStart);
+    const toMs = dateTimeValueToMs(rangeEnd);
+
+    return trades.filter((trade) => {
+      if (filter === 'SIM' && !trade.is_simulated) return false;
+      if (filter !== 'ALL' && filter !== 'SIM' && recommendationFor(trade) !== filter) return false;
+
+      const tradeTime = localTimestamp(trade.created_at);
+      if (fromMs !== null && tradeTime < fromMs) return false;
+      if (toMs !== null && tradeTime > toMs) return false;
+
+      return true;
+    });
+  }, [filter, isPreview, rangeEnd, rangeStart, trades]);
+
+  const visibleTrades = previewLimit ? filteredTrades.slice(0, previewLimit) : filteredTrades;
+
+  function clearFilters() {
+    setFilter('ALL');
+    setRangeStart('');
+    setRangeEnd('');
+  }
+
   useEffect(() => {
     onLoadMoreRef.current = onLoadMore;
   }, [onLoadMore]);
+
+  useEffect(() => {
+    if (!isRangeOpen) return;
+
+    function closeOnOutsideClick(event: MouseEvent) {
+      const target = event.target;
+      if (target instanceof Node && !rangePickerRef.current?.contains(target)) {
+        setIsRangeOpen(false);
+      }
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setIsRangeOpen(false);
+    }
+
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [isRangeOpen]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -90,10 +197,99 @@ export default function LiveTicker({
             {isPreview
               ? `${visibleTrades.length} latest`
               : totalCount !== undefined
-                ? `${totalCount} events`
-                : `${trades.length} events`}
+                ? `${visibleTrades.length}/${totalCount} events`
+                : `${visibleTrades.length}/${trades.length} events`}
           </span>
         </div>
+        {!isPreview && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+              {FILTERS.map((item) => {
+                const active = filter === item.key;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => setFilter(item.key)}
+                    className={[
+                      'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition',
+                      active
+                        ? 'border-accent-border bg-accent-soft text-accent'
+                        : 'border-line bg-surface text-muted hover:border-accent-border hover:text-accent',
+                    ].join(' ')}
+                  >
+                    {item.label}
+                    <span className="font-mono text-[10px] opacity-70">{filterCounts[item.key]}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div ref={rangePickerRef} className="relative ml-auto shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsRangeOpen((open) => !open)}
+                className={[
+                  'inline-flex h-8 max-w-[230px] items-center gap-2 rounded-lg border bg-surface px-3 text-[11px] font-semibold transition hover:border-accent-border hover:text-accent',
+                  hasRangeFilter
+                    ? 'border-accent-border text-accent'
+                    : 'border-line text-secondary',
+                ].join(' ')}
+                aria-expanded={isRangeOpen}
+              >
+                <CalendarIcon />
+                <span className="truncate">{rangeLabel(rangeStart, rangeEnd)}</span>
+              </button>
+              {isRangeOpen && (
+                <div className="absolute right-0 top-full z-30 mt-2 w-80 rounded-xl border border-line bg-surface p-3 shadow-[var(--dashboard-shadow)]">
+                  <div className="grid gap-2">
+                    <label>
+                      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                        From
+                      </span>
+                      <input
+                        type="datetime-local"
+                        value={rangeStart}
+                        onChange={(event) => setRangeStart(event.target.value)}
+                        className="h-9 w-full rounded-lg border border-line bg-surface-2 px-2.5 text-xs text-primary outline-none transition focus:border-accent-border"
+                      />
+                    </label>
+                    <label>
+                      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                        To
+                      </span>
+                      <input
+                        type="datetime-local"
+                        value={rangeEnd}
+                        onChange={(event) => setRangeEnd(event.target.value)}
+                        className="h-9 w-full rounded-lg border border-line bg-surface-2 px-2.5 text-xs text-primary outline-none transition focus:border-accent-border"
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRangeStart('');
+                        setRangeEnd('');
+                      }}
+                      disabled={!hasRangeFilter}
+                      className="rounded-lg border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-secondary transition hover:border-accent-border hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Clear range
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsRangeOpen(false)}
+                      className="rounded-lg border border-accent-border bg-accent-soft px-3 py-1.5 text-xs font-semibold text-accent transition hover:brightness-110"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Trade rows */}
@@ -119,6 +315,25 @@ export default function LiveTicker({
               <p className="text-sm font-semibold text-primary">No signals yet</p>
               <p className="mt-1 text-xs text-muted">Waiting for market events…</p>
             </div>
+          </div>
+        )}
+
+        {trades.length > 0 && visibleTrades.length === 0 && (
+          <div className="flex h-full flex-col items-center justify-center gap-3 py-20 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-surface-2 text-muted">
+              <FilterIcon />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-primary">No matching signals</p>
+              <p className="mt-1 text-xs text-muted">Adjust the action or date-time range.</p>
+            </div>
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="rounded-lg border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-secondary transition hover:border-accent-border hover:text-accent"
+            >
+              Clear filters
+            </button>
           </div>
         )}
 
@@ -250,6 +465,45 @@ function ExternalLinkIcon() {
       <path d="M14 3h7v7" />
       <path d="M10 14 21 3" />
       <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+    </svg>
+  );
+}
+
+function CalendarIcon() {
+  return (
+    <svg
+      className="h-3.5 w-3.5 shrink-0"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M8 2v4" />
+      <path d="M16 2v4" />
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M3 10h18" />
+    </svg>
+  );
+}
+
+function FilterIcon() {
+  return (
+    <svg
+      className="h-5 w-5"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 5h18" />
+      <path d="M6 12h12" />
+      <path d="M10 19h4" />
     </svg>
   );
 }
