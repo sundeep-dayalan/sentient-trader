@@ -64,6 +64,8 @@ GROQ_MODELS_URL = os.environ.get(
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 STREAM_KEY = os.environ.get("REDIS_STREAM_KEY", "market-news")
 STREAM_MAX_LEN = int(os.environ.get("REDIS_STREAM_MAX_LEN", "1000"))
+TICKER_META_HASH_KEY = os.environ.get("TICKER_META_HASH_KEY", "sentient:ticker:meta")
+TICKER_INDEX_TTL_SECONDS = int(os.environ.get("TICKER_INDEX_TTL_SECONDS", "600"))
 PAGE_SIZE = 20
 MAX_ORDER_IDS = 50
 MAX_PROMPT_LENGTH = 5000
@@ -145,6 +147,8 @@ FAMILY_HINTS = [
 
 _redis_client = None
 _supabase_client = None
+_ticker_index: list[dict[str, str]] | None = None
+_ticker_index_loaded_at = 0.0
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -1577,6 +1581,72 @@ def status() -> dict[str, Any]:
         "checkedAt": now_iso(),
         "details": details,
     }
+
+
+def load_ticker_index() -> list[dict[str, str]]:
+    """
+    In-process cache of the tradable ticker directory built by ingestion.
+
+    Reads the `sentient:ticker:meta` Redis hash once and keeps it in memory for
+    TICKER_INDEX_TTL_SECONDS so search-as-you-type doesn't reparse thousands of
+    rows on every keystroke.
+    """
+    global _ticker_index, _ticker_index_loaded_at
+    now = time.time()
+    if _ticker_index is not None and now - _ticker_index_loaded_at < TICKER_INDEX_TTL_SECONDS:
+        return _ticker_index
+
+    try:
+        rows = get_redis().hgetall(TICKER_META_HASH_KEY)
+    except Exception:
+        # Keep serving the last good index if Redis hiccups; empty otherwise.
+        return _ticker_index or []
+
+    index: list[dict[str, str]] = []
+    for raw in rows.values():
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        symbol = str(parsed.get("symbol") or "").upper()
+        if not symbol or parsed.get("tradable") is False:
+            continue
+        index.append(
+            {
+                "symbol": symbol,
+                "name": str(parsed.get("name") or ""),
+                "exchange": str(parsed.get("exchange") or ""),
+            }
+        )
+    index.sort(key=lambda row: row["symbol"])
+    _ticker_index = index
+    _ticker_index_loaded_at = now
+    return index
+
+
+@app.get("/tickers/search")
+def ticker_search(
+    q: str = Query(default="", max_length=64),
+    limit: int = Query(default=20, ge=1, le=50),
+) -> dict[str, Any]:
+    """Search the tradable ticker directory by symbol or company name."""
+    index = load_ticker_index()
+    query = q.strip()
+    if not query:
+        return {"results": index[:limit]}
+
+    upper = query.upper()
+    lower = query.lower()
+    symbol_prefix: list[dict[str, str]] = []
+    other: list[dict[str, str]] = []
+    for row in index:
+        symbol = row["symbol"]
+        if symbol.startswith(upper):
+            symbol_prefix.append(row)
+        elif upper in symbol or lower in row["name"].lower():
+            other.append(row)
+
+    return {"results": (symbol_prefix + other)[:limit]}
 
 
 @app.get("/simulate/quota")

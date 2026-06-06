@@ -1564,10 +1564,6 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                 setIsSimulatorOpen(false);
                 navigate('/signals');
               }}
-              onOpenPipeline={() => {
-                setIsSimulatorOpen(false);
-                navigate('/pipeline');
-              }}
             />
           </div>
         </div>
