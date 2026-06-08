@@ -804,6 +804,9 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   );
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
+  // On mobile the Decision Core can't sit beside the feed, so a tap opens it
+  // in a slide-up bottom sheet instead of silently updating an off-screen panel.
+  const [mobileTraceOpen, setMobileTraceOpen] = useState(false);
   const [paperBannerDismissed, setPaperBannerDismissed] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('st-paper-banner-dismissed') === 'true';
@@ -874,6 +877,33 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
       window.removeEventListener('keydown', closeOnEscape);
     };
   }, [navDrawerOpen]);
+
+  // Leaving the Signals view (e.g. a bottom-nav tap) dismisses the detail sheet.
+  useEffect(() => {
+    setMobileTraceOpen(false);
+  }, [activeView]);
+
+  // Mirror the drawer: lock scroll + Escape-to-close while the sheet is open,
+  // and auto-dismiss once the viewport grows to the desktop side-panel layout.
+  useEffect(() => {
+    if (!mobileTraceOpen) return;
+    const closeOnEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMobileTraceOpen(false);
+    };
+    const desktop = window.matchMedia('(min-width: 1024px)');
+    const closeOnDesktop = (e: MediaQueryListEvent) => {
+      if (e.matches) setMobileTraceOpen(false);
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', closeOnEscape);
+    desktop.addEventListener('change', closeOnDesktop);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+      desktop.removeEventListener('change', closeOnDesktop);
+    };
+  }, [mobileTraceOpen]);
 
   const loadAlpacaSummary = useCallback(async () => {
     try {
@@ -1012,6 +1042,11 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
   const handleTradeSelect = useCallback((trade: Trade) => {
     setSelectedTrade(tradeDetailCacheRef.current.get(trade.id) ?? trade);
+    // Below lg the detail lives in a bottom sheet rather than a side panel, so
+    // a tap needs to surface it. On desktop the side panel is always visible.
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
+      setMobileTraceOpen(true);
+    }
   }, []);
 
   // Super-admin only: permanently delete a simulated signal.
@@ -1119,10 +1154,10 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   }, []);
 
   return (
-    <div className="min-h-screen bg-background text-primary xl:h-screen xl:overflow-hidden">
-      <div className="flex min-h-screen xl:h-screen">
+    <div className="min-h-screen bg-background text-primary lg:h-screen lg:overflow-hidden">
+      <div className="flex min-h-screen lg:h-screen">
         {/* ── Sidebar ──────────────────────────────────────────────── */}
-        <aside className="hidden w-[240px] shrink-0 flex-col border-r border-line bg-surface px-5 py-6 xl:flex">
+        <aside className="hidden w-[240px] shrink-0 flex-col border-r border-line bg-surface px-5 py-6 lg:flex">
           {/* Brand */}
           <div className="flex items-center gap-3 px-1">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-white shadow-sm">
@@ -1184,12 +1219,12 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
         </aside>
 
         {/* ── Main area ─────────────────────────────────────────────── */}
-        <div className="flex min-w-0 flex-1 flex-col xl:h-screen">
+        <div className="flex min-w-0 flex-1 flex-col lg:h-screen">
           {/* Header */}
           <header className="z-50 shrink-0 border-b border-line bg-surface">
             <div className="flex min-h-[60px] items-center gap-3 px-4 py-3 md:px-6">
               {/* Mobile: hamburger + brand */}
-              <div className="flex min-w-0 items-center gap-2 xl:hidden">
+              <div className="flex min-w-0 items-center gap-2 lg:hidden">
                 <button
                   onClick={() => setNavDrawerOpen(true)}
                   aria-label="Open navigation menu"
@@ -1388,8 +1423,8 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
           {/* Page content */}
           <main
             className={[
-              'pb-bottom-nav mx-auto flex w-full max-w-[1660px] flex-1 flex-col overflow-y-auto bg-[var(--dashboard-bg)] px-4 py-5 md:px-6 xl:min-h-0',
-              activeView === 'Dashboard' ? 'xl:overflow-y-auto' : 'gap-4 xl:overflow-y-auto',
+              'pb-bottom-nav mx-auto flex w-full max-w-[1660px] flex-1 flex-col overflow-y-auto bg-[var(--dashboard-bg)] px-4 py-5 md:px-6 lg:min-h-0',
+              activeView === 'Dashboard' ? 'lg:overflow-y-auto' : 'gap-4 lg:overflow-y-auto',
             ].join(' ')}
           >
             {/* Paper trading disclaimer */}
@@ -1465,7 +1500,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
             {activeView === 'Dashboard' && (
               <div className="w-full space-y-6">
                 <StatsBar trades={trades} stats={dashboardStats} />
-                <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_440px]">
+                <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_440px]">
                   <div className="min-w-0 space-y-6">
                     <PnLChart />
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:gap-6">
@@ -1497,7 +1532,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
             {/* Signals view */}
             {activeView === 'Signals' && (
-              <div className="grid min-h-[640px] flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(420px,0.9fr)_minmax(0,1.1fr)]">
+              <div className="grid min-h-[640px] flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:grid-cols-[minmax(420px,0.9fr)_minmax(0,1.1fr)]">
                 <LiveTicker
                   trades={trades}
                   newIds={newIds}
@@ -1509,7 +1544,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                   totalCount={dashboardStats?.analyzed}
                   onDeleteTrade={isSuperUser ? handleDeleteTrade : undefined}
                 />
-                <div className="flex min-w-0 flex-col gap-3">
+                <div className="hidden min-w-0 flex-col gap-3 lg:flex">
                   <AgentMonologue
                     trade={selectedTrade}
                     isLoadingTrace={Boolean(selectedTrade && traceLoadingId === selectedTrade.id)}
@@ -1572,7 +1607,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
       {/* ── Mobile bottom tab bar ──────────────────────────────────── */}
       <nav
-        className="pb-safe fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface shadow-[0_-4px_24px_var(--panel-shadow)] xl:hidden"
+        className="pb-safe fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface shadow-[0_-4px_24px_var(--panel-shadow)] lg:hidden"
         aria-label="Primary"
       >
         <div className="mx-auto flex max-w-lg items-stretch justify-around">
@@ -1629,7 +1664,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
       {/* ── Mobile nav drawer ──────────────────────────────────────── */}
       {navDrawerOpen && (
         <div
-          className="fixed inset-0 z-[120] xl:hidden"
+          className="fixed inset-0 z-[120] lg:hidden"
           role="dialog"
           aria-modal="true"
           aria-label="Navigation"
@@ -1717,6 +1752,53 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
               </div>
             </div>
           </aside>
+        </div>
+      )}
+
+      {/* ── Mobile Decision Core sheet (Signals) ───────────────────── */}
+      {activeView === 'Signals' && mobileTraceOpen && selectedTrade && (
+        <div
+          className="fixed inset-0 z-[110] flex flex-col justify-end lg:hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Decision detail for ${selectedTrade.ticker}`}
+        >
+          <div
+            className="modal-backdrop backdrop-in absolute inset-0"
+            onClick={() => setMobileTraceOpen(false)}
+          />
+          <div className="sheet-up relative flex max-h-[88vh] w-full flex-col">
+            {/* Grab handle + close, floating above the panel */}
+            <div className="flex shrink-0 items-center justify-between px-4 pb-2 pt-1">
+              <span className="h-8 w-8" aria-hidden="true" />
+              <span className="h-1.5 w-10 rounded-full bg-white/70 shadow-sm" />
+              <button
+                onClick={() => setMobileTraceOpen(false)}
+                aria-label="Close decision detail"
+                className="tap-target flex h-8 w-8 items-center justify-center rounded-full border border-line bg-surface text-muted shadow-sm transition hover:text-primary active:scale-95"
+              >
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <AgentMonologue
+                trade={selectedTrade}
+                isLoadingTrace={Boolean(selectedTrade && traceLoadingId === selectedTrade.id)}
+                traceError={traceError}
+                onViewTrace={
+                  selectedTrade ? () => navigate(`/pipeline/${selectedTrade.id}`) : undefined
+                }
+              />
+            </div>
+          </div>
         </div>
       )}
 

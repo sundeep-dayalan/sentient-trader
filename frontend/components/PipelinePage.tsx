@@ -1015,15 +1015,7 @@ function inactiveSignalEdges(): Edge[] {
   }));
 }
 
-function DetailPanel({
-  selectedNode,
-  mode,
-  trade,
-  loading,
-  error,
-  onClose,
-  onBack,
-}: {
+interface DetailProps {
   selectedNode: Node<PipelineNodeData> | null;
   mode: PipelineMode;
   trade: Trade | null;
@@ -1031,10 +1023,24 @@ function DetailPanel({
   error: string | null;
   onClose: () => void;
   onBack?: () => void;
-}) {
+}
+
+// Desktop: a top-right ReactFlow panel pinned over the graph. Hidden below lg,
+// where the same DetailContent is surfaced in a bottom sheet instead so the
+// detail never blankets the graph on a phone.
+function DetailPanel(props: DetailProps) {
   return (
-    <Panel position="top-right" className="m-3 w-[360px] max-w-[calc(100vw-2rem)]">
+    <Panel position="top-right" className="m-3 hidden w-[360px] max-w-[calc(100vw-2rem)] lg:block">
       <div className="max-h-[calc(100vh-220px)] overflow-auto rounded-xl border border-[var(--dashboard-border)] bg-[var(--dashboard-card)] p-4 shadow-[var(--dashboard-shadow)] backdrop-blur-md">
+        <DetailContent {...props} />
+      </div>
+    </Panel>
+  );
+}
+
+function DetailContent({ selectedNode, mode, trade, loading, error, onClose, onBack }: DetailProps) {
+  return (
+    <>
         <div className="mb-3 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
@@ -1098,8 +1104,7 @@ function DetailPanel({
         ) : (
           mutedDetail('Select a pipeline stage to inspect the latest available details.')
         )}
-      </div>
-    </Panel>
+    </>
   );
 }
 
@@ -1125,6 +1130,10 @@ function PipelineFlow({
   const [isPulsing, setIsPulsing] = useState(false);
   const [lastTradeType, setLastTradeType] = useState<'BUY' | 'SELL' | 'HOLD' | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(mode === 'signal' ? 'ingestion' : null);
+  // Below lg the detail can't sit beside the graph, so a node tap surfaces it
+  // in a bottom sheet. Kept separate from selectedNodeId so the sheet never
+  // auto-opens over the graph on mount — only an explicit tap opens it.
+  const [mobileNodeOpen, setMobileNodeOpen] = useState(false);
 
   useEffect(() => {
     if (mode !== 'aggregate') return;
@@ -1139,7 +1148,30 @@ function PipelineFlow({
 
   useEffect(() => {
     setSelectedNodeId(mode === 'signal' ? 'ingestion' : null);
+    setMobileNodeOpen(false);
   }, [mode, trade?.id]);
+
+  // Mirror the rest of the app's sheets: lock scroll + Escape-to-close while the
+  // mobile detail sheet is open, and dismiss it once the viewport reaches lg.
+  useEffect(() => {
+    if (!mobileNodeOpen) return;
+    const closeOnEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMobileNodeOpen(false);
+    };
+    const desktop = window.matchMedia('(min-width: 1024px)');
+    const closeOnDesktop = (e: MediaQueryListEvent) => {
+      if (e.matches) setMobileNodeOpen(false);
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', closeOnEscape);
+    desktop.addEventListener('change', closeOnDesktop);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+      desktop.removeEventListener('change', closeOnDesktop);
+    };
+  }, [mobileNodeOpen]);
 
   const graphNodes = useMemo(() => {
     if (mode === 'signal') {
@@ -1232,7 +1264,15 @@ function PipelineFlow({
           nodes={nodes}
           edges={graphEdges}
           onNodesChange={onNodesChange}
-          onNodeClick={(_, clickedNode) => setSelectedNodeId(clickedNode.id)}
+          onNodeClick={(_, clickedNode) => {
+            setSelectedNodeId(clickedNode.id);
+            if (
+              typeof window !== 'undefined' &&
+              window.matchMedia('(max-width: 1023px)').matches
+            ) {
+              setMobileNodeOpen(true);
+            }
+          }}
           nodeTypes={pipelineNodeTypes}
           fitView
           fitViewOptions={{ padding: 0.16, maxZoom: 1 }}
@@ -1267,6 +1307,38 @@ function PipelineFlow({
           )}
         </ReactFlow>
       </div>
+
+      {/* Mobile: surface the tapped node's detail in a bottom sheet so it never
+          blankets the graph the way the pinned top-right panel does. */}
+      {mobileNodeOpen && showPanel && (
+        <div
+          className="fixed inset-0 z-[110] flex flex-col justify-end lg:hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Pipeline stage detail"
+        >
+          <div
+            className="modal-backdrop backdrop-in absolute inset-0"
+            onClick={() => setMobileNodeOpen(false)}
+          />
+          <div className="sheet-up relative flex max-h-[82vh] w-full flex-col">
+            <div className="flex shrink-0 items-center justify-center pb-2 pt-1">
+              <span className="h-1.5 w-10 rounded-full bg-white/70 shadow-sm" />
+            </div>
+            <div className="pb-safe modern-scroll min-h-0 flex-1 overflow-y-auto rounded-t-2xl border-t border-[var(--dashboard-border)] bg-[var(--dashboard-card)] p-4 shadow-card-lg">
+              <DetailContent
+                selectedNode={selectedNode}
+                mode={mode}
+                trade={trade}
+                loading={loading}
+                error={error}
+                onClose={() => setMobileNodeOpen(false)}
+                onBack={onBack}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -319,7 +319,7 @@ export default function OrdersPage() {
   return (
     <>
       <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-4">
-        <div className="grid shrink-0 grid-cols-2 gap-3 xl:grid-cols-5">
+        <div className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {[
             {
               label: 'Account Value',

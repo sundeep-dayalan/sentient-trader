@@ -311,12 +311,12 @@ body {
 }
 
 /* Reserve room under scrolling content for the fixed bottom tab bar
- * (its height + the home-indicator inset). Cleared at xl where the bar
+ * (its height + the home-indicator inset). Cleared at lg where the bar
  * is replaced by the persistent sidebar. */
 .pb-bottom-nav {
   padding-bottom: calc(4.25rem + env(safe-area-inset-bottom));
 }
-@media (min-width: 1280px) {
+@media (min-width: 1024px) {
   .pb-bottom-nav {
     padding-bottom: 0;
   }
