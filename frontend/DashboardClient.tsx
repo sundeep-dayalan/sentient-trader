@@ -1260,27 +1260,36 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                   </svg>
                 </div>
-                <p className="truncate text-sm font-bold text-primary">Sentient Trader</p>
+                <p className="hidden truncate text-sm font-bold text-primary sm:block">
+                  Sentient Trader
+                </p>
               </div>
 
               <div className="ml-auto flex items-center gap-2">
                 <button
                   onClick={() => setIsSimulatorOpen(true)}
-                  aria-label="Open simulator"
-                  className="flex h-9 items-center gap-2 rounded-xl bg-accent px-4 text-[13px] font-semibold text-white shadow-sm transition-all duration-150 hover:opacity-90 active:scale-95"
+                  aria-label="Simulate a signal"
+                  className="flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-accent px-3.5 text-[13px] font-semibold text-white shadow-sm transition-all duration-150 hover:opacity-90 active:scale-95"
                 >
                   <svg
-                    className="h-3.5 w-3.5"
+                    className="h-4 w-4"
                     viewBox="0 0 24 24"
-                    fill="currentColor"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
                     aria-hidden="true"
                   >
-                    <path d="M8 5.14v14l11-7-11-7z" />
+                    <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .962 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.962 0z" />
+                    <path d="M20 3v4" />
+                    <path d="M22 5h-4" />
+                    <path d="M4 17v2" />
+                    <path d="M5 18H3" />
                   </svg>
-                  <span className="hidden sm:inline">Simulate</span>
+                  <span className="whitespace-nowrap">Simulate</span>
                 </button>
                 <SystemStatus />
-                <ThemeToggle />
 
                 {/* Auth: user menu or sign-in button */}
                 {!authLoading && user && !isAnonymous && (
@@ -1362,8 +1371,9 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                               )}
                             </div>
                           </div>
-                          {/* Sign out */}
+                          {/* Theme + sign out */}
                           <div className="p-2">
+                            <ThemeToggle variant="menu" />
                             <button
                               onClick={() => {
                                 setUserMenuOpen(false);
@@ -1392,6 +1402,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                     )}
                   </div>
                 )}
+                {!authLoading && (isAnonymous || !user) && <ThemeToggle />}
                 {!authLoading && (isAnonymous || !user) && (
                   <button
                     onClick={() => {
