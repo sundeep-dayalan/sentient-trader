@@ -1889,6 +1889,16 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
                     sl_price = round(float(entry_price) * (1 - config.STOP_LOSS_PCT), 2)
                     take_profit_price = tp_price
                     stop_loss_price = sl_price
+                    # Re-anchor the entry limit to the SAME freshly-fetched live
+                    # price the bracket legs use. The limit computed earlier from
+                    # the pipeline snapshot is stale by the time we submit — on a
+                    # catalyst gap the market has already moved past it, leaving the
+                    # entry unfilled (and, under GTC, lingering for days).
+                    # (See README Bug Log: BUG-2026-06-08-01)
+                    if config.USE_LIMIT_ORDERS and action == "BUY":
+                        limit_price = round(
+                            float(entry_price) * (1 + config.LIMIT_ORDER_BUFFER_PCT), 2
+                        )
                     bracket_info = {
                         "entry_price": float(entry_price),
                         "snapshot_price": float(snapshot_price) if snapshot_price else None,

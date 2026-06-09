@@ -937,6 +937,46 @@ Update agent parameters via the **Settings** page in the dashboard. The worker r
 
 ---
 
+## 🐞 Bug Log
+
+> A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
+
+<details>
+<summary><b>BUG-2026-06-08-02 — Unfilled bracket entries lingered as GTC "zombie" orders</b></summary>
+
+<br/>
+
+**Identified:** 2026-06-08, while auditing the MPAA trade. The Orders dashboard showed an open BUY order (`ed142df1…`) still "working" with `filled_qty = 0`.
+
+**Impact:** Bracket BUY orders were submitted with `time_in_force = GTC`. When the entry didn't fill (see BUG-2026-06-08-01), Alpaca kept it working for ~90 days (`expires_at` far in the future). Risk: the stale entry could fill **weeks later on dead news**, then arm a take-profit/stop-loss anchored to a long-expired price thesis — a position the system never actually decided to take that day. The "1 working" open order in the dashboard was exactly this.
+
+**Root cause:** `trader.py` set `TimeInForce.GTC` for all bracket orders. GTC is *correct for the protective TP/SL legs* (positions can be held across days), so simply switching the whole bracket to `DAY` would have stripped overnight stop-loss protection — a worse bug. The real defect was that the **entry** leg had no bounded lifetime.
+
+**Resolution:** Added a **stale-entry reaper** that runs inside the position monitor (independent of the trailing-stops toggle). Each cycle it cancels any **unfilled BUY** order (`side = buy`, `filled_qty = 0`) older than `STALE_ENTRY_MAX_AGE_SECONDS` (10 min). It never touches SELL legs, trailing stops, or partially-filled orders, so protective legs keep their GTC persistence. Cancelling a bracket parent cancels its children, which is correct when no position exists.
+- `backend/agent/trader.py` — `reap_stale_entry_orders()`; `get_open_orders()` now returns `created_at` + `filled_qty`
+- `backend/agent/position_monitor.py` — reaper call in `_monitor_loop`; `REAP_STALE_ENTRIES`, `STALE_ENTRY_MAX_AGE_SECONDS`
+
+</details>
+
+<details>
+<summary><b>BUG-2026-06-08-01 — Entry limit too tight / anchored to a stale price, so high-conviction trades never filled</b></summary>
+
+<br/>
+
+**Identified:** 2026-06-08. The MPAA earnings-beat signal was correct (stock ran +34.8%), but the BUY limit at $10.62 never filled — **zero P&L on a correct call**.
+
+**Impact:** On the system's highest-conviction setups — catalyst-driven news (earnings beats) that *move the stock* — the entry limit failed to fill. The strategy systematically missed the very trades it exists to capture.
+
+**Root cause:** Two compounding issues. (1) The entry limit used only a **0.5% buffer** (`LIMIT_ORDER_BUFFER_PCT = 0.005`), too tight to cross the bid/ask spread on the illiquid small/mid-caps it trades. (2) The limit was computed from a **stale pipeline snapshot** price, while the bracket TP/SL legs were anchored to a freshly re-fetched live price — so on a gap the entry was priced below where the market already was.
+
+**Resolution:**
+- `backend/agent/config.py` — widened `LIMIT_ORDER_BUFFER_PCT` default `0.005 → 0.01` (marketable, still caps slippage at 1%).
+- `backend/agent/analyst.py` — re-anchored the entry limit to the **same freshly-fetched live price** used for the bracket legs, so the entry is marketable against the current market. A marketable entry also fills immediately, which eliminates the lingering-order condition behind BUG-2026-06-08-02 in the common case.
+
+</details>
+
+---
+
 <div align="center">
 
 **Built by [Sundeep Dayalan](https://sundeepdayalan.in)**

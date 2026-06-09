@@ -32,6 +32,12 @@ log = logging.getLogger("agent.position_monitor")
 # How often to check positions (seconds)
 MONITOR_INTERVAL = 60
 
+# Stale-entry reaper: cancel unfilled BUY entry orders older than this so a
+# missed catalyst entry doesn't linger under GTC and fill weeks later on dead
+# news. Runs independently of trailing stops. (See README Bug Log: BUG-2026-06-08-02)
+REAP_STALE_ENTRIES = True
+STALE_ENTRY_MAX_AGE_SECONDS = 600  # 10 minutes
+
 # Track the current trailing stop order ID per symbol so we can cancel/replace
 _trailing_stop_orders: dict[str, str] = {}
 # Track the current stop price per symbol to avoid redundant API calls
@@ -173,6 +179,16 @@ def _monitor_loop(trader) -> None:
 
     while True:
         try:
+            # Reap stale unfilled entry orders first — this must run even when
+            # trailing stops are off, because a zombie entry has no position.
+            if REAP_STALE_ENTRIES:
+                try:
+                    reaped = trader.reap_stale_entry_orders(STALE_ENTRY_MAX_AGE_SECONDS)
+                    if reaped:
+                        log.info("Reaped %d stale unfilled entry order(s)", reaped)
+                except Exception as exc:
+                    log.warning("Stale-entry reap failed: %s", exc)
+
             # Re-check config in case it was hot-reloaded
             if not config.TRAILING_STOPS_ENABLED:
                 time.sleep(MONITOR_INTERVAL)
@@ -227,8 +243,8 @@ def start_position_monitor(trader) -> Optional[threading.Thread]:
     Returns the thread if trailing stops are enabled, otherwise None.
     The thread is set as a daemon so it dies with the main process.
     """
-    if not config.TRAILING_STOPS_ENABLED:
-        log.info("Trailing stops disabled — position monitor not started")
+    if not config.TRAILING_STOPS_ENABLED and not REAP_STALE_ENTRIES:
+        log.info("Trailing stops + stale-entry reaper disabled — position monitor not started")
         return None
 
     thread = threading.Thread(

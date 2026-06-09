@@ -566,6 +566,8 @@ class AlpacaTrader:
                     "side": str(getattr(o, "side", "") or ""),
                     "type": str(getattr(o, "type", "") or ""),
                     "qty": _floatish(getattr(o, "qty", None)) or 0.0,
+                    "filled_qty": _floatish(getattr(o, "filled_qty", None)) or 0.0,
+                    "created_at": getattr(o, "created_at", None),
                     "stop_price": _floatish(getattr(o, "stop_price", None)),
                     "limit_price": _floatish(getattr(o, "limit_price", None)),
                     "status": _normalize_status(getattr(o, "status", None)),
@@ -601,6 +603,47 @@ class AlpacaTrader:
         except Exception as exc:
             log.warning("Could not cancel order %s: %s", order_id, exc)
             return False
+
+    def reap_stale_entry_orders(self, max_age_seconds: float) -> int:
+        """Cancel unfilled BUY entry orders older than ``max_age_seconds``.
+
+        The system only ever submits BUY orders to *open* positions. An entry
+        that is still open with zero fills after a few minutes is a missed
+        catalyst — under GTC it would otherwise linger for ~90 days and could
+        fill weeks later on dead news. We only touch BUY orders with zero
+        fills, so protective SELL legs and trailing stops are never affected.
+        Cancelling a bracket parent cancels its child legs too, which is
+        correct since no position exists. (See README Bug Log: BUG-2026-06-08-02)
+
+        Returns the number of orders cancelled.
+        """
+        if self._dry_run:
+            return 0
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        reaped = 0
+        for o in self.get_open_orders():
+            if str(o.get("side", "")).lower() != "buy":
+                continue
+            if (o.get("filled_qty") or 0.0) > 0:
+                continue  # partially filled — a position exists, leave it
+            created = o.get("created_at")
+            if created is None:
+                continue
+            try:
+                age = (now - created).total_seconds()
+            except Exception:
+                continue
+            if age < max_age_seconds:
+                continue
+            if self.cancel_order(o["id"]):
+                reaped += 1
+                log.info(
+                    "Reaped stale entry order %s (%s, age=%.0fs, unfilled)",
+                    o["id"], o.get("symbol"), age,
+                )
+        return reaped
 
     def place_stop_order(
         self,

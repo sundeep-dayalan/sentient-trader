@@ -141,7 +141,11 @@ FEEDBACK_LOOP_LOOKBACK_DAYS: int = 30
 
 # Limit orders instead of market orders
 USE_LIMIT_ORDERS: bool = False
-LIMIT_ORDER_BUFFER_PCT: float = 0.005  # 0.5% buffer
+# Buffer added to the live price to make the entry limit *marketable* so it
+# crosses the spread and fills immediately. 0.5% was too tight on illiquid
+# small/mid-caps (wide spreads) and on catalyst gaps — entries sat unfilled.
+# 1% reliably crosses the spread while still capping slippage. (See README Bug Log: BUG-2026-06-08-01)
+LIMIT_ORDER_BUFFER_PCT: float = 0.01  # 1% marketable buffer
 
 # Market hours awareness
 MARKET_HOURS_AWARENESS_ENABLED: bool = False
@@ -270,7 +274,7 @@ def reload_from_supabase() -> bool:
     FEEDBACK_LOOP_ENABLED = _safe_bool(enhanced.get("feedback_loop"), False)
     FEEDBACK_LOOP_LOOKBACK_DAYS = _safe_int(enhanced.get("feedback_loop_lookback_days"), 30)
     USE_LIMIT_ORDERS = _safe_bool(enhanced.get("use_limit_orders"), False)
-    LIMIT_ORDER_BUFFER_PCT = _safe_float(enhanced.get("limit_order_buffer_pct"), 0.005)
+    LIMIT_ORDER_BUFFER_PCT = _safe_float(enhanced.get("limit_order_buffer_pct"), 0.01)
     MARKET_HOURS_AWARENESS_ENABLED = _safe_bool(enhanced.get("market_hours_awareness"), False)
     STRUCTURED_SYNTHESIS_ENABLED = _safe_bool(enhanced.get("structured_synthesis"), False)
     PRICE_MOVE_GATE_ENABLED = _safe_bool(enhanced.get("price_move_gate"), False)
