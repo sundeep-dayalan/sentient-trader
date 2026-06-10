@@ -10,7 +10,7 @@
     "format": "npx prettier --write ."
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.0",
+    "@supabase/supabase-js": "^2.108.1",
     "@xyflow/react": "^12.10.2",
     "motion": "^12.40.0",
     "posthog-js": "^1.381.0",
