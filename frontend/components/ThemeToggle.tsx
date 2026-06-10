@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { applyTheme, getStoredTheme, persistTheme, THEME_STORAGE_KEY, type ThemeMode } from '@/lib/theme';
+import { AnimatedThemeToggler } from '@/components/ui/animated-theme-toggler';
 
 export default function ThemeToggle({ variant = 'icon' }: { variant?: 'icon' | 'menu' }) {
   const [theme, setTheme] = useState<ThemeMode>(getStoredTheme);
@@ -27,8 +28,11 @@ export default function ThemeToggle({ variant = 'icon' }: { variant?: 'icon' | '
     };
   }, []);
 
-  function toggle() {
-    const next = theme === 'dark' ? 'light' : 'dark';
+  // Controlled toggle: AnimatedThemeToggler runs the View Transition reveal and
+  // calls this synchronously inside the transition, so persistTheme's DOM mutation
+  // is captured in the snapshot. persistTheme also fires st-theme-change so the
+  // other toggle instance stays in sync.
+  function handleThemeChange(next: ThemeMode) {
     setTheme(next);
     persistTheme(next);
   }
@@ -75,8 +79,9 @@ export default function ThemeToggle({ variant = 'icon' }: { variant?: 'icon' | '
 
   if (variant === 'menu') {
     return (
-      <button
-        onClick={toggle}
+      <AnimatedThemeToggler
+        theme={theme}
+        onThemeChange={handleThemeChange}
         className="flex w-full items-center justify-between gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-secondary transition hover:bg-hover hover:text-primary"
       >
         <span className="flex items-center gap-2.5">
@@ -86,18 +91,19 @@ export default function ThemeToggle({ variant = 'icon' }: { variant?: 'icon' | '
         <span className="rounded-md border border-line bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted">
           {isDark ? 'Dark' : 'Light'}
         </span>
-      </button>
+      </AnimatedThemeToggler>
     );
   }
 
   return (
-    <button
-      onClick={toggle}
+    <AnimatedThemeToggler
+      theme={theme}
+      onThemeChange={handleThemeChange}
       title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
       aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
       className="flex h-9 w-9 items-center justify-center rounded-xl border border-line bg-surface text-muted transition-all duration-200 hover:border-accent-border hover:text-accent"
     >
       {icon}
-    </button>
+    </AnimatedThemeToggler>
   );
 }

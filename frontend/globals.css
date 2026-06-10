@@ -376,3 +376,19 @@ body {
     animation-duration: 0.01ms;
   }
 }
+
+/* Animated theme toggle (Magic UI AnimatedThemeToggler). The new theme snapshot's
+   clip-path is animated in JS; disable the default root cross-fade so the shape
+   reveal reads cleanly instead of fading both layers at once. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
+}
