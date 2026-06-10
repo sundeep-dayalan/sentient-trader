@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import AgentMonologue from '@/components/AgentMonologue';
 import AppErrorNotice from '@/components/AppErrorNotice';
+import CalibrationPanel from '@/components/CalibrationPanel';
 import AuthGate from '@/components/AuthGate';
 import CustomNewsForm from '@/components/CustomNewsForm';
 import LiveTicker from '@/components/LiveTicker';
@@ -1514,6 +1515,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                 <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_440px]">
                   <div className="min-w-0 space-y-6">
                     <PnLChart />
+                    <CalibrationPanel />
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:gap-6">
                       <RecentSignalsCard
                         trades={trades}

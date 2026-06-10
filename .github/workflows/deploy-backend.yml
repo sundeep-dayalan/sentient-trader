@@ -11,8 +11,26 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  test:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install agent dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/agent/requirements.txt pytest
+      - name: Run agent test suite
+        working-directory: backend/agent
+        run: python -m pytest -q
+
   deploy-workers:
     name: Deploy Workers
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

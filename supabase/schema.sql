@@ -1,35 +1,32 @@
 -- =============================================================================
 -- Sentient Trader — Master Database Setup
 -- =============================================================================
--- Single-file setup for a fresh Supabase / Postgres environment. Run this once
--- in the Supabase SQL Editor (or via psql) to create the entire application
--- schema: tables, indexes, the seeded agent config, row-level security, the
--- dashboard stats function, and realtime.
+-- Single-file setup for a fresh Supabase / Postgres environment.
 --
 -- ACCESS MODEL
 --   The browser never touches these tables directly. Every read and write goes
 --   through the FastAPI backend using the Supabase *service role*. RLS is
 --   enabled on every table and no privileges are granted to anon/authenticated,
---   so the public anon key cannot read or write application data. The service
---   role bypasses RLS and is the only client with table access.
---
--- SCHEMA NAME
---   Production uses `sentient_trader`. Local/dev can use a separate schema via
---   SUPABASE_DB_SCHEMA (e.g. `sentient_trader_dev`) — to target a different
---   schema, find/replace `sentient_trader` below before running.
+--   so the public anon key cannot read or write application data.
 -- =============================================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- =============================================================================
+-- SCHEMA CONFIGURATION
+-- Change the schema name in the 3 lines below to target a different environment.
+-- The rest of this script is completely schema-agnostic and will adapt automatically.
+-- =============================================================================
 CREATE SCHEMA IF NOT EXISTS sentient_trader;
 GRANT USAGE ON SCHEMA sentient_trader TO anon, authenticated, service_role;
+SET search_path TO sentient_trader, public;
 
 
 -- =============================================================================
 -- Trading Decisions
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS sentient_trader.trades (
+CREATE TABLE IF NOT EXISTS trades (
     id                     UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at             TIMESTAMPTZ NOT NULL    DEFAULT now(),
     ticker                 TEXT        NOT NULL,
@@ -56,23 +53,23 @@ CREATE TABLE IF NOT EXISTS sentient_trader.trades (
     is_simulated           BOOLEAN     NOT NULL    DEFAULT false
 );
 
-CREATE INDEX IF NOT EXISTS idx_sentient_trader_trades_created_at
-    ON sentient_trader.trades (created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_sentient_trader_trades_ticker
-    ON sentient_trader.trades (ticker);
-CREATE INDEX IF NOT EXISTS idx_sentient_trader_trades_is_simulated
-    ON sentient_trader.trades (is_simulated);
-CREATE INDEX IF NOT EXISTS idx_sentient_trader_trades_decision_path
-    ON sentient_trader.trades (decision_path);
-CREATE INDEX IF NOT EXISTS idx_sentient_trader_trades_executed_action
-    ON sentient_trader.trades (executed_action)
+CREATE INDEX IF NOT EXISTS idx_trades_created_at
+    ON trades (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trades_ticker
+    ON trades (ticker);
+CREATE INDEX IF NOT EXISTS idx_trades_is_simulated
+    ON trades (is_simulated);
+CREATE INDEX IF NOT EXISTS idx_trades_decision_path
+    ON trades (decision_path);
+CREATE INDEX IF NOT EXISTS idx_trades_executed_action
+    ON trades (executed_action)
     WHERE executed_action IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_sentient_trader_trades_client_order_id
-    ON sentient_trader.trades (client_order_id)
+CREATE INDEX IF NOT EXISTS idx_trades_client_order_id
+    ON trades (client_order_id)
     WHERE client_order_id IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS sentient_trader.trade_decision_traces (
-    trade_id       UUID        PRIMARY KEY REFERENCES sentient_trader.trades(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS trade_decision_traces (
+    trade_id       UUID        PRIMARY KEY REFERENCES trades(id) ON DELETE CASCADE,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     decision_trace JSONB       NOT NULL,
     reasoning      TEXT,
@@ -80,8 +77,8 @@ CREATE TABLE IF NOT EXISTS sentient_trader.trade_decision_traces (
     article_id     TEXT
 );
 
-CREATE TABLE IF NOT EXISTS sentient_trader.signal_outcomes (
-    trade_id        UUID PRIMARY KEY REFERENCES sentient_trader.trades(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS signal_outcomes (
+    trade_id        UUID PRIMARY KEY REFERENCES trades(id) ON DELETE CASCADE,
     ticker          TEXT        NOT NULL,
     signal_at       TIMESTAMPTZ NOT NULL,
     signal_price    FLOAT8,
@@ -100,12 +97,12 @@ CREATE TABLE IF NOT EXISTS sentient_trader.signal_outcomes (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_sentient_trader_signal_outcomes_ticker
-    ON sentient_trader.signal_outcomes (ticker);
-CREATE INDEX IF NOT EXISTS idx_sentient_trader_signal_outcomes_signal_at
-    ON sentient_trader.signal_outcomes (signal_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signal_outcomes_ticker
+    ON signal_outcomes (ticker);
+CREATE INDEX IF NOT EXISTS idx_signal_outcomes_signal_at
+    ON signal_outcomes (signal_at DESC);
 
-CREATE TABLE IF NOT EXISTS sentient_trader.scheduler_runs (
+CREATE TABLE IF NOT EXISTS scheduler_runs (
     id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     scheduler_name TEXT        NOT NULL,
     status         TEXT        NOT NULL DEFAULT 'RUNNING'
@@ -121,23 +118,23 @@ CREATE TABLE IF NOT EXISTS sentient_trader.scheduler_runs (
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_sentient_trader_scheduler_runs_name_started
-    ON sentient_trader.scheduler_runs (scheduler_name, started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_sentient_trader_scheduler_runs_status_started
-    ON sentient_trader.scheduler_runs (status, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scheduler_runs_name_started
+    ON scheduler_runs (scheduler_name, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scheduler_runs_status_started
+    ON scheduler_runs (status, started_at DESC);
 
 
 -- =============================================================================
 -- Agent Configuration  (single row, id = 1 — the only source of trading params)
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS sentient_trader.agent_config (
+CREATE TABLE IF NOT EXISTS agent_config (
     id         INT         PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     config     JSONB       NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-INSERT INTO sentient_trader.agent_config (id, config) VALUES (1, '{
+INSERT INTO agent_config (id, config) VALUES (1, '{
   "buy_sentiment_threshold":  0.8,
   "sell_sentiment_threshold": -0.8,
   "confidence_threshold":     0.9,
@@ -156,7 +153,7 @@ INSERT INTO sentient_trader.agent_config (id, config) VALUES (1, '{
 -- Durable News Ingestion  (store-first, then publish to the Redis stream)
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS sentient_trader.raw_news_articles (
+CREATE TABLE IF NOT EXISTS raw_news_articles (
     id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     received_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -175,34 +172,34 @@ CREATE TABLE IF NOT EXISTS sentient_trader.raw_news_articles (
     source_created_at    TIMESTAMPTZ NOT NULL,
     source_updated_at    TIMESTAMPTZ,
     raw_payload          JSONB       NOT NULL DEFAULT '{}'::jsonb,
-    canonical_article_id UUID        REFERENCES sentient_trader.raw_news_articles(id),
+    canonical_article_id UUID        REFERENCES raw_news_articles(id),
     dedupe_reason        TEXT,
     is_duplicate         BOOLEAN     NOT NULL DEFAULT false
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sentient_raw_news_provider_article_id
-    ON sentient_trader.raw_news_articles (provider, source_article_id)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_news_provider_article_id
+    ON raw_news_articles (provider, source_article_id)
     WHERE source_article_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_sentient_raw_news_url_hash
-    ON sentient_trader.raw_news_articles (url_hash)
+CREATE INDEX IF NOT EXISTS idx_raw_news_url_hash
+    ON raw_news_articles (url_hash)
     WHERE url_hash IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_sentient_raw_news_headline_hash_created_at
-    ON sentient_trader.raw_news_articles (headline_hash, source_created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_sentient_raw_news_symbols
-    ON sentient_trader.raw_news_articles USING GIN (symbols);
+CREATE INDEX IF NOT EXISTS idx_raw_news_headline_hash_created_at
+    ON raw_news_articles (headline_hash, source_created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_raw_news_symbols
+    ON raw_news_articles USING GIN (symbols);
 
-CREATE TABLE IF NOT EXISTS sentient_trader.news_article_symbols (
-    article_id UUID        NOT NULL REFERENCES sentient_trader.raw_news_articles(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS news_article_symbols (
+    article_id UUID        NOT NULL REFERENCES raw_news_articles(id) ON DELETE CASCADE,
     ticker     TEXT        NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (article_id, ticker)
 );
 
-CREATE TABLE IF NOT EXISTS sentient_trader.news_outbox (
+CREATE TABLE IF NOT EXISTS news_outbox (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    article_id      UUID        NOT NULL REFERENCES sentient_trader.raw_news_articles(id) ON DELETE CASCADE,
+    article_id      UUID        NOT NULL REFERENCES raw_news_articles(id) ON DELETE CASCADE,
     ticker          TEXT        NOT NULL,
     status          TEXT        NOT NULL DEFAULT 'PENDING'
                     CHECK (status IN ('PENDING', 'RETRYING', 'FAILED', 'PUBLISHED')),
@@ -215,25 +212,25 @@ CREATE TABLE IF NOT EXISTS sentient_trader.news_outbox (
     UNIQUE (article_id, ticker)
 );
 
-CREATE INDEX IF NOT EXISTS idx_sentient_news_outbox_status_next_attempt
-    ON sentient_trader.news_outbox (status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_news_outbox_status_next_attempt
+    ON news_outbox (status, next_attempt_at);
 
-CREATE TABLE IF NOT EXISTS sentient_trader.ingestion_events (
+CREATE TABLE IF NOT EXISTS ingestion_events (
     id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     event_type TEXT        NOT NULL,
-    article_id UUID        REFERENCES sentient_trader.raw_news_articles(id) ON DELETE SET NULL,
-    outbox_id  UUID        REFERENCES sentient_trader.news_outbox(id) ON DELETE SET NULL,
+    article_id UUID        REFERENCES raw_news_articles(id) ON DELETE SET NULL,
+    outbox_id  UUID        REFERENCES news_outbox(id) ON DELETE SET NULL,
     ticker     TEXT,
     detail     JSONB       NOT NULL DEFAULT '{}'::jsonb
 );
 
-CREATE INDEX IF NOT EXISTS idx_sentient_ingestion_events_created_at
-    ON sentient_trader.ingestion_events (created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_sentient_ingestion_events_type
-    ON sentient_trader.ingestion_events (event_type);
+CREATE INDEX IF NOT EXISTS idx_ingestion_events_created_at
+    ON ingestion_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ingestion_events_type
+    ON ingestion_events (event_type);
 
-CREATE TABLE IF NOT EXISTS sentient_trader.ingestion_cursors (
+CREATE TABLE IF NOT EXISTS ingestion_cursors (
     provider                   TEXT        PRIMARY KEY,
     updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_article_created_at    TIMESTAMPTZ,
@@ -244,16 +241,14 @@ CREATE TABLE IF NOT EXISTS sentient_trader.ingestion_cursors (
 
 
 -- =============================================================================
--- Dashboard Stats  (exact single-pass aggregation for the /stats endpoint)
+-- Dashboard Stats  
 -- =============================================================================
--- Computes every dashboard metric in one atomic query so counts are exact and
--- cheap regardless of table size (PostgREST caps row responses, so counting in
--- the app understated and jittered the numbers).
 
-CREATE OR REPLACE FUNCTION sentient_trader.dashboard_stats()
+CREATE OR REPLACE FUNCTION dashboard_stats()
 RETURNS jsonb
 LANGUAGE sql
 STABLE
+SET search_path = sentient_trader, public
 AS $$
   SELECT jsonb_build_object(
     'analyzed', count(*),
@@ -273,50 +268,132 @@ AS $$
     'fullDebates', count(*) FILTER (WHERE decision_path = 'full_debate'),
     'avgSentiment', coalesce(sum(sentiment_score), 0) / nullif(count(*), 0)
   )
-  FROM sentient_trader.trades;
+  FROM trades;
 $$;
 
 
 -- =============================================================================
--- Security  (backend-only access — see ACCESS MODEL at the top)
+-- Signal Calibration  
 -- =============================================================================
--- RLS is enabled on every table. Only the service role (used exclusively by the
--- FastAPI backend) is granted table access. anon/authenticated get nothing, so
--- the public anon key embedded in the frontend cannot read or write app data.
 
-ALTER TABLE sentient_trader.trades                ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sentient_trader.trade_decision_traces ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sentient_trader.signal_outcomes       ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sentient_trader.scheduler_runs        ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sentient_trader.agent_config          ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sentient_trader.raw_news_articles     ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sentient_trader.news_article_symbols  ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sentient_trader.news_outbox           ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sentient_trader.ingestion_events      ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sentient_trader.ingestion_cursors     ENABLE ROW LEVEL SECURITY;
-
--- Service role: full access (bypasses RLS). The backend is the only client.
-GRANT ALL ON ALL TABLES IN SCHEMA sentient_trader TO service_role;
-GRANT EXECUTE ON FUNCTION sentient_trader.dashboard_stats() TO service_role;
-
-ALTER DEFAULT PRIVILEGES IN SCHEMA sentient_trader
-    GRANT ALL ON TABLES TO service_role;
+CREATE OR REPLACE FUNCTION signal_calibration(min_signals int DEFAULT 1)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SET search_path = sentient_trader, public
+AS $$
+  WITH labeled AS (
+    SELECT
+      coalesce(t.pm_recommendation, t.trade_action)               AS action,
+      coalesce(t.calibrated_confidence, t.confidence_score)::float8 AS conviction,
+      CASE WHEN coalesce(t.pm_recommendation, t.trade_action) = 'SELL'
+           THEN -1 ELSE 1 END                                      AS dir,
+      o.return_15m, o.return_1h, o.return_eod
+    FROM signal_outcomes o
+    JOIN trades t ON t.id = o.trade_id
+    WHERE o.label_status IN ('LABELED', 'PARTIAL')
+      AND coalesce(t.pm_recommendation, t.trade_action) IN ('BUY', 'SELL')
+      AND o.return_eod IS NOT NULL
+  ),
+  bucketed AS (
+    SELECT
+      action, dir, return_15m, return_1h, return_eod,
+      CASE
+        WHEN conviction >= 0.90 THEN '0.90+'
+        WHEN conviction >= 0.80 THEN '0.80-0.90'
+        WHEN conviction >= 0.70 THEN '0.70-0.80'
+        WHEN conviction >= 0.50 THEN '0.50-0.70'
+        ELSE '<0.50'
+      END AS bucket
+    FROM labeled
+  ),
+  per_bucket AS (
+    SELECT
+      action, bucket,
+      count(*)                                                   AS signals,
+      avg(return_15m)                                            AS avg_return_15m,
+      avg(return_1h)                                             AS avg_return_1h,
+      avg(return_eod)                                            AS avg_return_eod,
+      avg(dir * return_eod)                                      AS avg_edge_eod,
+      avg(CASE WHEN dir * return_eod > 0 THEN 1.0 ELSE 0.0 END)  AS win_rate_eod
+    FROM bucketed
+    GROUP BY action, bucket
+    HAVING count(*) >= min_signals
+  ),
+  per_action AS (
+    SELECT
+      action,
+      count(*)                                                   AS signals,
+      avg(return_eod)                                            AS avg_return_eod,
+      avg(dir * return_eod)                                      AS avg_edge_eod,
+      avg(CASE WHEN dir * return_eod > 0 THEN 1.0 ELSE 0.0 END)  AS win_rate_eod
+    FROM bucketed
+    GROUP BY action
+  )
+  SELECT jsonb_build_object(
+    'labeledSignals', (SELECT count(*) FROM bucketed),
+    'buckets', coalesce(
+      (SELECT jsonb_agg(to_jsonb(per_bucket) ORDER BY action,
+         CASE bucket
+           WHEN '0.90+' THEN 1
+           WHEN '0.80-0.90' THEN 2
+           WHEN '0.70-0.80' THEN 3
+           WHEN '0.50-0.70' THEN 4
+           WHEN '<0.50' THEN 5
+         END)
+       FROM per_bucket), '[]'::jsonb),
+    'overall', coalesce(
+      (SELECT jsonb_agg(to_jsonb(per_action) ORDER BY action)
+       FROM per_action), '[]'::jsonb)
+  );
+$$;
 
 
 -- =============================================================================
--- Realtime  (optional — publish trades for live dashboard subscriptions)
+-- Security  
+-- =============================================================================
+
+ALTER TABLE trades                ENABLE ROW LEVEL SECURITY;
+ALTER TABLE trade_decision_traces ENABLE ROW LEVEL SECURITY;
+ALTER TABLE signal_outcomes       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE scheduler_runs        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_config          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE raw_news_articles     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE news_article_symbols  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE news_outbox           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ingestion_events      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ingestion_cursors     ENABLE ROW LEVEL SECURITY;
+
+-- Dynamic execution to grant schema-level privileges based on current search_path
+DO $$
+DECLARE
+    v_schema text := current_schema();
+BEGIN
+    EXECUTE format('GRANT ALL ON ALL TABLES IN SCHEMA %I TO service_role;', v_schema);
+    EXECUTE format('REVOKE EXECUTE ON FUNCTION %I.dashboard_stats() FROM PUBLIC;', v_schema);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %I.dashboard_stats() TO service_role;', v_schema);
+    EXECUTE format('REVOKE EXECUTE ON FUNCTION %I.signal_calibration(int) FROM PUBLIC;', v_schema);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %I.signal_calibration(int) TO service_role;', v_schema);
+    EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL ON TABLES TO service_role;', v_schema);
+END $$;
+
+
+-- =============================================================================
+-- Realtime  
 -- =============================================================================
 
 DO $$
+DECLARE
+    v_schema text := current_schema();
 BEGIN
     IF EXISTS (
         SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime'
     ) AND NOT EXISTS (
         SELECT 1 FROM pg_publication_tables
         WHERE pubname = 'supabase_realtime'
-          AND schemaname = 'sentient_trader'
+          AND schemaname = v_schema
           AND tablename = 'trades'
     ) THEN
-        ALTER PUBLICATION supabase_realtime ADD TABLE sentient_trader.trades;
+        EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE %I.trades;', v_schema);
     END IF;
 END $$;

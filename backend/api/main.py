@@ -20,13 +20,13 @@ import html
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 from dotenv import load_dotenv, find_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -69,6 +69,12 @@ TICKER_INDEX_TTL_SECONDS = int(os.environ.get("TICKER_INDEX_TTL_SECONDS", "600")
 PAGE_SIZE = 20
 MAX_ORDER_IDS = 50
 MAX_PROMPT_LENGTH = 5000
+
+# /metrics (Prometheus). Optional bearer token: if set, scrapers must present it.
+# Mirrors the agent's llm_budget key layout so we can expose budget usage.
+METRICS_AUTH_TOKEN = os.environ.get("METRICS_AUTH_TOKEN", "").strip()
+LLM_BUDGET_KEY_PREFIX = os.environ.get("LLM_BUDGET_KEY_PREFIX", "sentient:llm:budget")
+WORKER_STALE_AFTER_SECONDS = int(os.environ.get("WORKER_STALE_AFTER_SECONDS", "180"))
 
 TRADE_SUMMARY_SELECT = (
     "id, created_at, ticker, headline, article_url, sentiment_score, "
@@ -190,23 +196,52 @@ def normalized_client_ip(value: str) -> str:
     return ip or "unknown"
 
 
+# How many trusted reverse proxies sit in front of this app (e.g. Coolify's
+# proxy, Netlify). Each appends the peer it saw to X-Forwarded-For, so the
+# leftmost entries are attacker-controlled. We trust only the Nth-from-the-right
+# hop — the address the outermost trusted proxy actually observed — which makes
+# the anonymous-IP rate limit unspoofable. Set to 0 to ignore XFF entirely.
+TRUSTED_PROXY_COUNT = max(int(os.environ.get("API_TRUSTED_PROXY_COUNT", "1")), 0)
+
+
 def client_ip(request: Request) -> str:
+    socket_ip = request.client.host if request.client else "unknown"
+    if TRUSTED_PROXY_COUNT <= 0:
+        return normalized_client_ip(socket_ip)
+
     forwarded_for = request.headers.get("x-forwarded-for", "")
     if forwarded_for:
-        return normalized_client_ip(forwarded_for.split(",", 1)[0])
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return normalized_client_ip(real_ip)
-    return normalized_client_ip(request.client.host if request.client else "unknown")
+        chain = [hop.strip() for hop in forwarded_for.split(",") if hop.strip()]
+        if chain:
+            # The real client is the entry appended by the outermost trusted
+            # proxy. Anything further left was supplied by the client and is
+            # ignored. If the chain is shorter than expected, fall back to the
+            # leftmost (best available) rather than trusting a spoofed value.
+            index = max(len(chain) - TRUSTED_PROXY_COUNT, 0)
+            return normalized_client_ip(chain[index])
+    return normalized_client_ip(socket_ip)
+
+
+def rate_limit_salt() -> bytes:
+    """Secret used to derive per-user/per-IP rate-limit keys.
+
+    Required: a predictable salt makes the keys guessable, which would let a
+    caller probe or grief another user's bucket. We never fall back to a public
+    constant — ``rate_limit_salt()`` fails fast at startup if unset.
+    """
+    salt = os.environ.get("API_RATE_LIMIT_KEY_SALT") or os.environ.get(
+        "SUPABASE_JWT_SECRET"
+    )
+    if not salt:
+        raise RuntimeError(
+            "API_RATE_LIMIT_KEY_SALT (or SUPABASE_JWT_SECRET) must be set to a "
+            "long random secret. Refusing to use a predictable rate-limit salt."
+        )
+    return salt.encode()
 
 
 def rate_limit_digest(value: str) -> str:
-    salt = (
-        os.environ.get("API_RATE_LIMIT_KEY_SALT")
-        or os.environ.get("SUPABASE_JWT_SECRET")
-        or "sentient-trader-rate-limit"
-    ).encode()
-    return hmac.new(salt, value.encode(), "sha256").hexdigest()[:32]
+    return hmac.new(rate_limit_salt(), value.encode(), "sha256").hexdigest()[:32]
 
 
 def jwt_payload(token: str) -> dict[str, Any]:
@@ -316,6 +351,10 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSO
 app = FastAPI(title="Sentient Trader Backend API")
 
 api_rate_limit_enabled = env_bool("API_RATE_LIMIT_ENABLED", True)
+if api_rate_limit_enabled:
+    # Fail fast: rate-limit keys are HMAC'd with this salt. A missing salt used
+    # to silently fall back to a public constant, making keys predictable.
+    rate_limit_salt()
 limiter = Limiter(
     key_func=rate_limit_key,
     default_limits=env_limit_list("API_DEFAULT_RATE_LIMITS", "120/minute"),
@@ -346,6 +385,26 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+# Security headers applied to every API response. This is a JSON-only API, so a
+# locked-down CSP (default-src 'none') is appropriate — nothing should embed,
+# script, or style these responses. HSTS is set for direct API hits over TLS.
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+    "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
+}
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for header, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    return response
 
 
 class UserInfo(BaseModel):
@@ -613,10 +672,19 @@ def validate_simulation(payload: SimulateRequest) -> tuple[str, str, str]:
         raise HTTPException(
             status_code=400, detail="Source must be 200 characters or fewer."
         )
-    if payload.article_url and len(payload.article_url) > 2048:
-        raise HTTPException(
-            status_code=400, detail="Article URL must be 2048 characters or fewer."
-        )
+    if payload.article_url:
+        if len(payload.article_url) > 2048:
+            raise HTTPException(
+                status_code=400, detail="Article URL must be 2048 characters or fewer."
+            )
+        # Reject non-http(s) schemes (javascript:, data:, …) at the boundary so a
+        # malicious URL can never be stored and later rendered into an href. The
+        # frontend wraps it in safeArticleUrl() too — this is defense in depth.
+        scheme = urlparse(payload.article_url.strip()).scheme.lower()
+        if scheme not in {"http", "https"}:
+            raise HTTPException(
+                status_code=400, detail="Article URL must be an http(s) URL."
+            )
     if contains_injection_marker(headline) or (
         payload.summary and contains_injection_marker(payload.summary)
     ):
@@ -1026,6 +1094,26 @@ def stats() -> dict[str, Any]:
     return {"stats": stats_data, "fetchedAt": now_iso()}
 
 
+@app.get("/calibration")
+def calibration(min_signals: int = Query(default=1, ge=1, le=500)) -> dict[str, Any]:
+    """
+    Outcome-driven calibration: forward returns and hit rate bucketed by the
+    committee's conviction. Public read-only aggregate (no account data), built
+    entirely from already-persisted signal_outcomes — no extra cost.
+    """
+    try:
+        result = (
+            get_supabase()
+            .rpc("signal_calibration", {"min_signals": min_signals})
+            .execute()
+        )
+    except Exception:
+        log.exception("Calibration query failed")
+        raise HTTPException(status_code=500, detail="Could not load calibration data.")
+    payload = result.data if isinstance(result.data, dict) else {}
+    return {"calibration": payload, "fetchedAt": now_iso()}
+
+
 
 # Enhanced trading field validation — matches defaults in agent/config.py
 _ENHANCED_BOOL_KEYS = {
@@ -1287,7 +1375,9 @@ def update_agent_config(
 
 @app.get("/orders")
 def orders(
-    status: str = "all", limit: int = Query(default=100, ge=1, le=500)
+    status: str = "all",
+    limit: int = Query(default=100, ge=1, le=500),
+    _user: UserInfo = Depends(require_user),
 ) -> dict[str, Any]:
     try:
         safe_status = status if status in ALLOWED_ORDER_STATUSES else "all"
@@ -1297,21 +1387,24 @@ def orders(
             alpaca_fetch("/v2/positions"),
             alpaca_fetch(f"/v2/orders?{query}"),
         )
-        account.pop("account_number", None)
+        # Strip account-identifying fields before returning to the browser. The
+        # dashboard only needs the financial figures, not the account identity.
+        for field_name in ("account_number", "id"):
+            account.pop(field_name, None)
         return {
             "account": account,
             "positions": positions,
             "orders": order_rows,
             "fetchedAt": now_iso(),
         }
-    except Exception as exc:
+    except Exception:
         log.exception("Orders fetch error")
         return {
             "account": None,
             "positions": [],
             "orders": [],
             "fetchedAt": now_iso(),
-            "error": str(exc),
+            "error": "Could not load orders.",
         }
 
 
@@ -1373,7 +1466,9 @@ def cancel_orders(
 
 
 @app.get("/portfolio")
-def portfolio(range: str = "D") -> dict[str, Any]:
+def portfolio(
+    range: str = "D", _user: UserInfo = Depends(require_user)
+) -> dict[str, Any]:
     try:
         range_key = range if range in RANGE_CONFIG else "D"
         config = RANGE_CONFIG[range_key]
@@ -1481,7 +1576,8 @@ def portfolio(range: str = "D") -> dict[str, Any]:
                 ),
             },
             "account": {
-                "id": string_value(account.get("id")),
+                # account.id intentionally omitted — the dashboard only needs
+                # status/currency, not the Alpaca account identity.
                 "status": string_value(account.get("status")),
                 "currency": string_value(account.get("currency")),
                 "createdAt": string_value(account.get("created_at")),
@@ -1491,9 +1587,13 @@ def portfolio(range: str = "D") -> dict[str, Any]:
             "source": "alpaca",
             "fetchedAt": now_iso(),
         }
-    except Exception as exc:
+    except Exception:
         log.exception("Portfolio fetch error")
-        return {"history": [], "error": str(exc), "fetchedAt": now_iso()}
+        return {
+            "history": [],
+            "error": "Could not load portfolio history.",
+            "fetchedAt": now_iso(),
+        }
 
 
 @app.get("/status")
@@ -1624,6 +1724,121 @@ def status() -> dict[str, Any]:
     }
 
 
+# ── Prometheus metrics ───────────────────────────────────────────────────────
+
+
+def _prom_label_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
+def _prom_metric_name(key: str) -> str:
+    """Sanitize an arbitrary worker-state field into a valid metric suffix."""
+    sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", key).strip("_").lower()
+    return sanitized or "value"
+
+
+def _render_prometheus(samples: list[tuple[str, dict[str, str], float]]) -> str:
+    """Render samples grouped by metric name with a single TYPE line each."""
+    grouped: dict[str, list[tuple[dict[str, str], float]]] = {}
+    order: list[str] = []
+    for name, labels, value in samples:
+        if name not in grouped:
+            grouped[name] = []
+            order.append(name)
+        grouped[name].append((labels, value))
+
+    lines: list[str] = []
+    for name in order:
+        lines.append(f"# TYPE {name} gauge")
+        for labels, value in grouped[name]:
+            if labels:
+                label_str = ",".join(
+                    f'{k}="{_prom_label_escape(str(v))}"' for k, v in labels.items()
+                )
+                lines.append(f"{name}{{{label_str}}} {value}")
+            else:
+                lines.append(f"{name} {value}")
+    return "\n".join(lines) + "\n"
+
+
+@app.get("/metrics")
+def metrics(authorization: str | None = Header(default=None)) -> PlainTextResponse:
+    """
+    Prometheus exposition of worker health + LLM budget.
+
+    Scrape with Grafana Agent / Grafana Cloud's free tier. The data already lives
+    in Redis (per-worker heartbeat state + the daily LLM-call counter), so this
+    is a cheap read with no database hit. Protect with METRICS_AUTH_TOKEN if the
+    endpoint is reachable outside a trusted network.
+    """
+    if METRICS_AUTH_TOKEN and not hmac.compare_digest(
+        auth_token(authorization) or "", METRICS_AUTH_TOKEN
+    ):
+        raise HTTPException(status_code=401, detail="Invalid metrics token")
+
+    now = time.time()
+    samples: list[tuple[str, dict[str, str], float]] = []
+
+    try:
+        redis = get_redis()
+        worker_states = redis.hgetall(health_key())
+    except Exception:
+        log.exception("Metrics: could not read worker health")
+        worker_states = {}
+        samples.append(("sentient_metrics_scrape_ok", {}, 0.0))
+    else:
+        samples.append(("sentient_metrics_scrape_ok", {}, 1.0))
+
+    for name, raw in (worker_states or {}).items():
+        try:
+            state = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        labels = {"worker": str(name)}
+        heartbeat = float(state.get("last_heartbeat_epoch") or 0)
+        age = now - heartbeat if heartbeat else float("inf")
+        fresh = age <= WORKER_STALE_AFTER_SECONDS
+        healthy = state.get("status") == "healthy"
+        samples.append(("sentient_worker_up", labels, 1.0 if (fresh and healthy) else 0.0))
+        if heartbeat:
+            samples.append(
+                ("sentient_worker_heartbeat_age_seconds", labels, round(age, 1))
+            )
+        # Emit every numeric field generically so new health counters surface
+        # without code changes (messages_consumed, retries, errors, …).
+        for key, value in state.items():
+            if key == "last_heartbeat_epoch" or isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                metric = f"sentient_worker_{_prom_metric_name(key)}"
+                samples.append((metric, labels, float(value)))
+
+    # LLM daily-call budget (kill-switch visibility).
+    try:
+        budget_limit = max(int(os.environ.get("LLM_DAILY_CALL_BUDGET", "0") or 0), 0)
+    except ValueError:
+        budget_limit = 0
+    if budget_limit > 0:
+        day = datetime.now(timezone.utc).strftime("%Y%m%d")
+        try:
+            used = int(get_redis().get(f"{LLM_BUDGET_KEY_PREFIX}:{day}") or 0)
+        except Exception:
+            used = 0
+        samples.append(("sentient_llm_budget_used", {}, float(used)))
+        samples.append(("sentient_llm_budget_limit", {}, float(budget_limit)))
+        samples.append(
+            ("sentient_llm_budget_remaining", {}, float(max(budget_limit - used, 0)))
+        )
+        samples.append(
+            ("sentient_llm_budget_exhausted", {}, 1.0 if used >= budget_limit else 0.0)
+        )
+
+    return PlainTextResponse(
+        _render_prometheus(samples),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
+
 def load_ticker_index() -> list[dict[str, str]]:
     """
     In-process cache of the tradable ticker directory built by ingestion.
@@ -1745,7 +1960,7 @@ def enhanced_features_audit(
     """
     try:
         result = (
-            supa_service()
+            get_supabase()
             .table("trade_decision_traces")
             .select("trade_id, decision_trace")
             .not_.is_("decision_trace->enhanced_features", "null")
@@ -1789,6 +2004,8 @@ def enhanced_features_audit(
                 for row in rows[:10]  # Last 10 detailed reports
             ],
         }
-    except Exception as exc:
-        log.warning("Enhanced features audit failed: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception:
+        log.exception("Enhanced features audit failed")
+        raise HTTPException(
+            status_code=500, detail="Could not load enhanced feature audit."
+        )

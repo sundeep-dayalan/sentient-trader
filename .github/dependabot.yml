@@ -1,0 +1,36 @@
+version: 2
+updates:
+  # Backend Python services. Each has its own requirements.txt / lockfile.
+  - package-ecosystem: pip
+    directory: /backend/api
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, backend]
+  - package-ecosystem: pip
+    directory: /backend/agent
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, backend]
+  - package-ecosystem: pip
+    directory: /backend/ingestion
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, backend]
+
+  # Frontend.
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, frontend]
+
+  # Keep the GitHub Actions themselves current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [dependencies, ci]

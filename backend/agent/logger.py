@@ -72,7 +72,9 @@ def _decision_path(decision_trace: Optional[dict], trade_action: str) -> str:
         return "expired"
 
     pm = decision_trace.get("portfolio_manager_decision")
-    if isinstance(pm, dict) and pm.get("model") == "deterministic-pre-screen":
+    if isinstance(pm, dict) and pm.get("model") in (
+        "deterministic-pre-screen", "budget-pre-screen"
+    ):
         return "pre_screen"
 
     # Approved by the committee/risk gate but blocked because the intraday tape

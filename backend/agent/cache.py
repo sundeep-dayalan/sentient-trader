@@ -84,6 +84,11 @@ class HeadlineCache:
         self._redis = create_redis_client()
         log.info("Redis cache connected")
 
+    @property
+    def redis_client(self):
+        """Expose the Redis client for reuse (e.g., LLMBudget)."""
+        return self._redis
+
     def _make_key(
         self,
         headline: str,

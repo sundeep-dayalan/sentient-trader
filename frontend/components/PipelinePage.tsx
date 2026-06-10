@@ -28,6 +28,7 @@ import {
   ArticleQuality,
   RiskGateTrace,
 } from '@/lib/types';
+import { safeArticleUrl } from '@/lib/news';
 
 // =============================================================================
 // Shared presentational helpers
@@ -671,16 +672,19 @@ function signalNodes({
               <KV label="Signal time" value={dateTime(trade.created_at)} />
               <KV label="Article ID" value={trade.article_id} />
             </div>
-            {(news?.article_url ?? trade.article_url) && (
-              <a
-                href={(news?.article_url ?? trade.article_url) as string}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex text-xs font-semibold text-accent hover:underline"
-              >
-                Open source
-              </a>
-            )}
+            {(() => {
+              const articleUrl = safeArticleUrl(news?.article_url ?? trade.article_url);
+              return articleUrl ? (
+                <a
+                  href={articleUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex text-xs font-semibold text-accent hover:underline"
+                >
+                  Open source
+                </a>
+              ) : null;
+            })()}
           </div>
         ),
       },

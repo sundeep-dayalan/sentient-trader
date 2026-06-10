@@ -177,3 +177,29 @@ export interface SimulationScenario {
   headline: string;
   source: string;
 }
+
+/** A conviction bucket from the /calibration endpoint */
+export interface CalibrationBucket {
+  action: 'BUY' | 'SELL';
+  bucket: string;
+  signals: number;
+  avg_return_15m: number | null;
+  avg_return_1h: number | null;
+  avg_return_eod: number | null;
+  avg_edge_eod: number | null;
+  win_rate_eod: number | null;
+}
+
+export interface CalibrationActionSummary {
+  action: 'BUY' | 'SELL';
+  signals: number;
+  avg_return_eod: number | null;
+  avg_edge_eod: number | null;
+  win_rate_eod: number | null;
+}
+
+export interface Calibration {
+  labeledSignals: number;
+  buckets: CalibrationBucket[];
+  overall: CalibrationActionSummary[];
+}

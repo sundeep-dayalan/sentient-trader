@@ -71,6 +71,8 @@ then trades **only** when conviction, risk, and quality gates all clear.
 
 > The headline story isn't profit (it's a conviction-gated paper-trading demo that trades rarely by design) — it's **reliability and throughput**: thousands of signals reasoned over, fully traced, and risk-gated, running unattended for weeks with near-zero errors.
 
+> 🔁 **Reproduce these numbers.** They aren't marketing — every figure is a live query you can run yourself: scheduler reliability and execution cleanliness come from [`supabase/queries/ai_behavior_master_report.sql`](supabase/queries/ai_behavior_master_report.sql), P&L / outcome figures from [`supabase/queries/pnl_performance_debug.sql`](supabase/queries/pnl_performance_debug.sql), and the conviction→outcome edge from [`supabase/queries/signal_calibration.sql`](supabase/queries/signal_calibration.sql) (also served at `GET /calibration` and surfaced on the dashboard).
+
 <br/>
 
 ---
@@ -470,11 +472,13 @@ flowchart LR
 | `/status` | GET | Combined health check: Supabase, Alpaca, Redis, LLM provider, agent heartbeat |
 | `/agent-config` | GET/POST | Read/write agent config (POST requires super-user) |
 | `/stats` | GET | Aggregated dashboard statistics |
-| `/portfolio` | GET | Alpaca paper trading portfolio history |
-| `/orders` | GET | Account, positions, and order list |
+| `/calibration` | GET | Conviction→outcome edge (forward returns + hit rate, bucketed by conviction) |
+| `/portfolio` | GET | Alpaca paper trading portfolio history (auth required; account id redacted) |
+| `/orders` | GET | Account, positions, and order list (auth required; account id redacted) |
 | `/orders/cancel` | POST | Cancel selected Alpaca orders (super-user only) |
 | `/trades` | GET | Paginated trade summaries with polling cursor |
 | `/trades/{id}` | GET | Trade detail with full Decision Core trace |
+| `/metrics` | GET | Prometheus exposition of worker health + LLM budget (optional `METRICS_AUTH_TOKEN`) |
 
 <br/>
 
@@ -940,6 +944,35 @@ Update agent parameters via the **Settings** page in the dashboard. The worker r
 ## 🐞 Bug Log
 
 > A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
+
+<details>
+<summary><b>BUG-2026-06-09-02 — <code>/enhanced-features/audit</code> always 500'd (undefined <code>supa_service()</code>)</b></summary>
+
+<br/>
+
+**Identified:** 2026-06-09, during a gold-standard review pass.
+
+**Impact:** The enhanced-features audit endpoint called `supa_service()`, which is defined nowhere in the API — every other route uses `get_supabase()`. The route was dead: any request raised `NameError`, caught and returned as a 500. The endpoint additionally echoed `str(exc)` to the client, leaking internal detail.
+
+**Resolution:**
+- `backend/api/main.py` — renamed the call to `get_supabase()`; the endpoint now returns a generic message to the client and logs the detail server-side (`log.exception`) instead of echoing the exception string. Same `str(exc)` leak fixed in `/portfolio` and `/orders`.
+
+</details>
+
+<details>
+<summary><b>BUG-2026-06-09-01 — <code>article_url</code> accepted <code>javascript:</code>/<code>data:</code> schemes (stored-XSS-ish link)</b></summary>
+
+<br/>
+
+**Identified:** 2026-06-09, during a gold-standard review pass.
+
+**Impact:** `validate_simulation()` checked the article URL's length but not its scheme, so a `javascript:…` or `data:…` URL could be stored. The Pipeline view rendered it directly into `href={…}` without the `safeArticleUrl()` wrapper that LiveTicker and AgentMonologue both use — a clickable script-URL on a public page.
+
+**Resolution:**
+- `backend/api/main.py` — `validate_simulation()` now rejects any non-`http(s)` scheme at the boundary.
+- `frontend/components/PipelinePage.tsx` — the Pipeline "Open source" link is wrapped in `safeArticleUrl()` (consistent with the other two render paths) and uses `rel="noopener noreferrer"`.
+
+</details>
 
 <details>
 <summary><b>BUG-2026-06-08-02 — Unfilled bracket entries lingered as GTC "zombie" orders</b></summary>
