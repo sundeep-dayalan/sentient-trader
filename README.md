@@ -946,6 +946,22 @@ Update agent parameters via the **Settings** page in the dashboard. The worker r
 > A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
 
 <details>
+<summary><b>BUG-2026-06-10-01 — Stale-entry reaper (and trailing-stop finder) silently no-op'd on an enum-prefixed <code>side</code>/<code>type</code></b></summary>
+
+<br/>
+
+**Identified:** 2026-06-10, investigating why a CASY bracket BUY (`…8535b2315d`, limit $769.14) — generated Jun 9 after close, activated Jun 10 04:00 ET — sat unfilled through the entire session instead of being reaped.
+
+**Impact:** The reaper introduced for BUG-2026-06-08-02 had **never cancelled a single order**. `get_open_orders()` stored `side`/`type` via `str(getattr(o, "side"))`, but Alpaca's SDK (alpaca-py 0.26.0) returns these as enums whose `str()` is prefixed — `OrderSide.BUY`, not `buy`. So the reaper's first gate, `str(side).lower() != "buy"` → `"orderside.buy" != "buy"`, was **always true and skipped every order**. The exact "zombie GTC entry" class of bug that the reaper was built to kill was still live. The same dict feeds `_find_existing_stop_order()` (position_monitor.py), which needs `side == "sell"` and `type == "stop"` — so trailing-stop detection was broken identically, risking duplicate/missed stop placement.
+
+**Root cause:** The codebase already had `_normalize_status()` to strip exactly this enum prefix — but it was only applied to the `status` field. `side` and `type` were stringified raw.
+
+**Resolution:** Generalized the helper to `_enum_token()` (strip enum prefix + lowercase; `_normalize_status()` now delegates to it) and applied it to `side`/`type` at the source in `get_open_orders()`, including bracket legs. Verified end-to-end: a BUY/limit order now passes the reaper's gate, and `OrderSide.BUY → "buy"`, `OrderType.STOP → "stop"`.
+- `backend/agent/trader.py` — new `_enum_token()`; `get_open_orders()` normalizes `side`/`type` for the order and its legs
+
+</details>
+
+<details>
 <summary><b>BUG-2026-06-09-02 — <code>/enhanced-features/audit</code> always 500'd (undefined <code>supa_service()</code>)</b></summary>
 
 <br/>

@@ -89,24 +89,35 @@ def _boolish(value) -> Optional[bool]:
     return bool(value)
 
 
-def _normalize_status(value: Any) -> str:
+def _enum_token(value: Any) -> str:
     """
-    Normalize Alpaca's `status` to a stable, lowercase, prefix-free token.
-    Alpaca's Python SDK sometimes returns the OrderStatus enum (whose `str()`
-    is `OrderStatus.PENDING_NEW`) and sometimes a raw lowercase string
-    (`"accepted"`). Mixed forms in the DB break every `== "filled"` check.
+    Normalize an Alpaca enum (or raw string) to a stable, lowercase,
+    prefix-free token. The Python SDK sometimes returns an enum whose `str()`
+    is prefixed — `OrderSide.BUY`, `OrderType.STOP`, `OrderStatus.PENDING_NEW`
+    — and sometimes a raw lowercase string (`"accepted"`). Callers compare
+    against bare tokens (`"buy"`, `"stop"`, `"filled"`), so mixed forms
+    silently break every such check.
 
-    Returns "" for empty/None so callers can still distinguish "no status".
+    Returns "" for empty/None so callers can still distinguish "no value".
     """
     if value is None:
         return ""
     text = str(value).strip()
     if not text:
         return ""
-    # Strip Python enum prefix if present (e.g. "OrderStatus.PENDING_NEW")
+    # Strip Python enum prefix if present (e.g. "OrderSide.BUY")
     if "." in text:
         text = text.rsplit(".", 1)[-1]
     return text.lower()
+
+
+def _normalize_status(value: Any) -> str:
+    """Normalize Alpaca's order `status` to a stable lowercase token.
+
+    Mixed enum/string forms (`OrderStatus.PENDING_NEW` vs `"accepted"`) would
+    otherwise break every `== "filled"` check across the DB.
+    """
+    return _enum_token(value)
 
 
 class AlpacaTrader:
@@ -563,8 +574,8 @@ class AlpacaTrader:
                 {
                     "id": str(getattr(o, "id", "") or ""),
                     "symbol": str(getattr(o, "symbol", "") or ""),
-                    "side": str(getattr(o, "side", "") or ""),
-                    "type": str(getattr(o, "type", "") or ""),
+                    "side": _enum_token(getattr(o, "side", None)),
+                    "type": _enum_token(getattr(o, "type", None)),
                     "qty": _floatish(getattr(o, "qty", None)) or 0.0,
                     "filled_qty": _floatish(getattr(o, "filled_qty", None)) or 0.0,
                     "created_at": getattr(o, "created_at", None),
@@ -575,8 +586,8 @@ class AlpacaTrader:
                     "legs": [
                         {
                             "id": str(getattr(leg, "id", "") or ""),
-                            "type": str(getattr(leg, "type", "") or ""),
-                            "side": str(getattr(leg, "side", "") or ""),
+                            "type": _enum_token(getattr(leg, "type", None)),
+                            "side": _enum_token(getattr(leg, "side", None)),
                             "stop_price": _floatish(getattr(leg, "stop_price", None)),
                             "limit_price": _floatish(getattr(leg, "limit_price", None)),
                             "status": _normalize_status(getattr(leg, "status", None)),
