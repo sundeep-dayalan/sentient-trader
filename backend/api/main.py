@@ -432,6 +432,15 @@ ACCOUNT_ENDPOINTS_SUPER_ONLY = env_bool("API_ACCOUNT_ENDPOINTS_SUPER_ONLY", Fals
 # a request per keystroke.
 PUBLIC_READ_RATE_LIMIT = os.environ.get("API_PUBLIC_READ_RATE_LIMIT", "60/minute")
 TICKER_SEARCH_RATE_LIMIT = os.environ.get("API_TICKER_SEARCH_RATE_LIMIT", "120/minute")
+# Hard per-IP ceiling on /simulate that the per-user "free simulation" quota
+# cannot be used to bypass. Minting fresh anonymous Supabase users (each a new
+# user.id with its own daily quota) no longer multiplies the number of costly
+# LLM debates a single source can trigger, because this limit is keyed by the
+# (salted) client IP, independent of the authenticated identity. Set to 0 to
+# disable. Enforced manually (not via a slowapi decorator) so the route keeps a
+# resolvable Pydantic body annotation under `from __future__ import annotations`.
+SIMULATE_IP_HOURLY_LIMIT = int(os.environ.get("API_SIMULATE_IP_HOURLY_LIMIT", "10"))
+SIMULATE_IP_WINDOW_MS = 60 * 60 * 1000
 limiter = Limiter(
     key_func=rate_limit_key,
     default_limits=env_limit_list("API_DEFAULT_RATE_LIMITS", "120/minute"),
@@ -682,7 +691,11 @@ def contains_injection_marker(text: str) -> bool:
 
 
 def status_error_detail(prefix: str, error: Exception) -> str:
-    return f"{prefix}: {str(error)[:240]}"
+    # /status is unauthenticated and polled frequently by the dashboard. Log the
+    # full exception server-side but return only a generic message so raw driver
+    # / connection / schema details never reach the public response.
+    log.warning("%s: %s", prefix, error)
+    return prefix
 
 
 def number_value(value: Any) -> float | None:
@@ -1333,7 +1346,13 @@ def _validate_enhanced_trading(data: dict[str, Any]) -> None:
 
 
 @app.get("/agent-config")
-def agent_config() -> dict[str, Any]:
+def agent_config(
+    user: UserInfo | None = Depends(get_optional_user),
+) -> dict[str, Any]:
+    # The persona system prompts are proprietary strategy IP. Expose the public
+    # dashboard fields (thresholds, model cascade, enhanced-trading flags) to
+    # everyone, but reveal the prompt text only to super-users who can edit it.
+    caller_is_super = bool(user and is_super_user(user))
     result = (
         get_supabase()
         .table("agent_config")
@@ -1376,10 +1395,10 @@ def agent_config() -> dict[str, Any]:
             "override": None,
         },
         "prompts": {
-            "momentum": row.get("momentum_system_prompt"),
-            "value": row.get("value_system_prompt"),
-            "risk": row.get("risk_system_prompt"),
-            "synthesis": row.get("synthesis_system_prompt"),
+            "momentum": row.get("momentum_system_prompt") if caller_is_super else "",
+            "value": row.get("value_system_prompt") if caller_is_super else "",
+            "risk": row.get("risk_system_prompt") if caller_is_super else "",
+            "synthesis": row.get("synthesis_system_prompt") if caller_is_super else "",
         },
         "enhanced_trading": {
             "bracket_orders": bool(enhanced.get("bracket_orders", False)),
@@ -1815,34 +1834,26 @@ async def status() -> dict[str, Any]:
             if heartbeat_age >= 180:
                 agent_status = "error"
                 details["agent"] = (
-                    f"Worker '{agent_worker_name}' heartbeat is stale by "
+                    f"The agent worker heartbeat is stale by "
                     f"{int(heartbeat_age // 60)} minutes."
                 )
             elif worker_status == "unhealthy":
                 agent_status = "error"
-                details["agent"] = (
-                    f"Worker '{agent_worker_name}' is unhealthy: "
-                    f"{phase}{phase_detail}."
-                )
+                details["agent"] = f"The agent worker is unhealthy: {phase}{phase_detail}."
             elif heartbeat_age < 60 and worker_status == "healthy":
                 agent_status = "ok"
-                details["agent"] = (
-                    f"Worker '{agent_worker_name}' is fresh: {phase}{phase_detail}."
-                )
+                details["agent"] = f"The agent worker is fresh: {phase}{phase_detail}."
             else:
                 agent_status = "stale"
                 details["agent"] = (
-                    f"Worker '{agent_worker_name}' is fresh but status is "
+                    f"The agent worker is fresh but status is "
                     f"{worker_status}, phase is {phase}{phase_detail}."
                     if phase
-                    else f"Worker '{agent_worker_name}' is fresh, but no phase "
-                    "state was published."
+                    else "The agent worker is fresh, but no phase state was published."
                 )
         else:
             agent_status = "error"
-            details["agent"] = (
-                f"No agent worker state found for '{agent_worker_name}' in Redis key '{health_key()}'."
-            )
+            details["agent"] = "No agent worker state has been published yet."
     except Exception as exc:
         redis_status_value = "error"
         agent_status = "unknown"
@@ -2079,10 +2090,44 @@ def simulate_quota(user: UserInfo = Depends(require_user)) -> dict[str, Any]:
     return peek_simulate_limit(user.id, user_tier(user))
 
 
+def enforce_simulate_ip_ceiling(request: Request) -> None:
+    """Per-IP hourly hard cap on /simulate, independent of the auth identity.
+
+    Without this, the per-user quota in check_simulate_limit is bypassable by
+    churning anonymous Supabase users (each a fresh user.id with its own quota),
+    letting a single source trigger an unbounded number of LLM debates.
+    """
+    if SIMULATE_IP_HOURLY_LIMIT <= 0:
+        return
+    now_ms = int(time.time() * 1000)
+    window_start = (now_ms // SIMULATE_IP_WINDOW_MS) * SIMULATE_IP_WINDOW_MS
+    reset = window_start + SIMULATE_IP_WINDOW_MS
+    ttl_ms = max(reset - now_ms, 1)
+    key = f"ratelimit:simulate:ip:{window_start}:{rate_limit_digest(client_ip(request))}"
+
+    count = int(get_redis().eval(FIXED_WINDOW_SCRIPT, 1, key, str(ttl_ms)))
+    if count > SIMULATE_IP_HOURLY_LIMIT:
+        retry_after = max((reset - now_ms) // 1000, 1)
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "success": False,
+                "errorMessage": (
+                    "This network has hit the hourly simulation limit. "
+                    "Please try again later."
+                ),
+                "retryAfterSeconds": retry_after,
+            },
+        )
+
+
 @app.post("/simulate")
 def simulate(
-    payload: SimulateRequest, user: UserInfo = Depends(require_user)
+    request: Request,
+    payload: SimulateRequest,
+    user: UserInfo = Depends(require_user),
 ) -> dict[str, Any]:
+    enforce_simulate_ip_ceiling(request)
     ticker, headline, source = validate_simulation(payload)
     rate_limit = check_simulate_limit(user.id, user_tier(user))
     if not rate_limit["success"]:

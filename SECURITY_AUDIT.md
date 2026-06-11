@@ -49,6 +49,15 @@ The browser sends the Supabase access token as an `Authorization: Bearer` header
 | ST-02 | Medium   | CORS / Token Exposure | `backend/api/main.py`      | Keep `CORS_ORIGINS` pinned to known Netlify/local origins before production                                             |
 | ST-03 | Low      | DoS Limits            | `backend/api/main.py`      | `/simulate` now bounds headline, summary, source, and URL lengths, but public read endpoints still rely on query limits |
 
+### Resolved hardening (2026-06-10)
+
+| ID    | Severity | Category             | Location                     | Fix                                                                                                                                                                                  |
+| ----- | -------- | -------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ST-04 | Medium   | Quota Bypass / Cost  | `backend/api/main.py`        | `/simulate` per-user "free" quota was bypassable by churning anonymous Supabase users. Added a hard per-IP hourly ceiling (`API_SIMULATE_IP_HOURLY_LIMIT`, default 10) keyed by salted client IP, independent of identity. |
+| ST-05 | Low      | Info Disclosure      | `backend/api/main.py`        | Unauthenticated `/status` no longer leaks worker names, the Redis health-key name, or raw exception text — internals are logged server-side and the public payload is generic.       |
+| ST-06 | Low      | Prompt-Injection     | `backend/agent/analyst.py`   | `_untrusted_news_block` now neutralizes `<<<`/`>>>` fence runs in headline/source/summary so crafted news cannot forge the closing marker and break out of the untrusted-data block. |
+| ST-07 | Low      | IP / Strategy Leak   | `backend/api/main.py`, `frontend/components/SettingsPage.tsx` | `/agent-config` returns the persona system prompts only to super-users; the Settings UI hides the prompts section for non-admins. Per-trade reasoning stays public (it is the product's intended "agent monologue"). |
+
 ## 4. Resolved By Migration
 
 - The old frontend API-route CSRF risk is removed because the backend no longer relies on browser cookies for API authorization.

@@ -582,6 +582,10 @@ function AgentConfigTab({
         )}
       </Section>
 
+      {/* Persona system prompts are proprietary strategy IP — the backend only
+          returns them to super-users, so only render the section when editable. */}
+      {canEdit && (
+      <>
       <Divider />
 
       {/* ── Persona Prompts ── */}
@@ -625,6 +629,8 @@ function AgentConfigTab({
           </div>
         )}
       </Section>
+      </>
+      )}
 
       <Divider />
 
