@@ -18,28 +18,30 @@ Deploy:       build and run the Dockerfile
 
 import logging
 import sys
+from pathlib import Path
+
+# backend/ must be importable before listener (whose import chain reaches
+# shared.worker_health) is loaded.
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from dotenv import load_dotenv, find_dotenv
 
 from listener import NewsListener
+from shared.logging_setup import setup_logging
 
 # Load .env file when running locally. In production, secrets are injected
 # directly into the environment so this is a no-op.
-# Try to find a root/parent .env file first for local development.
-# If not found (e.g. in production/Docker), it will safely fallback.
+# override=False: real environment variables always win over .env files, so a
+# stray .env baked into an image can never silently replace production values.
 dotenv_path = find_dotenv()
 if dotenv_path:
-    load_dotenv(dotenv_path, override=True)
+    load_dotenv(dotenv_path, override=False)
 else:
-    load_dotenv(override=True)
+    load_dotenv(override=False)
 
 # Structured logging so the host's log aggregator can parse and search entries.
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-    stream=sys.stdout,
-)
+# LOG_FORMAT=json emits one JSON object per line; default stays human-readable.
+setup_logging("ingestion")
 
 log = logging.getLogger("ingestion.main")
 

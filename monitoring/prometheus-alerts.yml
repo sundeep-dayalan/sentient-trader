@@ -1,0 +1,73 @@
+# Prometheus alert rules for the /metrics endpoint exposed by backend/api.
+#
+# Load these into the scraper that already collects /metrics (Grafana Cloud:
+# paste under Alerts → Alert rules, or mount into a self-hosted Prometheus
+# via `rule_files`). Thresholds mirror the staleness windows the API itself
+# uses (WORKER_STALE_AFTER_SECONDS=180).
+groups:
+  - name: sentient-trader
+    rules:
+      - alert: WorkerDown
+        expr: sentient_worker_up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Worker {{ $labels.worker }} is down or unhealthy'
+          description: >-
+            Heartbeat for {{ $labels.worker }} is stale (>180s) or its status
+            is not "healthy". The trading pipeline is not processing signals.
+
+      - alert: WorkerHeartbeatStale
+        expr: sentient_worker_heartbeat_age_seconds > 180
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Worker {{ $labels.worker }} heartbeat is stale'
+          description: >-
+            Last heartbeat is {{ $value }}s old. The worker may be wedged on a
+            blocking call even though the process is alive.
+
+      - alert: MetricsScrapeFailing
+        expr: sentient_metrics_scrape_ok == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'API cannot read worker health from Redis'
+          description: >-
+            /metrics is reachable but Redis worker-health reads are failing —
+            Redis is likely down, which also halts the consumer.
+
+      - alert: DeadLetterQueueGrowing
+        expr: delta(sentient_dlq_depth[30m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Signals are being dead-lettered'
+          description: >-
+            The agent DLQ grew in the last 30 minutes. Inspect the dead-letter
+            stream for the failure reason (malformed payloads, repeated
+            processing errors, expired signals).
+
+      - alert: RetryQueueBacklog
+        expr: sentient_retry_queue_depth > 25
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Agent retry queue is backing up'
+          description: >-
+            More than 25 signals are waiting on retry — a downstream dependency
+            (Supabase, Alpaca, LLM provider) is likely failing repeatedly.
+
+      - alert: LLMBudgetExhausted
+        expr: sentient_llm_budget_exhausted == 1
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Daily LLM call budget exhausted'
+          description: >-
+            The agent has hit its daily LLM call budget; signals fall back to
+            budget pre-screen HOLDs until the UTC day rolls over.

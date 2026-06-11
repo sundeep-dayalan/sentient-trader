@@ -8,6 +8,7 @@ All database, Alpaca, LLM-provider, Redis, and admin operations live here.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hmac
 import json
@@ -17,6 +18,7 @@ import re
 import sys
 import time
 import html
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -25,6 +27,7 @@ from urllib.parse import quote, urlparse
 import httpx
 from dotenv import load_dotenv, find_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
@@ -37,21 +40,22 @@ from supabase.client import ClientOptions
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from redis_client import create_redis_client
+from shared.logging_setup import request_id_var, setup_logging
 from shared.worker_health import health_key, read_worker_state, worker_name
 
 # Try to find a root/parent .env file first for local development.
-# If not found (e.g. in production/Docker), it will safely fallback.
+# override=False: real environment variables (set by the container platform)
+# always win over .env files, so a stray .env baked into an image can never
+# silently replace production credentials.
 dotenv_path = find_dotenv()
 if dotenv_path:
-    load_dotenv(dotenv_path, override=True)
+    load_dotenv(dotenv_path, override=False)
 else:
-    load_dotenv(override=True)
+    load_dotenv(override=False)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
+# LOG_FORMAT=json emits structured lines stamped with the per-request
+# request_id contextvar (set by request_id_middleware below).
+setup_logging("api")
 log = logging.getLogger("backend.api")
 
 ServiceStatus = Literal["ok", "stale", "error", "unknown"]
@@ -75,6 +79,9 @@ MAX_PROMPT_LENGTH = 5000
 METRICS_AUTH_TOKEN = os.environ.get("METRICS_AUTH_TOKEN", "").strip()
 LLM_BUDGET_KEY_PREFIX = os.environ.get("LLM_BUDGET_KEY_PREFIX", "sentient:llm:budget")
 WORKER_STALE_AFTER_SECONDS = int(os.environ.get("WORKER_STALE_AFTER_SECONDS", "180"))
+# Mirror the agent's queue key defaults so /metrics can expose queue depths.
+AGENT_DLQ_STREAM_KEY = os.environ.get("AGENT_DLQ_STREAM_KEY", f"{STREAM_KEY}:agent-dlq")
+AGENT_RETRY_ZSET_KEY = os.environ.get("AGENT_RETRY_ZSET_KEY", f"{STREAM_KEY}:agent-retry")
 
 TRADE_SUMMARY_SELECT = (
     "id, created_at, ticker, headline, article_url, sentiment_score, "
@@ -244,18 +251,62 @@ def rate_limit_digest(value: str) -> str:
     return hmac.new(rate_limit_salt(), value.encode(), "sha256").hexdigest()[:32]
 
 
+def _b64url_decode(segment: str) -> bytes:
+    segment += "=" * (-len(segment) % 4)
+    return base64.urlsafe_b64decode(segment.encode())
+
+
 def jwt_payload(token: str) -> dict[str, Any]:
     parts = token.split(".")
     if len(parts) < 2:
         return {}
-    payload = parts[1]
-    payload += "=" * (-len(payload) % 4)
     try:
-        decoded = base64.urlsafe_b64decode(payload.encode())
-        parsed = json.loads(decoded)
+        parsed = json.loads(_b64url_decode(parts[1]))
     except (TypeError, ValueError, json.JSONDecodeError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+# Supabase legacy JWT secret (HS256). Used ONLY to verify rate-limit bucket
+# identity cheaply, never for authorization — sensitive routes always
+# re-validate the token against Supabase Auth (get_user_from_token).
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "").strip()
+
+
+def jwt_payload_for_rate_limit(token: str) -> dict[str, Any]:
+    """Payload for rate-limit bucketing, signature-verified when possible.
+
+    Without verification, anyone could mint a JWT with another user's `sub`
+    and grief that user's global rate-limit bucket. When SUPABASE_JWT_SECRET
+    is configured we verify the HS256 signature and `exp` locally (no network
+    hop); a forged or expired token falls back to the caller's IP bucket.
+    If the secret is not configured (e.g. asymmetric-key Supabase projects),
+    we keep the unverified parse — the bucket is then only a coarse limiter,
+    which every protected route compensates for by re-validating the session.
+    """
+    if not SUPABASE_JWT_SECRET:
+        return jwt_payload(token)
+
+    parts = token.split(".")
+    if len(parts) != 3:
+        return {}
+    try:
+        header = json.loads(_b64url_decode(parts[0]))
+        signature = _b64url_decode(parts[2])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    if not isinstance(header, dict) or header.get("alg") != "HS256":
+        return {}
+    expected = hmac.new(
+        SUPABASE_JWT_SECRET.encode(), f"{parts[0]}.{parts[1]}".encode(), "sha256"
+    ).digest()
+    if not hmac.compare_digest(expected, signature):
+        return {}
+    payload = jwt_payload(token)
+    exp = payload.get("exp")
+    if isinstance(exp, (int, float)) and exp < time.time():
+        return {}
+    return payload
 
 
 def is_anonymous_jwt(payload: dict[str, Any]) -> bool:
@@ -274,7 +325,7 @@ def is_anonymous_jwt(payload: dict[str, Any]) -> bool:
 def rate_limit_key(request: Request) -> str:
     token = auth_token(request.headers.get("authorization"))
     if token:
-        payload = jwt_payload(token)
+        payload = jwt_payload_for_rate_limit(token)
         subject = str(payload.get("sub") or "").strip()
         if subject and not is_anonymous_jwt(payload):
             return f"user:{rate_limit_digest(subject)}"
@@ -325,7 +376,8 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSO
             "limit": detail,
             "retryAfterSeconds": retry_after,
             "rateLimit": window,
-            "requestId": request.headers.get("x-request-id"),
+            "requestId": getattr(request.state, "request_id", None)
+            or request.headers.get("x-request-id"),
         }
     }
     headers = {"Retry-After": str(retry_after)} if retry_after is not None else {}
@@ -355,6 +407,31 @@ if api_rate_limit_enabled:
     # Fail fast: rate-limit keys are HMAC'd with this salt. A missing salt used
     # to silently fall back to a public constant, making keys predictable.
     rate_limit_salt()
+if not SUPABASE_JWT_SECRET:
+    log.warning(
+        "SUPABASE_JWT_SECRET is not set — rate-limit buckets fall back to "
+        "unverified JWT claims (coarse limiter only; route auth is unaffected)."
+    )
+
+# Fail fast: /metrics exposes worker health and LLM budget internals. Either
+# set a scrape token or explicitly opt into public exposure — never silently.
+METRICS_PUBLIC = env_bool("METRICS_PUBLIC", False)
+if not METRICS_AUTH_TOKEN and not METRICS_PUBLIC:
+    raise RuntimeError(
+        "METRICS_AUTH_TOKEN must be set to a scrape token, or METRICS_PUBLIC=true "
+        "to explicitly expose /metrics without authentication."
+    )
+
+# When true, /orders and /portfolio (live broker account data) require the
+# super-user allowlist instead of any signed-in account. Default keeps the
+# public-demo behavior: any authenticated visitor can view the paper account.
+ACCOUNT_ENDPOINTS_SUPER_ONLY = env_bool("API_ACCOUNT_ENDPOINTS_SUPER_ONLY", False)
+
+# Per-endpoint limits for unauthenticated read endpoints (the global limits
+# still apply on top). Search gets its own, looser limit because the UI fires
+# a request per keystroke.
+PUBLIC_READ_RATE_LIMIT = os.environ.get("API_PUBLIC_READ_RATE_LIMIT", "60/minute")
+TICKER_SEARCH_RATE_LIMIT = os.environ.get("API_TICKER_SEARCH_RATE_LIMIT", "120/minute")
 limiter = Limiter(
     key_func=rate_limit_key,
     default_limits=env_limit_list("API_DEFAULT_RATE_LIMITS", "120/minute"),
@@ -407,6 +484,27 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """Assign/propagate a request ID for every call.
+
+    Honors an inbound X-Request-ID from the trusted proxy (truncated, sanitized)
+    or generates one. The ID is stored in a contextvar so every log line emitted
+    while handling the request carries it, echoed back in the X-Request-ID
+    response header, and included in rate-limit error payloads.
+    """
+    inbound = (request.headers.get("x-request-id") or "").strip()
+    rid = re.sub(r"[^a-zA-Z0-9_-]", "", inbound)[:64] or uuid.uuid4().hex[:16]
+    request.state.request_id = rid
+    token = request_id_var.set(rid)
+    try:
+        response = await call_next(request)
+    finally:
+        request_id_var.reset(token)
+    response.headers.setdefault("X-Request-ID", rid)
+    return response
+
+
 class UserInfo(BaseModel):
     id: str
     email: str | None = None
@@ -436,6 +534,22 @@ def get_redis():
     return _redis_client
 
 
+_http_async: httpx.AsyncClient | None = None
+
+
+def get_async_http() -> httpx.AsyncClient:
+    """Shared AsyncClient for outbound calls on hot request paths.
+
+    A single pooled client keeps connections warm to Alpaca/Supabase Auth and,
+    unlike the previous per-request sync httpx.Client, never ties up the
+    FastAPI threadpool while waiting on the network.
+    """
+    global _http_async
+    if _http_async is None:
+        _http_async = httpx.AsyncClient(timeout=15)
+    return _http_async
+
+
 def get_supabase():
     global _supabase_client
     if _supabase_client is None:
@@ -460,7 +574,7 @@ def auth_token(authorization: str | None) -> str | None:
     return token
 
 
-def get_user_from_token(token: str) -> UserInfo:
+async def get_user_from_token(token: str) -> UserInfo:
     supabase_url = os.environ["SUPABASE_URL"].rstrip("/")
     anon_key = get_supabase_anon_key()
     if not anon_key:
@@ -469,14 +583,14 @@ def get_user_from_token(token: str) -> UserInfo:
         )
 
     try:
-        with httpx.Client(timeout=5) as client:
-            response = client.get(
-                f"{supabase_url}/auth/v1/user",
-                headers={
-                    "apikey": anon_key,
-                    "Authorization": f"Bearer {token}",
-                },
-            )
+        response = await get_async_http().get(
+            f"{supabase_url}/auth/v1/user",
+            headers={
+                "apikey": anon_key,
+                "Authorization": f"Bearer {token}",
+            },
+            timeout=5,
+        )
     except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=503, detail="Could not validate Supabase session"
@@ -493,22 +607,22 @@ def get_user_from_token(token: str) -> UserInfo:
     )
 
 
-def get_optional_user(
+async def get_optional_user(
     authorization: str | None = Header(default=None),
 ) -> UserInfo | None:
     token = auth_token(authorization)
     if not token:
         return None
-    return get_user_from_token(token)
+    return await get_user_from_token(token)
 
 
-def require_user(authorization: str | None = Header(default=None)) -> UserInfo:
+async def require_user(authorization: str | None = Header(default=None)) -> UserInfo:
     token = auth_token(authorization)
     if not token:
         raise HTTPException(
             status_code=401, detail="Authentication required. Please sign in."
         )
-    return get_user_from_token(token)
+    return await get_user_from_token(token)
 
 
 def is_super_user(user: UserInfo) -> bool:
@@ -529,6 +643,21 @@ def require_super_user(user: UserInfo = Depends(require_user)) -> UserInfo:
         raise HTTPException(
             status_code=403,
             detail="Admin access required. Your account does not have permission to modify this.",
+        )
+    return user
+
+
+def require_account_viewer(user: UserInfo = Depends(require_user)) -> UserInfo:
+    """Gate for live broker-account endpoints (/orders, /portfolio).
+
+    Default: any signed-in account (public paper-trading demo). Set
+    API_ACCOUNT_ENDPOINTS_SUPER_ONLY=true to restrict the account's financial
+    figures to the super-user allowlist.
+    """
+    if ACCOUNT_ENDPOINTS_SUPER_ONLY and not is_super_user(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Account data is restricted on this deployment.",
         )
     return user
 
@@ -590,9 +719,10 @@ def alpaca_headers() -> dict[str, str]:
     }
 
 
-def alpaca_fetch(path: str) -> Any:
-    with httpx.Client(timeout=15) as client:
-        response = client.get(f"{ALPACA_BASE_URL}{path}", headers=alpaca_headers())
+async def alpaca_fetch(path: str) -> Any:
+    response = await get_async_http().get(
+        f"{ALPACA_BASE_URL}{path}", headers=alpaca_headers()
+    )
     if response.status_code >= 400:
         raise RuntimeError(
             f"Alpaca API returned HTTP {response.status_code} for {path}"
@@ -938,7 +1068,10 @@ def auth_me(user: UserInfo | None = Depends(get_optional_user)) -> dict[str, boo
 
 
 @app.get("/trades")
-def trades(before: str | None = None, after: str | None = None) -> dict[str, Any]:
+@limiter.limit(PUBLIC_READ_RATE_LIMIT)
+def trades(
+    request: Request, before: str | None = None, after: str | None = None
+) -> dict[str, Any]:
     if before and after:
         raise HTTPException(
             status_code=400, detail="Use either 'before' or 'after', not both."
@@ -973,7 +1106,8 @@ def trades(before: str | None = None, after: str | None = None) -> dict[str, Any
 
 
 @app.get("/trades/{trade_id}")
-def trade_detail(trade_id: str) -> dict[str, Any]:
+@limiter.limit(PUBLIC_READ_RATE_LIMIT)
+def trade_detail(request: Request, trade_id: str) -> dict[str, Any]:
     if not UUID_RE.match(trade_id):
         raise HTTPException(status_code=400, detail="Invalid trade id.")
 
@@ -1056,11 +1190,9 @@ def delete_trade(
             status_code=403, detail="Only simulated signals can be deleted."
         )
 
-    # Remove the decision trace first (no FK cascade assumed), then the trade.
-    try:
-        sb.table("trade_decision_traces").delete().eq("trade_id", trade_id).execute()
-    except Exception:
-        log.exception("Failed to delete decision trace for %s", trade_id)
+    # Single atomic statement: trade_decision_traces.trade_id has
+    # ON DELETE CASCADE, so the trace is removed in the same transaction —
+    # no partial-delete window, no orphaned trace rows.
     sb.table("trades").delete().eq("id", trade_id).execute()
 
     log.info("Super admin %s deleted simulated trade %s", user.email, trade_id)
@@ -1080,7 +1212,8 @@ DASHBOARD_STAT_KEYS = (
 
 
 @app.get("/stats")
-def stats() -> dict[str, Any]:
+@limiter.limit(PUBLIC_READ_RATE_LIMIT)
+def stats(request: Request) -> dict[str, Any]:
     # Aggregate in the database (single atomic snapshot) instead of fetching rows
     # and counting in Python. PostgREST caps row responses at db-max-rows and
     # returns an arbitrary unordered subset, which made the old fetch-and-count
@@ -1095,7 +1228,10 @@ def stats() -> dict[str, Any]:
 
 
 @app.get("/calibration")
-def calibration(min_signals: int = Query(default=1, ge=1, le=500)) -> dict[str, Any]:
+@limiter.limit(PUBLIC_READ_RATE_LIMIT)
+def calibration(
+    request: Request, min_signals: int = Query(default=1, ge=1, le=500)
+) -> dict[str, Any]:
     """
     Outcome-driven calibration: forward returns and hit rate bucketed by the
     committee's conviction. Public read-only aggregate (no account data), built
@@ -1374,15 +1510,15 @@ def update_agent_config(
 
 
 @app.get("/orders")
-def orders(
+async def orders(
     status: str = "all",
     limit: int = Query(default=100, ge=1, le=500),
-    _user: UserInfo = Depends(require_user),
+    _user: UserInfo = Depends(require_account_viewer),
 ) -> dict[str, Any]:
     try:
         safe_status = status if status in ALLOWED_ORDER_STATUSES else "all"
         query = f"status={safe_status}&limit={limit}&direction=desc&nested=true"
-        account, positions, order_rows = (
+        account, positions, order_rows = await asyncio.gather(
             alpaca_fetch("/v2/account"),
             alpaca_fetch("/v2/positions"),
             alpaca_fetch(f"/v2/orders?{query}"),
@@ -1466,8 +1602,8 @@ def cancel_orders(
 
 
 @app.get("/portfolio")
-def portfolio(
-    range: str = "D", _user: UserInfo = Depends(require_user)
+async def portfolio(
+    range: str = "D", _user: UserInfo = Depends(require_account_viewer)
 ) -> dict[str, Any]:
     try:
         range_key = range if range in RANGE_CONFIG else "D"
@@ -1476,9 +1612,10 @@ def portfolio(
         if config["intraday"]:
             # intraday_reporting only applies to intraday timeframes per Alpaca docs
             query += "&intraday_reporting=extended_hours"
-        data, account = alpaca_fetch(
-            f"/v2/account/portfolio/history?{query}"
-        ), alpaca_fetch("/v2/account")
+        data, account = await asyncio.gather(
+            alpaca_fetch(f"/v2/account/portfolio/history?{query}"),
+            alpaca_fetch("/v2/account"),
+        )
 
         timestamps = (
             data.get("timestamp") if isinstance(data.get("timestamp"), list) else []
@@ -1596,15 +1733,30 @@ def portfolio(
         }
 
 
+def _query_last_trade_created_at() -> Any:
+    return (
+        get_supabase()
+        .table("trades")
+        .select("created_at")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+        .data
+    )
+
+
+def _read_agent_worker_state(name: str) -> dict[str, Any] | None:
+    return read_worker_state(get_redis(), name)
+
+
 @app.get("/status")
-def status() -> dict[str, Any]:
+async def status() -> dict[str, Any]:
     details: dict[str, str] = {}
 
     try:
-        with httpx.Client(timeout=5) as client:
-            alpaca_res = client.get(
-                f"{ALPACA_BASE_URL}/v2/clock", headers=alpaca_headers()
-            )
+        alpaca_res = await get_async_http().get(
+            f"{ALPACA_BASE_URL}/v2/clock", headers=alpaca_headers(), timeout=5
+        )
         alpaca_status: ServiceStatus = "ok" if alpaca_res.status_code < 400 else "error"
         details["alpaca"] = (
             "Paper trading clock reachable."
@@ -1616,15 +1768,9 @@ def status() -> dict[str, Any]:
         details["alpaca"] = "Could not reach Alpaca paper API."
 
     try:
-        data = (
-            get_supabase()
-            .table("trades")
-            .select("created_at")
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
-            .data
-        )
+        # supabase-py is synchronous — run it in the threadpool so this
+        # async handler never blocks the event loop.
+        data = await run_in_threadpool(_query_last_trade_created_at)
         supabase_status: ServiceStatus = "ok"
         last_trade_at = data[0]["created_at"] if data else None
         details["supabase"] = "Trades table reachable."
@@ -1636,9 +1782,10 @@ def status() -> dict[str, Any]:
         )
 
     try:
-        redis = get_redis()
         agent_worker_name = worker_name("agent")
-        agent_state = read_worker_state(redis, agent_worker_name)
+        agent_state = await run_in_threadpool(
+            _read_agent_worker_state, agent_worker_name
+        )
         redis_status_value: ServiceStatus = "ok"
         details["redis"] = "Redis reachable."
         groq_status: ServiceStatus = (
@@ -1813,6 +1960,25 @@ def metrics(authorization: str | None = Header(default=None)) -> PlainTextRespon
                 metric = f"sentient_worker_{_prom_metric_name(key)}"
                 samples.append((metric, labels, float(value)))
 
+    # Queue depths: alert on DLQ growth or a stuck/backed-up news stream.
+    try:
+        redis = get_redis()
+        samples.append(
+            ("sentient_stream_depth", {"stream": STREAM_KEY}, float(redis.xlen(STREAM_KEY)))
+        )
+        samples.append(
+            (
+                "sentient_dlq_depth",
+                {"stream": AGENT_DLQ_STREAM_KEY},
+                float(redis.xlen(AGENT_DLQ_STREAM_KEY)),
+            )
+        )
+        samples.append(
+            ("sentient_retry_queue_depth", {}, float(redis.zcard(AGENT_RETRY_ZSET_KEY)))
+        )
+    except Exception:
+        log.debug("Metrics: could not read queue depths", exc_info=True)
+
     # LLM daily-call budget (kill-switch visibility).
     try:
         budget_limit = max(int(os.environ.get("LLM_DAILY_CALL_BUDGET", "0") or 0), 0)
@@ -1881,7 +2047,9 @@ def load_ticker_index() -> list[dict[str, str]]:
 
 
 @app.get("/tickers/search")
+@limiter.limit(TICKER_SEARCH_RATE_LIMIT)
 def ticker_search(
+    request: Request,
     q: str = Query(default="", max_length=64),
     limit: int = Query(default=20, ge=1, le=50),
 ) -> dict[str, Any]:

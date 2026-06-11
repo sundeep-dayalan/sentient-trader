@@ -168,7 +168,7 @@ def _manage_trailing_stop(
         )
 
 
-def _monitor_loop(trader) -> None:
+def _monitor_loop(trader, lock=None) -> None:
     """Main monitoring loop — runs forever in a daemon thread."""
     log.info(
         "Position monitor started (interval=%ds, trail=%.1f%%, activation=%.1f%%)",
@@ -179,6 +179,13 @@ def _monitor_loop(trader) -> None:
 
     while True:
         try:
+            # Singleton guard: only the replica holding the leader lock manages
+            # orders. Two replicas reaping/replacing the same stops would race.
+            if lock is not None and not lock.acquire_or_renew():
+                _trailing_stop_orders.clear()
+                _current_stop_prices.clear()
+                time.sleep(MONITOR_INTERVAL)
+                continue
             # Reap stale unfilled entry orders first — this must run even when
             # trailing stops are off, because a zombie entry has no position.
             if REAP_STALE_ENTRIES:
@@ -236,12 +243,16 @@ def _monitor_loop(trader) -> None:
         time.sleep(MONITOR_INTERVAL)
 
 
-def start_position_monitor(trader) -> Optional[threading.Thread]:
+def start_position_monitor(trader, lock=None) -> Optional[threading.Thread]:
     """
     Start the position monitor as a daemon thread.
 
     Returns the thread if trailing stops are enabled, otherwise None.
     The thread is set as a daemon so it dies with the main process.
+
+    ``lock`` is an optional shared.singleton_lock.RedisLeaderLock; when given,
+    only the replica holding it actually manages orders, making multi-replica
+    deployments safe.
     """
     if not config.TRAILING_STOPS_ENABLED and not REAP_STALE_ENTRIES:
         log.info("Trailing stops + stale-entry reaper disabled — position monitor not started")
@@ -249,7 +260,7 @@ def start_position_monitor(trader) -> Optional[threading.Thread]:
 
     thread = threading.Thread(
         target=_monitor_loop,
-        args=(trader,),
+        args=(trader, lock),
         name="position-monitor",
         daemon=True,
     )

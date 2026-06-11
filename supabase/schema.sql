@@ -64,9 +64,15 @@ CREATE INDEX IF NOT EXISTS idx_trades_decision_path
 CREATE INDEX IF NOT EXISTS idx_trades_executed_action
     ON trades (executed_action)
     WHERE executed_action IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_trades_client_order_id
-    ON trades (client_order_id)
-    WHERE client_order_id IS NOT NULL;
+-- UNIQUE: client_order_id is the idempotency key derived from the signal
+-- fingerprint (article + ticker + action). The Redis stream is at-least-once,
+-- so a crash between order submission and XACK re-runs the whole pipeline;
+-- Alpaca dedupes the order on this key and this index dedupes the audit row.
+-- NULLs (HOLD / blocked signals) are exempt — Postgres unique indexes treat
+-- NULLs as distinct. Existing environments: run
+-- supabase/maintenance/2026-06-10_unique_client_order_id.sql first.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_client_order_id
+    ON trades (client_order_id);
 
 CREATE TABLE IF NOT EXISTS trade_decision_traces (
     trade_id       UUID        PRIMARY KEY REFERENCES trades(id) ON DELETE CASCADE,

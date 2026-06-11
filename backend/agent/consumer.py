@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +41,7 @@ import config
 from health import AgentHealth
 from redis_client import create_redis_client
 from schemas import NewsMessage
+from shared.logging_setup import signal_id_var, signal_ticker_var
 
 log = logging.getLogger("agent.consumer")
 
@@ -65,8 +67,18 @@ class RedisStreamConsumer:
         self._last_state_phase: str | None = None
         self._last_state_detail: str | None = None
         self._pending_claim_cursor = "0-0"
+        self._stop = threading.Event()
         self._write_agent_state("starting", "initializing Redis stream consumer")
         self._ensure_consumer_group()
+
+    def request_stop(self) -> None:
+        """Ask the polling loop to exit after the in-flight entry resolves.
+
+        Called from a SIGTERM/SIGINT handler. The current entry finishes its
+        full process-and-ACK cycle, so a rolling deploy never abandons a
+        half-processed message to redelivery.
+        """
+        self._stop.set()
 
     def _write_agent_state(self, phase: str, detail: str | None = None) -> None:
         if detail is not None:
@@ -83,12 +95,13 @@ class RedisStreamConsumer:
         self, seconds: float, phase: str, detail: str | None = None
     ) -> None:
         deadline = time.time() + seconds
-        while True:
+        while not self._stop.is_set():
             remaining = deadline - time.time()
             if remaining <= 0:
                 return
             self._write_agent_state(phase, detail)
-            time.sleep(min(30, remaining))
+            # Event.wait instead of time.sleep so a shutdown request wakes us.
+            self._stop.wait(min(30, remaining))
 
     def _ensure_consumer_group(self) -> None:
         """
@@ -153,7 +166,7 @@ class RedisStreamConsumer:
 
         last_heartbeat = 0.0
 
-        while True:
+        while not self._stop.is_set():
             try:
                 now = time.time()
                 if now - last_heartbeat > 10:
@@ -171,7 +184,7 @@ class RedisStreamConsumer:
                 if not results:
                     self._process_pending_claims(on_message, on_expired)
                     self._process_due_retries(on_message, on_expired)
-                    time.sleep(config.POLL_INTERVAL)
+                    self._stop.wait(config.POLL_INTERVAL)
                     continue
 
                 # results format: [["stream-key", [["entry-id", {"f":"v", ...}], ...]]]
@@ -186,6 +199,8 @@ class RedisStreamConsumer:
                     )
                     if resolved:
                         self._ack(entry_id)
+                    if self._stop.is_set():
+                        break
 
             except KeyboardInterrupt:
                 log.info("Consumer shutting down...")
@@ -211,6 +226,9 @@ class RedisStreamConsumer:
                     "stream_backoff",
                     str(e)[:200],
                 )
+
+        log.info("Consumer stopped cleanly after draining the in-flight entry")
+        self._write_agent_state("stopped", "graceful shutdown complete")
 
     def _process_entry(
         self,
@@ -238,6 +256,28 @@ class RedisStreamConsumer:
         )
         fields = {str(key): str(value) for key, value in fields.items()}
 
+        # Correlation: every log line emitted while this entry is processed —
+        # debate, gates, order, Supabase write — carries the entry id + ticker.
+        signal_token = signal_id_var.set(entry_id)
+        ticker_token = signal_ticker_var.set(fields.get("ticker") or None)
+        try:
+            return self._process_entry_inner(
+                entry_id, fields, on_message, on_expired, source=source, attempts=attempts
+            )
+        finally:
+            signal_id_var.reset(signal_token)
+            signal_ticker_var.reset(ticker_token)
+
+    def _process_entry_inner(
+        self,
+        entry_id: str,
+        fields: dict[str, str],
+        on_message: Callable[[NewsMessage], None],
+        on_expired: Callable[[NewsMessage, dict[str, Any]], None],
+        *,
+        source: str,
+        attempts: int = 0,
+    ) -> bool:
         try:
             news = NewsMessage(**fields)
             log.info("Consumed [%s]: %s", news.ticker, news.headline[:70])

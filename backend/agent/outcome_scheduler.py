@@ -165,8 +165,14 @@ def start_outcome_labeler_scheduler(
     limit: Optional[int] = None,
     run_on_startup: Optional[bool] = None,
     stop_event: Optional[threading.Event] = None,
+    lock=None,
 ) -> Optional[OutcomeLabelerScheduler]:
-    """Start the outcome labeler in a daemon thread when enabled by env/config."""
+    """Start the outcome labeler in a daemon thread when enabled by env/config.
+
+    ``lock`` is an optional shared.singleton_lock.RedisLeaderLock; when given,
+    only the leader replica runs labeling cycles so multiple agent replicas
+    don't double-label or double-write scheduler runs.
+    """
 
     is_enabled = (
         env_bool("OUTCOME_LABELER_ENABLED", default=False)
@@ -205,6 +211,12 @@ def start_outcome_labeler_scheduler(
             return
 
         while not stop.is_set():
+            # Singleton guard: skip the cycle when another replica is leader.
+            if lock is not None and not lock.acquire_or_renew():
+                if stop.wait(interval):
+                    return
+                continue
+
             started = time.monotonic()
             run_id = None
             metadata = {

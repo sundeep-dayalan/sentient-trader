@@ -946,6 +946,51 @@ Update agent parameters via the **Settings** page in the dashboard. The worker r
 > A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
 
 <details>
+<summary><b>BUG-2026-06-10-02 — Stream redelivery could insert duplicate <code>trades</code> rows (non-unique <code>client_order_id</code>)</b></summary>
+
+<br/>
+
+**Identified:** 2026-06-10, during an end-to-end reliability review.
+
+**Impact:** The Redis stream is at-least-once: a crash after the Supabase insert but before `XACK` re-runs the entire pipeline for the same signal. The Alpaca **order** was already idempotent (deterministic `client_order_id`, deduped broker-side), but `idx_trades_client_order_id` was a non-unique index and `log_trade()` did a plain `insert` — so the redelivered run inserted a **second trades row** for the same signal: inflated `/stats`, double entries in the dashboard feed, and double rows feeding the calibration/outcome pipeline.
+
+**Resolution:**
+- `supabase/schema.sql` — `idx_trades_client_order_id` is now a **UNIQUE** index (NULLs, i.e. HOLD/blocked rows, are exempt since Postgres treats NULLs as distinct).
+- `supabase/maintenance/2026-06-10_unique_client_order_id.sql` — one-time migration for existing environments: deletes duplicate rows (keeping the oldest; traces cascade) and swaps the index. **Run in dev, then prod, before deploying the agent.**
+- `backend/agent/logger.py` — `log_trade()` checks for an existing row by `client_order_id` before inserting and skips cleanly on redelivery; the unique index is the race-proof backstop.
+
+</details>
+
+<details>
+<summary><b>BUG-2026-06-10-03 — Rate-limit buckets trusted an unverified JWT <code>sub</code> (bucket-griefing)</b></summary>
+
+<br/>
+
+**Identified:** 2026-06-10, during the same review.
+
+**Impact:** `rate_limit_key()` base64-decoded the bearer token's payload **without verifying the signature** to pick the SlowAPI bucket. Anyone could mint a fake JWT carrying another user's `sub` and burn that user's global request budget (denial-of-service on a per-user limit). Authorization was never affected — protected routes always re-validate the session against Supabase Auth — but bucket identity was spoofable.
+
+**Resolution:**
+- `backend/api/main.py` — new `jwt_payload_for_rate_limit()`: when `SUPABASE_JWT_SECRET` is configured, the HS256 signature and `exp` are verified locally (no network hop); forged/expired tokens fall back to the caller's **IP** bucket so they can only grief themselves. Without the secret, the old coarse behavior remains with a startup warning.
+- Covered by `backend/api/test_api_security.py` (forged signature, expired token, `alg=none`, distinct user buckets).
+
+</details>
+
+<details>
+<summary><b>BUG-2026-06-10-04 — <code>.env</code> discovery could silently override real environment variables (<code>override=True</code>)</b></summary>
+
+<br/>
+
+**Identified:** 2026-06-10, during the same review.
+
+**Impact:** All three service entrypoints loaded a discovered `.env` with `override=True`, meaning file values **beat** platform-injected environment variables. A stray `.env` accidentally baked into an image layer (or mounted into the container) would silently replace production credentials/config — the kind of failure that surfaces as "prod is using the wrong database" with no error anywhere. Also fixed in the same pass: `delete_trade` now relies on the existing `ON DELETE CASCADE` (single atomic statement) instead of two separate deletes that could leave an orphaned/partial state.
+
+**Resolution:**
+- `backend/api/main.py`, `backend/agent/main.py`, `backend/ingestion/main.py` — `override=False`: real env always wins; `.env` only fills in unset values (local dev unaffected).
+
+</details>
+
+<details>
 <summary><b>BUG-2026-06-10-01 — Stale-entry reaper (and trailing-stop finder) silently no-op'd on an enum-prefixed <code>side</code>/<code>type</code></b></summary>
 
 <br/>

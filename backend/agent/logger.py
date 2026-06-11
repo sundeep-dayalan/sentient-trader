@@ -271,6 +271,40 @@ class SupabaseLogger:
         if article_id:
             legacy_record["article_id"] = article_id
 
+        # ── Redelivery dedupe ────────────────────────────────────────────────
+        # client_order_id is deterministic per signal+action, so a crash after
+        # this insert but before XACK re-runs the whole pipeline with the same
+        # key. Alpaca dedupes the order broker-side; this check (plus the
+        # UNIQUE index on trades.client_order_id as the backstop) dedupes the
+        # audit row. HOLD/blocked rows have no client_order_id and are exempt.
+        client_order_id = slim_record.get("client_order_id")
+        if client_order_id:
+            try:
+                existing = (
+                    self._client.table("trades")
+                    .select("id")
+                    .eq("client_order_id", client_order_id)
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+            except Exception as dedupe_error:
+                existing = None
+                log.warning(
+                    "Could not check for duplicate trade row (continuing): %s",
+                    dedupe_error,
+                )
+            if existing:
+                log.info(
+                    "Duplicate signal redelivery for [%s] %s — trade row %s already "
+                    "logged (client_order_id=%s); skipping insert",
+                    trade_action,
+                    ticker,
+                    existing[0].get("id"),
+                    client_order_id,
+                )
+                return
+
         try:
             try:
                 self._client.table("trades").insert(

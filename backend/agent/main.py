@@ -20,20 +20,26 @@ Deploy:       build and run the Dockerfile
 """
 
 import logging
+import signal
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv, find_dotenv
 
-# Load environment variables first, before importing config
-# Try to find a root/parent .env file first for local development.
-# If not found (e.g. in production/Docker), it will safely fallback.
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+# Load environment variables first, before importing config.
+# override=False: real environment variables (set by the container platform)
+# always win over .env files, so a stray .env baked into an image can never
+# silently replace production credentials. Locally, .env still fills in
+# anything the shell doesn't set.
 dotenv_path = find_dotenv()
 if dotenv_path:
-    load_dotenv(dotenv_path, override=True)
+    load_dotenv(dotenv_path, override=False)
 else:
-    load_dotenv(override=True)
+    load_dotenv(override=False)
 
 import config
 from analyst import build_agent_graph
@@ -45,17 +51,15 @@ from outcome_scheduler import (
     start_outcome_labeler_scheduler,
 )
 from position_monitor import start_position_monitor
+from redis_client import create_redis_client
 from schemas import NewsMessage
+from shared.logging_setup import setup_logging
+from shared.singleton_lock import RedisLeaderLock
 from trader import AlpacaTrader
 
-# Set up logging first so any startup errors are visible in Fly logs
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-    stream=sys.stdout,
-)
-logging.getLogger("httpx").setLevel(logging.WARNING)
+# Set up logging first so any startup errors are visible in container logs.
+# LOG_FORMAT=json emits structured lines with signal_id correlation fields.
+setup_logging("agent")
 
 config.reload_from_supabase()
 
@@ -72,8 +76,15 @@ def main() -> None:
 
     # Compile the LangGraph state machine once — reused for every message
     graph = build_agent_graph(cache=cache, trader=trader, db=db)
-    start_outcome_labeler_scheduler(run_tracker=default_scheduler_run_tracker())
-    start_position_monitor(trader)
+
+    # Singleton side-loops hold Redis leader locks so running more than one
+    # agent replica never double-manages stops or double-runs the labeler.
+    lock_redis = create_redis_client()
+    scheduler = start_outcome_labeler_scheduler(
+        run_tracker=default_scheduler_run_tracker(),
+        lock=RedisLeaderLock(lock_redis, "outcome-labeler"),
+    )
+    start_position_monitor(trader, lock=RedisLeaderLock(lock_redis, "position-monitor"))
 
     def process_news(news: NewsMessage) -> None:
         """Run one news article through the full agent graph."""
@@ -163,10 +174,23 @@ def main() -> None:
         )
         cache.mark_seen(news.headline, ticker=news.ticker, article_id=news.article_id)
 
-    # Start consuming — blocks forever
+    # Start consuming — blocks until a shutdown signal arrives
     log.info("Agent ready. Waiting for market news from Redis...")
     consumer = RedisStreamConsumer()
+
+    def _handle_shutdown(signum, _frame) -> None:
+        # Finish the in-flight entry (process + ACK) before exiting so a
+        # rolling deploy never abandons a half-processed message.
+        log.info("Received %s — draining and shutting down", signal.Signals(signum).name)
+        consumer.request_stop()
+        if scheduler is not None:
+            scheduler.stop_event.set()
+
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+    signal.signal(signal.SIGINT, _handle_shutdown)
+
     consumer.start(on_message=process_news, on_expired=log_expired_news)
+    log.info("Agent service exited cleanly")
 
 
 if __name__ == "__main__":
