@@ -946,6 +946,23 @@ Update agent parameters via the **Settings** page in the dashboard. The worker r
 > A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
 
 <details>
+<summary><b>BUG-2026-06-11-01 — Per-route rate limiting 500'd every public read (<code>/trades</code>, <code>/stats</code>, …) — Signals page went blank in prod</b></summary>
+
+<br/>
+
+**Identified:** 2026-06-11, immediately after deploying the hardening pass — the Signals feed showed "No signals yet" while the status pill stayed green.
+
+**Impact:** The new per-endpoint `@limiter.limit(...)` decorators (BUG-free in intent, broken in wiring) made **every request** to `/trades`, `/trades/{id}`, `/stats`, `/calibration`, and `/tickers/search` raise `Exception: parameter 'response' must be an instance of starlette.responses.Response` → HTTP 500. slowapi with `headers_enabled=True` injects `X-RateLimit-*` headers after a decorated sync endpoint returns, and for endpoints that return plain dicts it requires a `response: Response` parameter in the signature to inject into — none of the five had one. The dashboard rendered an empty feed; `/status` (undecorated) still reported all-operational, masking the outage.
+
+**Root cause of the test gap:** the API security tests covered auth/JWT/metrics but never executed a Supabase-backed decorated route end-to-end, so header injection never ran in CI.
+
+**Resolution:**
+- `backend/api/main.py` — added `response: Response` to all five decorated endpoint signatures.
+- `backend/api/test_api_security.py` — regression tests now call `/tickers/search`, `/stats`, and `/trades` through the full decorator path (Supabase stubbed) and assert 200 + `X-RateLimit-*` headers present.
+
+</details>
+
+<details>
 <summary><b>BUG-2026-06-10-02 — Stream redelivery could insert duplicate <code>trades</code> rows (non-unique <code>client_order_id</code>)</b></summary>
 
 <br/>

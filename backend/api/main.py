@@ -26,7 +26,7 @@ from urllib.parse import quote, urlparse
 
 import httpx
 from dotenv import load_dotenv, find_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -1083,7 +1083,10 @@ def auth_me(user: UserInfo | None = Depends(get_optional_user)) -> dict[str, boo
 @app.get("/trades")
 @limiter.limit(PUBLIC_READ_RATE_LIMIT)
 def trades(
-    request: Request, before: str | None = None, after: str | None = None
+    request: Request,
+    response: Response,
+    before: str | None = None,
+    after: str | None = None,
 ) -> dict[str, Any]:
     if before and after:
         raise HTTPException(
@@ -1120,7 +1123,7 @@ def trades(
 
 @app.get("/trades/{trade_id}")
 @limiter.limit(PUBLIC_READ_RATE_LIMIT)
-def trade_detail(request: Request, trade_id: str) -> dict[str, Any]:
+def trade_detail(request: Request, response: Response, trade_id: str) -> dict[str, Any]:
     if not UUID_RE.match(trade_id):
         raise HTTPException(status_code=400, detail="Invalid trade id.")
 
@@ -1226,7 +1229,7 @@ DASHBOARD_STAT_KEYS = (
 
 @app.get("/stats")
 @limiter.limit(PUBLIC_READ_RATE_LIMIT)
-def stats(request: Request) -> dict[str, Any]:
+def stats(request: Request, response: Response) -> dict[str, Any]:
     # Aggregate in the database (single atomic snapshot) instead of fetching rows
     # and counting in Python. PostgREST caps row responses at db-max-rows and
     # returns an arbitrary unordered subset, which made the old fetch-and-count
@@ -1243,7 +1246,9 @@ def stats(request: Request) -> dict[str, Any]:
 @app.get("/calibration")
 @limiter.limit(PUBLIC_READ_RATE_LIMIT)
 def calibration(
-    request: Request, min_signals: int = Query(default=1, ge=1, le=500)
+    request: Request,
+    response: Response,
+    min_signals: int = Query(default=1, ge=1, le=500),
 ) -> dict[str, Any]:
     """
     Outcome-driven calibration: forward returns and hit rate bucketed by the
@@ -2061,6 +2066,7 @@ def load_ticker_index() -> list[dict[str, str]]:
 @limiter.limit(TICKER_SEARCH_RATE_LIMIT)
 def ticker_search(
     request: Request,
+    response: Response,
     q: str = Query(default="", max_length=64),
     limit: int = Query(default=20, ge=1, le=50),
 ) -> dict[str, Any]:

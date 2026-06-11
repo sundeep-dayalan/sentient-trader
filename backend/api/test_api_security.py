@@ -174,6 +174,60 @@ def test_metrics_accepts_valid_token(client):
     assert "sentient_metrics_scrape_ok" in response.text
 
 
+# ── Rate-limited public reads (regression: BUG-2026-06-11-01) ───────────────
+# slowapi with headers_enabled=True requires decorated endpoints to declare a
+# `response: Response` parameter. Missing it 500s EVERY request to the route,
+# so these tests execute the decorated paths end-to-end.
+
+
+def test_ticker_search_decorated_route_returns_200_with_rate_headers(client):
+    response = client.get("/tickers/search?q=NV")
+    assert response.status_code == 200
+    header_names = {name.lower() for name in response.headers}
+    assert "x-ratelimit-limit" in header_names
+    assert "x-ratelimit-remaining" in header_names
+
+
+def test_stats_decorated_route_returns_200(client, monkeypatch):
+    class _Result:
+        data = {"analyzed": 7, "executed": 2}
+
+    class _RPC:
+        def execute(self):
+            return _Result()
+
+    class _Stub:
+        def rpc(self, name, params=None):
+            return _RPC()
+
+    monkeypatch.setattr(main, "get_supabase", lambda: _Stub())
+    response = client.get("/stats")
+    assert response.status_code == 200
+    assert response.json()["stats"]["analyzed"] == 7
+
+
+def test_trades_decorated_route_returns_200(client, monkeypatch):
+    class _Result:
+        data = [{"id": "t1", "ticker": "NVDA"}]
+
+    class _Query:
+        def __getattr__(self, name):
+            # select/order/limit/lt/gt all chain back to the query object.
+            return lambda *args, **kwargs: self
+
+        def execute(self):
+            return _Result()
+
+    class _Stub:
+        def table(self, name):
+            return _Query()
+
+    monkeypatch.setattr(main, "get_supabase", lambda: _Stub())
+    response = client.get("/trades")
+    assert response.status_code == 200
+    assert response.json()["trades"][0]["ticker"] == "NVDA"
+
+
 # ── Request ID propagation ────────────────────────────────────────────────────
 
 
