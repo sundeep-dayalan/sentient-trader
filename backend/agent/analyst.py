@@ -1797,6 +1797,42 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
             log.debug("Price re-fetch failed for %s: %s", ticker, exc)
         return None
 
+    def _fetch_atr_pct(ticker: str) -> Optional[float]:
+        """Daily ATR as a fraction of price, for volatility-scaled stops.
+
+        Returns None on any failure so the caller falls back to the flat-percent
+        stop — a missing ATR must never block an otherwise-approved trade.
+        """
+        if _exec_data_client is None:
+            return None
+        try:
+            import position_manager
+            from alpaca.data.requests import StockBarsRequest
+            from alpaca.data.timeframe import TimeFrame
+
+            period = max(2, int(config.ATR_PERIOD))
+            # Over-fetch calendar days to clear weekends/holidays for `period`
+            # trading days, then keep the most recent (period + 1) bars.
+            lookback_days = period * 2 + 10
+            bars = _exec_data_client.get_stock_bars(
+                StockBarsRequest(
+                    symbol_or_symbols=ticker,
+                    timeframe=TimeFrame.Day,
+                    start=datetime.now(timezone.utc) - timedelta(days=lookback_days),
+                )
+            )
+            bar_list = bars.get(ticker) if bars else None
+            if not bar_list or len(bar_list) < 2:
+                return None
+            ohlc = [
+                (float(b.high), float(b.low), float(b.close))
+                for b in bar_list[-(period + 1):]
+            ]
+            return position_manager.compute_atr_pct(ohlc)
+        except Exception as exc:
+            log.debug("ATR fetch failed for %s: %s", ticker, exc)
+            return None
+
     def execute_trade(state: AgentState) -> dict:
         """Submit the order to Alpaca."""
         news = state["news"]
@@ -1963,8 +1999,32 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
                     entry_price = snapshot_price
                     price_source = "snapshot_fallback"
                 if entry_price and entry_price > 0:
-                    tp_price = round(float(entry_price) * (1 + config.TAKE_PROFIT_PCT), 2)
-                    sl_price = round(float(entry_price) * (1 - config.STOP_LOSS_PCT), 2)
+                    # Volatility-scaled (ATR) stops when enabled, else flat percent.
+                    # ATR sizes the stop to the stock's own daily range so a jumpy
+                    # name isn't knocked out by ordinary noise; falls back cleanly
+                    # to the flat percent if ATR can't be fetched.
+                    sl_method = "flat_pct"
+                    atr_pct = None
+                    atr_params = None
+                    if config.ATR_STOPS_ENABLED:
+                        import position_manager
+                        atr_pct = _fetch_atr_pct(news.ticker)
+                        atr_params = position_manager.compute_atr_bracket_prices(
+                            float(entry_price),
+                            "BUY",
+                            atr_pct,
+                            stop_mult=config.ATR_STOP_MULT,
+                            tp_mult=config.ATR_TP_MULT,
+                            stop_min_pct=config.ATR_STOP_MIN_PCT,
+                            stop_max_pct=config.ATR_STOP_MAX_PCT,
+                        )
+                    if atr_params is not None:
+                        tp_price = atr_params.take_profit_price
+                        sl_price = atr_params.stop_loss_price
+                        sl_method = atr_params.method
+                    else:
+                        tp_price = round(float(entry_price) * (1 + config.TAKE_PROFIT_PCT), 2)
+                        sl_price = round(float(entry_price) * (1 - config.STOP_LOSS_PCT), 2)
                     take_profit_price = tp_price
                     stop_loss_price = sl_price
                     # Re-anchor the entry limit to the SAME freshly-fetched live
@@ -1977,21 +2037,31 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
                         limit_price = round(
                             float(entry_price) * (1 + config.LIMIT_ORDER_BUFFER_PCT), 2
                         )
+                    # Record the percentages actually applied (ATR-derived when
+                    # the volatility stop fired, else the flat config values).
+                    if atr_params is not None:
+                        eff_tp_pct = atr_params.take_profit_pct
+                        eff_sl_pct = atr_params.stop_loss_pct
+                    else:
+                        eff_tp_pct = config.TAKE_PROFIT_PCT
+                        eff_sl_pct = config.STOP_LOSS_PCT
                     bracket_info = {
                         "entry_price": float(entry_price),
                         "snapshot_price": float(snapshot_price) if snapshot_price else None,
                         "price_source": price_source,
                         "take_profit_price": tp_price,
                         "stop_loss_price": sl_price,
-                        "take_profit_pct": config.TAKE_PROFIT_PCT,
-                        "stop_loss_pct": config.STOP_LOSS_PCT,
+                        "take_profit_pct": eff_tp_pct,
+                        "stop_loss_pct": eff_sl_pct,
+                        "stop_method": sl_method,
+                        "atr_pct": atr_pct,
                         "method": "atomic_bracket",
                     }
                     log.info(
-                        "Bracket prices for %s [%s]: entry=$%.2f TP=$%.2f (+%.1f%%) SL=$%.2f (-%.1f%%)",
-                        news.ticker, price_source, entry_price, tp_price,
-                        config.TAKE_PROFIT_PCT * 100, sl_price,
-                        config.STOP_LOSS_PCT * 100,
+                        "Bracket prices for %s [%s/%s]: entry=$%.2f TP=$%.2f (+%.1f%%) SL=$%.2f (-%.1f%%)%s",
+                        news.ticker, price_source, sl_method, entry_price, tp_price,
+                        eff_tp_pct * 100, sl_price, eff_sl_pct * 100,
+                        f" ATR={atr_pct*100:.1f}%" if atr_pct else "",
                     )
             except Exception as bracket_exc:
                 log.warning("Bracket price computation failed for %s: %s", news.ticker, bracket_exc)

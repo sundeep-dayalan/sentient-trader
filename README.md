@@ -946,6 +946,33 @@ Update agent parameters via the **Settings** page in the dashboard. The worker r
 > A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
 
 <details>
+<summary><b>BUG-2026-06-11-02 — Flat 3% stop-loss sat <em>inside</em> a volatile stock's daily noise, knocking out good trades</b></summary>
+
+<br/>
+
+**Identified:** 2026-06-11, reviewing the paper account's realized losers. Every flat-3% stop produced a loser whose stop was tighter than one normal day's range.
+
+**Impact:** The bracket stop was a one-size-fits-all `entry × (1 − 0.03)` regardless of the stock's volatility. Measured against each name's ATR (average true range):
+
+| Trade | Daily range (ATR) | Flat 3% stop = | Outcome |
+|-------|-------------------|----------------|---------|
+| AU (gold miner) | 5.3%/day | **0.57×** a normal day | stopped out in ~90 min |
+| GOOG | 2.8%/day | **1.08×** a normal day | stopped out, then recovered |
+| ESS / PLD (REITs) | 1.5–1.9%/day | 1.6–2.0× a normal day | survived → profitable |
+
+The losers were mathematically primed to be knocked out by ordinary intraday noise before any thesis could play out; the flat percent was simultaneously too tight for jumpy names and fine for calm ones.
+
+**Resolution:** Volatility-scaled (ATR) bracket stops, config-gated (`enhanced_trading.atr_stops`, default OFF; requires `bracket_orders`).
+- `backend/agent/position_manager.py` — pure-logic `compute_atr_pct()` (ATR as a fraction of price from daily OHLC bars) and `compute_atr_bracket_prices()` (stop = `clamp(ATR% × stop_mult)` within `[2.5%, 12%]`; take-profit set off the *clamped* stop so the intended reward:risk survives clamping).
+- `backend/agent/analyst.py` — `execute_trade` fetches daily ATR via the existing data client and uses the volatility stop when enabled; **falls back to the flat 3%/6%** if ATR can't be fetched, so a missing bar never blocks an approved trade. Logs the method (`atr` / `atr_clamped` / `flat_pct`) and effective ATR%.
+- `backend/agent/config.py` — `atr_stops`, `atr_period`, `atr_stop_mult`, `atr_tp_mult`, `atr_stop_min_pct`, `atr_stop_max_pct`.
+- `backend/agent/test_enhancements.py` — 7 tests covering ATR math, gap true-range, floor/ceiling clamps, R:R preservation, and clean fallback.
+
+Replaying the real entries, the AU stop widens 3%→10.6% ($83.20→$76.70) and GOOG 3%→5.5% ($354.77→$345.48); both losers clear their original noise stop-outs, while ESS/PLD are essentially unchanged (3.0% / 3.8%).
+
+</details>
+
+<details>
 <summary><b>BUG-2026-06-11-01 — Per-route rate limiting 500'd every public read (<code>/trades</code>, <code>/stats</code>, …) — Signals page went blank in prod</b></summary>
 
 <br/>

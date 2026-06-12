@@ -113,6 +113,19 @@ BRACKET_ORDERS_ENABLED: bool = False
 STOP_LOSS_PCT: float = 0.03  # 3% default
 TAKE_PROFIT_PCT: float = 0.06  # 6% default
 
+# Volatility-scaled (ATR) stops: size the bracket stop to each stock's own
+# typical daily range instead of a one-size-fits-all percent. A flat 3% stop is
+# inside a single day's noise for a high-ATR name (gets knocked out by random
+# wiggle) yet roomy for a calm one. When enabled (and ATR is available), the
+# stop = clamp(ATR% × ATR_STOP_MULT) and the target preserves the same
+# reward:risk; falls back to STOP_LOSS_PCT/TAKE_PROFIT_PCT if ATR can't be fetched.
+ATR_STOPS_ENABLED: bool = False
+ATR_PERIOD: int = 14            # trading days of daily bars used for the ATR
+ATR_STOP_MULT: float = 2.0      # stop distance = ATR% × this (≈ 2 days of range)
+ATR_TP_MULT: float = 4.0        # target distance = ATR% × this (keeps 2:1 R:R)
+ATR_STOP_MIN_PCT: float = 0.025  # floor: never tighter than 2.5%
+ATR_STOP_MAX_PCT: float = 0.12   # ceiling: never wider than 12%
+
 # Trailing stops: tighten stop-loss as position gains
 TRAILING_STOPS_ENABLED: bool = False
 TRAILING_STOP_PCT: float = 0.03
@@ -208,6 +221,8 @@ def reload_from_supabase() -> bool:
     # Enhanced trading features
     global DYNAMIC_POSITION_SIZING_ENABLED, MAX_POSITION_PCT
     global BRACKET_ORDERS_ENABLED, STOP_LOSS_PCT, TAKE_PROFIT_PCT
+    global ATR_STOPS_ENABLED, ATR_PERIOD, ATR_STOP_MULT, ATR_TP_MULT
+    global ATR_STOP_MIN_PCT, ATR_STOP_MAX_PCT
     global TRAILING_STOPS_ENABLED, TRAILING_STOP_PCT, TRAILING_STOP_ACTIVATION_PCT
     global CONCENTRATION_LIMITS_ENABLED, MAX_SINGLE_TICKER_PCT
     global CIRCUIT_BREAKER_ENABLED, MAX_DAILY_LOSS_PCT
@@ -261,6 +276,12 @@ def reload_from_supabase() -> bool:
     BRACKET_ORDERS_ENABLED = _safe_bool(enhanced.get("bracket_orders"), False)
     STOP_LOSS_PCT = _safe_float(enhanced.get("stop_loss_pct"), 0.03)
     TAKE_PROFIT_PCT = _safe_float(enhanced.get("take_profit_pct"), 0.06)
+    ATR_STOPS_ENABLED = _safe_bool(enhanced.get("atr_stops"), False)
+    ATR_PERIOD = _safe_int(enhanced.get("atr_period"), 14)
+    ATR_STOP_MULT = _safe_float(enhanced.get("atr_stop_mult"), 2.0)
+    ATR_TP_MULT = _safe_float(enhanced.get("atr_tp_mult"), 4.0)
+    ATR_STOP_MIN_PCT = _safe_float(enhanced.get("atr_stop_min_pct"), 0.025)
+    ATR_STOP_MAX_PCT = _safe_float(enhanced.get("atr_stop_max_pct"), 0.12)
     TRAILING_STOPS_ENABLED = _safe_bool(enhanced.get("trailing_stops"), False)
     TRAILING_STOP_PCT = _safe_float(enhanced.get("trailing_stop_pct"), 0.03)
     TRAILING_STOP_ACTIVATION_PCT = _safe_float(enhanced.get("trailing_stop_activation_pct"), 0.02)
@@ -301,6 +322,7 @@ def reload_from_supabase() -> bool:
         active_features = [name for name, enabled in [
             ("dynamic_sizing", DYNAMIC_POSITION_SIZING_ENABLED),
             ("bracket_orders", BRACKET_ORDERS_ENABLED),
+            ("atr_stops", ATR_STOPS_ENABLED),
             ("trailing_stops", TRAILING_STOPS_ENABLED),
             ("concentration", CONCENTRATION_LIMITS_ENABLED),
             ("circuit_breaker", CIRCUIT_BREAKER_ENABLED),

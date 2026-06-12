@@ -133,6 +133,86 @@ def compute_bracket_prices(
     )
 
 
+# ── Volatility-scaled (ATR) bracket prices ──────────────────────────────────
+
+
+@dataclass(frozen=True)
+class AtrBracketParams:
+    take_profit_price: float
+    stop_loss_price: float
+    take_profit_pct: float
+    stop_loss_pct: float
+    atr_pct: float
+    method: str  # "atr" or "atr_clamped"
+
+
+def compute_atr_pct(bars: list[tuple[float, float, float]]) -> Optional[float]:
+    """Average True Range as a fraction of the latest close.
+
+    ``bars`` is an oldest→newest list of ``(high, low, close)`` daily bars. The
+    True Range of each bar is ``max(high-low, |high-prev_close|, |low-prev_close|)``;
+    ATR is the simple mean of the True Ranges, expressed as a fraction of the
+    most recent close so it can scale a percentage stop. Returns ``None`` when
+    there is too little data or the price is non-positive.
+    """
+    if not bars or len(bars) < 2:
+        return None
+    true_ranges: list[float] = []
+    for i in range(1, len(bars)):
+        high, low, _close = bars[i]
+        prev_close = bars[i - 1][2]
+        true_ranges.append(
+            max(high - low, abs(high - prev_close), abs(low - prev_close))
+        )
+    if not true_ranges:
+        return None
+    atr = sum(true_ranges) / len(true_ranges)
+    last_close = bars[-1][2]
+    if last_close <= 0 or atr <= 0:
+        return None
+    return atr / last_close
+
+
+def compute_atr_bracket_prices(
+    entry_price: float,
+    action: str,
+    atr_pct: Optional[float],
+    *,
+    stop_mult: float = 2.0,
+    tp_mult: float = 4.0,
+    stop_min_pct: float = 0.025,
+    stop_max_pct: float = 0.12,
+) -> Optional[AtrBracketParams]:
+    """Bracket prices whose stop distance scales with the stock's own volatility.
+
+    The raw stop distance is ``stop_mult × atr_pct`` (e.g. "2 normal days of
+    range"), clamped to ``[stop_min_pct, stop_max_pct]`` so a hyper-quiet name
+    still gets a floor and a meme stock is capped. The take-profit is set off the
+    *clamped* stop so the intended reward:risk (``tp_mult / stop_mult``) is
+    preserved regardless of clamping. Returns ``None`` for non-BUY actions or
+    when ATR is unavailable, so the caller can fall back to a flat-percent stop.
+    """
+    if action != "BUY" or entry_price <= 0 or not atr_pct or atr_pct <= 0:
+        return None
+    if stop_mult <= 0:
+        return None
+
+    raw_stop_pct = atr_pct * stop_mult
+    stop_pct = max(stop_min_pct, min(stop_max_pct, raw_stop_pct))
+    method = "atr" if stop_pct == raw_stop_pct else "atr_clamped"
+    # Preserve reward:risk off the (possibly clamped) stop distance.
+    take_profit_pct = stop_pct * (tp_mult / stop_mult)
+
+    return AtrBracketParams(
+        take_profit_price=round(entry_price * (1 + take_profit_pct), 2),
+        stop_loss_price=round(entry_price * (1 - stop_pct), 2),
+        take_profit_pct=round(take_profit_pct, 4),
+        stop_loss_pct=round(stop_pct, 4),
+        atr_pct=round(atr_pct, 4),
+        method=method,
+    )
+
+
 # ── Trailing Stop Parameters ────────────────────────────────────────────────
 
 

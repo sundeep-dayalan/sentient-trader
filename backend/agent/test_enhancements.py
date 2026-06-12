@@ -101,6 +101,78 @@ class PositionManagerTests(unittest.TestCase):
         params = compute_bracket_prices(100.0, "HOLD")
         self.assertIsNone(params)
 
+    # ── ATR (volatility-scaled) stops ───────────────────────────────────────
+
+    def test_atr_pct_basic(self) -> None:
+        from position_manager import compute_atr_pct
+
+        # Flat $2-range bars on a $100 close → ATR ≈ 2%.
+        bars = [(101.0, 99.0, 100.0)] * 6
+        atr = compute_atr_pct(bars)
+        self.assertIsNotNone(atr)
+        self.assertAlmostEqual(atr, 0.02, places=4)
+
+    def test_atr_pct_uses_gap_true_range(self) -> None:
+        from position_manager import compute_atr_pct
+
+        # Second bar gaps far above the prior close: TR is driven by
+        # |high - prev_close|, not just the intraday high-low.
+        bars = [(100.0, 98.0, 99.0), (112.0, 109.0, 110.0)]
+        atr = compute_atr_pct(bars)
+        # TR = max(112-109, |112-99|, |109-99|) = 13 ; close 110 → ~11.8%
+        self.assertAlmostEqual(atr, 13.0 / 110.0, places=4)
+
+    def test_atr_pct_insufficient_data(self) -> None:
+        from position_manager import compute_atr_pct
+
+        self.assertIsNone(compute_atr_pct([]))
+        self.assertIsNone(compute_atr_pct([(101.0, 99.0, 100.0)]))
+
+    def test_atr_bracket_scales_with_volatility(self) -> None:
+        from position_manager import compute_atr_bracket_prices
+
+        # 5% ATR, 2x stop → 10% stop, 4x → 20% target (well inside clamps).
+        params = compute_atr_bracket_prices(
+            100.0, "BUY", 0.05, stop_mult=2.0, tp_mult=4.0,
+            stop_min_pct=0.025, stop_max_pct=0.12,
+        )
+        self.assertIsNotNone(params)
+        self.assertEqual(params.method, "atr")
+        self.assertAlmostEqual(params.stop_loss_pct, 0.10, places=4)
+        self.assertEqual(params.stop_loss_price, 90.0)
+        self.assertEqual(params.take_profit_price, 120.0)
+
+    def test_atr_bracket_clamps_high_vol_and_preserves_rr(self) -> None:
+        from position_manager import compute_atr_bracket_prices
+
+        # 8% ATR × 2 = 16% raw stop → clamped to 12% ceiling; target stays 2:1.
+        params = compute_atr_bracket_prices(
+            100.0, "BUY", 0.08, stop_mult=2.0, tp_mult=4.0,
+            stop_min_pct=0.025, stop_max_pct=0.12,
+        )
+        self.assertEqual(params.method, "atr_clamped")
+        self.assertAlmostEqual(params.stop_loss_pct, 0.12, places=4)
+        self.assertAlmostEqual(params.take_profit_pct, 0.24, places=4)  # 2:1 preserved
+
+    def test_atr_bracket_clamps_low_vol_floor(self) -> None:
+        from position_manager import compute_atr_bracket_prices
+
+        # 0.5% ATR × 2 = 1% raw stop → floored to 2.5%.
+        params = compute_atr_bracket_prices(
+            100.0, "BUY", 0.005, stop_mult=2.0, tp_mult=4.0,
+            stop_min_pct=0.025, stop_max_pct=0.12,
+        )
+        self.assertEqual(params.method, "atr_clamped")
+        self.assertAlmostEqual(params.stop_loss_pct, 0.025, places=4)
+
+    def test_atr_bracket_none_when_unavailable(self) -> None:
+        from position_manager import compute_atr_bracket_prices
+
+        self.assertIsNone(compute_atr_bracket_prices(100.0, "BUY", None))
+        self.assertIsNone(compute_atr_bracket_prices(100.0, "BUY", 0.0))
+        self.assertIsNone(compute_atr_bracket_prices(100.0, "HOLD", 0.05))
+        self.assertIsNone(compute_atr_bracket_prices(0.0, "BUY", 0.05))
+
     def test_trailing_stop_activates(self) -> None:
         from position_manager import compute_trailing_stop
 
