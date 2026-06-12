@@ -5,7 +5,7 @@ import AppErrorNotice from '@/components/AppErrorNotice';
 import CalibrationPanel from '@/components/CalibrationPanel';
 import AuthGate from '@/components/AuthGate';
 import CustomNewsForm from '@/components/CustomNewsForm';
-import LiveTicker from '@/components/LiveTicker';
+import LiveTicker, { type SignalFilter } from '@/components/LiveTicker';
 import OrdersPage from '@/components/OrdersPage';
 import PnLChart from '@/components/PnLChart';
 import PortfolioPage from '@/components/PortfolioPage';
@@ -868,6 +868,11 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<'rate_limited' | 'error' | null>(null);
   const [signalCounts, setSignalCounts] = useState<SignalCounts | null>(null);
+  // Feed action/sim filter + date range — applied server-side so the list
+  // reflects all matching rows in the DB, not just the cursor-loaded page.
+  const [feedFilter, setFeedFilter] = useState<SignalFilter>('ALL');
+  const feedFilterRef = useRef<SignalFilter>('ALL');
+  const feedRangeRef = useRef<{ from: string; to: string }>({ from: '', to: '' });
   const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
   const [authGateOpen, setAuthGateOpen] = useState(false);
   const [authGateReason, setAuthGateReason] = useState<'auth_required' | 'limit_reached'>(
@@ -914,6 +919,23 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   const pollingLatestRef = useRef(false);
   const hasMoreRef = useRef(hasMore);
   const loadingMoreRef = useRef(false);
+
+  useEffect(() => {
+    feedFilterRef.current = feedFilter;
+  }, [feedFilter]);
+
+  // Append the active server-side feed filters (action/sim + date range) to a
+  // /trades query. Shared by the initial reload, infinite-scroll, and polling so
+  // they stay in lockstep with the selected chip and range.
+  const appendFeedFilters = useCallback((params: URLSearchParams) => {
+    const filter = feedFilterRef.current;
+    if (filter === 'SIM') params.set('sim', 'true');
+    else if (filter !== 'ALL') params.set('action', filter);
+    const { from, to } = feedRangeRef.current;
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    return params;
+  }, []);
 
   useEffect(() => {
     hasMoreRef.current = hasMore;
@@ -1077,7 +1099,10 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
 
     try {
       const after = latestSeenRef.current;
-      const url = after ? `/trades?after=${encodeURIComponent(after)}` : '/trades';
+      const params = new URLSearchParams();
+      if (after) params.set('after', after);
+      appendFeedFilters(params);
+      const url = `/trades?${params.toString()}`;
       const { trades: fresh, hasMore: nextHasMore } = await apiFetch<{
         trades: Trade[];
         hasMore?: boolean;
@@ -1092,7 +1117,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     } finally {
       pollingLatestRef.current = false;
     }
-  }, [ingestFreshTrades]);
+  }, [ingestFreshTrades, appendFeedFilters]);
 
   // ── Poll FastAPI for slim trade rows ──────────────────────────
   useEffect(() => {
@@ -1206,8 +1231,10 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     setIsLoadingMore(true);
     setLoadMoreError(null);
     try {
+      const params = new URLSearchParams({ before: tailRef.current });
+      appendFeedFilters(params);
       const { trades: more, hasMore: next } = await apiFetch<{ trades: Trade[]; hasMore: boolean }>(
-        `/trades?before=${encodeURIComponent(tailRef.current)}`,
+        `/trades?${params.toString()}`,
       );
       if (more.length > 0) {
         const uniqueMore = more.filter((trade) => !knownTradeIdsRef.current.has(trade.id));
@@ -1228,7 +1255,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
       loadingMoreRef.current = false;
       setIsLoadingMore(false);
     }
-  }, []);
+  }, [appendFeedFilters]);
 
   const retryLoadMore = useCallback(() => {
     setLoadMoreError(null);
@@ -1257,12 +1284,57 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     void fetchSignalCounts('', '');
   }, [fetchSignalCounts]);
 
+  // Reset the feed to the first page for the current filter + range. Used when
+  // the chip or date range changes (the list is fetched server-side, so we throw
+  // away the old cursor and start fresh).
+  const reloadFeed = useCallback(async () => {
+    loadingMoreRef.current = false;
+    setIsLoadingMore(false);
+    setLoadMoreError(null);
+    pollingLatestRef.current = true; // hold the poller off during the swap
+    try {
+      const params = new URLSearchParams();
+      appendFeedFilters(params);
+      const qs = params.toString();
+      const { trades: fresh, hasMore: next } = await apiFetch<{
+        trades: Trade[];
+        hasMore: boolean;
+      }>(`/trades${qs ? `?${qs}` : ''}`);
+      knownTradeIdsRef.current = new Set(fresh.map((trade) => trade.id));
+      tailRef.current = fresh.length ? fresh[fresh.length - 1].created_at : null;
+      latestSeenRef.current = fresh.length ? fresh[0].created_at : null;
+      setTrades(fresh);
+      setHasMore(next);
+      hasMoreRef.current = next;
+      if (fresh[0]) setSelectedTrade(fresh[0]);
+    } catch (error) {
+      setLoadMoreError(error instanceof ApiError && error.status === 429 ? 'rate_limited' : 'error');
+    } finally {
+      pollingLatestRef.current = false;
+    }
+  }, [appendFeedFilters]);
+
+  // Refetch the list when the action/sim chip changes (skip the initial mount —
+  // the SSR feed already covers the default ALL filter).
+  const feedFilterMountRef = useRef(true);
+  useEffect(() => {
+    if (feedFilterMountRef.current) {
+      feedFilterMountRef.current = false;
+      return;
+    }
+    void reloadFeed();
+  }, [feedFilter, reloadFeed]);
+
   const handleSignalRangeChange = useCallback(
     (from: string, to: string) => {
       const toIso = (local: string) => (local ? new Date(local).toISOString() : '');
-      void fetchSignalCounts(toIso(from), toIso(to));
+      const fromIso = toIso(from);
+      const toIsoValue = toIso(to);
+      feedRangeRef.current = { from: fromIso, to: toIsoValue };
+      void fetchSignalCounts(fromIso, toIsoValue);
+      void reloadFeed();
     },
-    [fetchSignalCounts],
+    [fetchSignalCounts, reloadFeed],
   );
 
   return (
@@ -1626,6 +1698,8 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                   hasMore={hasMore}
                   totalCount={dashboardStats?.analyzed}
                   serverCounts={signalCounts}
+                  filter={feedFilter}
+                  onFilterChange={setFeedFilter}
                   onRangeChange={handleSignalRangeChange}
                   loadError={loadMoreError}
                   onRetry={retryLoadMore}

@@ -28,7 +28,7 @@ function decisionPathLabel(path?: string | null): string | null {
   return null;
 }
 
-type SignalFilter = 'ALL' | 'BUY' | 'SELL' | 'HOLD' | 'SIM';
+export type SignalFilter = 'ALL' | 'BUY' | 'SELL' | 'HOLD' | 'SIM';
 
 const FILTERS: Array<{ key: SignalFilter; label: string }> = [
   { key: 'ALL', label: 'All' },
@@ -37,17 +37,6 @@ const FILTERS: Array<{ key: SignalFilter; label: string }> = [
   { key: 'HOLD', label: 'Hold' },
   { key: 'SIM', label: 'Sim' },
 ];
-
-function localTimestamp(value: string): number {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? -1 : date.getTime();
-}
-
-function dateTimeValueToMs(value: string): number | null {
-  if (!value) return null;
-  const time = new Date(value).getTime();
-  return Number.isNaN(time) ? null : time;
-}
 
 function formatDateTimeLabel(value: string): string {
   if (!value) return '';
@@ -81,8 +70,12 @@ interface LiveTickerProps {
   /** Server-side filter-chip counts (all-time or date-range-scoped). When absent,
    *  the chips fall back to counting the cursor-loaded rows. */
   serverCounts?: SignalCounts | null;
+  /** Active action/sim filter (controlled by the parent so the LIST is fetched
+   *  server-side for that filter, not just filtered over the loaded rows). */
+  filter?: SignalFilter;
+  onFilterChange?: (filter: SignalFilter) => void;
   /** Fired (debounced) when the feed's date range changes, so the parent can
-   *  refetch the server-side counts for that range. Receives datetime-local values. */
+   *  refetch the server-side counts AND list for that range. Receives datetime-local values. */
   onRangeChange?: (from: string, to: string) => void;
   /** Set when a load-more request failed, so the feed can show a graceful
    *  message + Retry instead of silently stalling. */
@@ -103,6 +96,8 @@ export default function LiveTicker({
   previewLimit,
   totalCount,
   serverCounts,
+  filter = 'ALL',
+  onFilterChange,
   onRangeChange,
   loadError,
   onRetry,
@@ -110,7 +105,6 @@ export default function LiveTicker({
 }: LiveTickerProps) {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const isPreview = Boolean(previewLimit);
-  const [filter, setFilter] = useState<SignalFilter>('ALL');
   const [rangeStart, setRangeStart] = useState('');
   const [rangeEnd, setRangeEnd] = useState('');
   const [isRangeOpen, setIsRangeOpen] = useState(false);
@@ -145,27 +139,14 @@ export default function LiveTicker({
     );
   }, [serverCounts, trades]);
 
-  const filteredTrades = useMemo(() => {
-    if (isPreview) return trades;
-    const fromMs = dateTimeValueToMs(rangeStart);
-    const toMs = dateTimeValueToMs(rangeEnd);
-
-    return trades.filter((trade) => {
-      if (filter === 'SIM' && !trade.is_simulated) return false;
-      if (filter !== 'ALL' && filter !== 'SIM' && recommendationFor(trade) !== filter) return false;
-
-      const tradeTime = localTimestamp(trade.created_at);
-      if (fromMs !== null && tradeTime < fromMs) return false;
-      if (toMs !== null && tradeTime > toMs) return false;
-
-      return true;
-    });
-  }, [filter, isPreview, rangeEnd, rangeStart, trades]);
-
-  const visibleTrades = previewLimit ? filteredTrades.slice(0, previewLimit) : filteredTrades;
+  // The action/date filters are applied server-side (the parent refetches the
+  // feed when they change), so the rows we receive are already filtered. We just
+  // honor the preview slice here.
+  const visibleTrades = previewLimit ? trades.slice(0, previewLimit) : trades;
+  const hasActiveFilter = filter !== 'ALL' || hasRangeFilter;
 
   function clearFilters() {
-    setFilter('ALL');
+    onFilterChange?.('ALL');
     setRangeStart('');
     setRangeEnd('');
   }
@@ -183,9 +164,15 @@ export default function LiveTicker({
   }, [loadError]);
 
   // Notify the parent (debounced) when the date range changes so it can refetch
-  // the server-side counts for the new window. Skipped in preview mode.
+  // the server-side counts and list for the new window. Skip the initial mount
+  // (the parent already loaded the unscoped feed) and preview mode.
+  const rangeMountRef = useRef(true);
   useEffect(() => {
     if (isPreview || !onRangeChangeRef.current) return;
+    if (rangeMountRef.current) {
+      rangeMountRef.current = false;
+      return;
+    }
     const handle = window.setTimeout(() => {
       onRangeChangeRef.current?.(rangeStart, rangeEnd);
     }, 350);
@@ -259,7 +246,7 @@ export default function LiveTicker({
                   <button
                     key={item.key}
                     type="button"
-                    onClick={() => setFilter(item.key)}
+                    onClick={() => onFilterChange?.(item.key)}
                     className={[
                       'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition',
                       active
@@ -343,7 +330,26 @@ export default function LiveTicker({
 
       {/* Trade rows */}
       <div className="modern-scroll flex-1 overflow-y-auto p-3 pr-2">
-        {trades.length === 0 && (
+        {visibleTrades.length === 0 && !isLoadingMore && hasActiveFilter && (
+          <div className="flex h-full flex-col items-center justify-center gap-3 py-20 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-surface-2 text-muted">
+              <FilterIcon />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-primary">No matching signals</p>
+              <p className="mt-1 text-xs text-muted">Adjust the action or date-time range.</p>
+            </div>
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="rounded-lg border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-secondary transition hover:border-accent-border hover:text-accent"
+            >
+              Clear filters
+            </button>
+          </div>
+        )}
+
+        {visibleTrades.length === 0 && !isLoadingMore && !hasActiveFilter && (
           <div className="flex h-full flex-col items-center justify-center gap-3 py-20 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-surface-2 text-muted">
               <svg
@@ -364,25 +370,6 @@ export default function LiveTicker({
               <p className="text-sm font-semibold text-primary">No signals yet</p>
               <p className="mt-1 text-xs text-muted">Waiting for market events…</p>
             </div>
-          </div>
-        )}
-
-        {trades.length > 0 && visibleTrades.length === 0 && (
-          <div className="flex h-full flex-col items-center justify-center gap-3 py-20 text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-surface-2 text-muted">
-              <FilterIcon />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-primary">No matching signals</p>
-              <p className="mt-1 text-xs text-muted">Adjust the action or date-time range.</p>
-            </div>
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="rounded-lg border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-secondary transition hover:border-accent-border hover:text-accent"
-            >
-              Clear filters
-            </button>
           </div>
         )}
 

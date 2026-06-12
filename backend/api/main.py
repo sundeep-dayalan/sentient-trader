@@ -1080,6 +1080,16 @@ def auth_me(user: UserInfo | None = Depends(get_optional_user)) -> dict[str, boo
     return {"isSuperUser": is_super_user(user), "isAnonymous": user.is_anonymous}
 
 
+# Action precedence mirrors dashboard_stats: coalesce(pm_recommendation,
+# trade_action). Encoded as PostgREST OR groups so /trades and /trades/summary
+# filter identically to how the chips are counted.
+_ACTION_OR_FILTERS: dict[str, str] = {
+    "BUY": "pm_recommendation.eq.BUY,and(pm_recommendation.is.null,trade_action.eq.BUY)",
+    "SELL": "pm_recommendation.eq.SELL,and(pm_recommendation.is.null,trade_action.eq.SELL)",
+    "HOLD": "pm_recommendation.eq.HOLD,and(pm_recommendation.is.null,trade_action.eq.HOLD)",
+}
+
+
 @app.get("/trades")
 @limiter.limit(PUBLIC_READ_RATE_LIMIT)
 def trades(
@@ -1087,20 +1097,24 @@ def trades(
     response: Response,
     before: str | None = None,
     after: str | None = None,
+    action: str | None = None,
+    sim: bool | None = None,
+    from_: str | None = Query(default=None, alias="from"),
+    to: str | None = None,
 ) -> dict[str, Any]:
     if before and after:
         raise HTTPException(
             status_code=400, detail="Use either 'before' or 'after', not both."
         )
-    if before and not valid_iso_timestamp(before):
+    for label, value in (("before", before), ("after", after), ("from", from_), ("to", to)):
+        if value and not valid_iso_timestamp(value):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid '{label}' parameter. Must be a valid ISO 8601 timestamp.",
+            )
+    if action is not None and action not in _ACTION_OR_FILTERS:
         raise HTTPException(
-            status_code=400,
-            detail="Invalid 'before' parameter. Must be a valid ISO 8601 timestamp.",
-        )
-    if after and not valid_iso_timestamp(after):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid 'after' parameter. Must be a valid ISO 8601 timestamp.",
+            status_code=400, detail="Invalid 'action'. Must be BUY, SELL, or HOLD."
         )
 
     query = (
@@ -1114,6 +1128,15 @@ def trades(
         query = query.lt("created_at", before)
     if after:
         query = query.gt("created_at", after)
+    if from_:
+        query = query.gte("created_at", from_)
+    if to:
+        query = query.lte("created_at", to)
+    # SIM is a flag on top of any action; when set we filter purely on it.
+    if sim:
+        query = query.eq("is_simulated", True)
+    elif action is not None:
+        query = query.or_(_ACTION_OR_FILTERS[action])
 
     result = query.execute()
     rows = result.data or []
@@ -1152,12 +1175,9 @@ def trades_summary(
             q = q.lte("created_at", to)
         return int(apply(q).execute().count or 0)
 
-    buy_or = "pm_recommendation.eq.BUY,and(pm_recommendation.is.null,trade_action.eq.BUY)"
-    sell_or = "pm_recommendation.eq.SELL,and(pm_recommendation.is.null,trade_action.eq.SELL)"
-
     total = _count(lambda q: q)
-    buy = _count(lambda q: q.or_(buy_or))
-    sell = _count(lambda q: q.or_(sell_or))
+    buy = _count(lambda q: q.or_(_ACTION_OR_FILTERS["BUY"]))
+    sell = _count(lambda q: q.or_(_ACTION_OR_FILTERS["SELL"]))
     sim = _count(lambda q: q.eq("is_simulated", True))
 
     return {

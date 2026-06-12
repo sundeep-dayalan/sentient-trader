@@ -194,6 +194,59 @@ def test_trades_summary_counts(client, monkeypatch):
     assert body == {"all": 100, "buy": 12, "sell": 8, "hold": 80, "sim": 3}
 
 
+def test_trades_rejects_bad_filters(client):
+    assert client.get("/trades?action=MAYBE").status_code == 400
+    assert client.get("/trades?from=nonsense").status_code == 400
+    assert client.get("/trades?before=2026-01-01T00:00:00Z&after=2026-02-01T00:00:00Z").status_code == 400
+
+
+def test_trades_applies_action_filter(client, monkeypatch):
+    seen: dict[str, object] = {}
+
+    class _Q:
+        def select(self, *a, **k):
+            return self
+
+        def order(self, *a, **k):
+            return self
+
+        def limit(self, *a, **k):
+            return self
+
+        def lt(self, *a, **k):
+            return self
+
+        def gt(self, *a, **k):
+            return self
+
+        def gte(self, *a, **k):
+            return self
+
+        def lte(self, *a, **k):
+            return self
+
+        def or_(self, expr):
+            seen["or_"] = expr
+            return self
+
+        def eq(self, col, val):
+            seen[col] = val
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=[{"id": "1", "ticker": "AAA"}])
+
+    monkeypatch.setattr(main, "get_supabase", lambda: SimpleNamespace(table=lambda _n: _Q()))
+
+    client.get("/trades?action=BUY")
+    assert seen.get("or_") == main._ACTION_OR_FILTERS["BUY"]
+
+    seen.clear()
+    client.get("/trades?sim=true")
+    assert seen.get("is_simulated") is True
+    assert "or_" not in seen  # sim takes precedence over action
+
+
 # ── Metrics token ─────────────────────────────────────────────────────────────
 
 
