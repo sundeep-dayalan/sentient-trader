@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
 import { motion } from 'motion/react';
 import { useAuth } from '@/components/AuthProvider';
 import { ApiError, apiFetch } from '@/lib/api';
-import { DashboardStats, Trade } from '@/lib/types';
+import { DashboardStats, SignalCounts, Trade } from '@/lib/types';
 import { unescapeHtml } from '@/lib/news';
 import { AppErrorCopy, formatAlpacaError } from '@/lib/errors';
 
@@ -866,6 +866,8 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
   const [routeTradeError, setRouteTradeError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(initialTrades.length === PAGE_SIZE);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<'rate_limited' | 'error' | null>(null);
+  const [signalCounts, setSignalCounts] = useState<SignalCounts | null>(null);
   const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
   const [authGateOpen, setAuthGateOpen] = useState(false);
   const [authGateReason, setAuthGateReason] = useState<'auth_required' | 'limit_reached'>(
@@ -1202,6 +1204,7 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
     if (loadingMoreRef.current || !hasMoreRef.current || !tailRef.current) return;
     loadingMoreRef.current = true;
     setIsLoadingMore(true);
+    setLoadMoreError(null);
     try {
       const { trades: more, hasMore: next } = await apiFetch<{ trades: Trade[]; hasMore: boolean }>(
         `/trades?before=${encodeURIComponent(tailRef.current)}`,
@@ -1216,11 +1219,51 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
       }
       setHasMore(next);
       hasMoreRef.current = next;
+    } catch (error) {
+      // Surface a graceful state instead of silently stopping. The infinite-scroll
+      // observer is gated on this error (see LiveTicker), so we stop hammering the
+      // rate limit; the user retries explicitly. 429 gets a distinct message.
+      setLoadMoreError(error instanceof ApiError && error.status === 429 ? 'rate_limited' : 'error');
     } finally {
       loadingMoreRef.current = false;
       setIsLoadingMore(false);
     }
   }, []);
+
+  const retryLoadMore = useCallback(() => {
+    setLoadMoreError(null);
+    void loadMore();
+  }, [loadMore]);
+
+  // Server-side filter-chip counts: all-time on load, date-range-scoped when the
+  // feed's range picker changes — independent of the cursor-loaded rows.
+  const fetchSignalCounts = useCallback(async (from: string, to: string) => {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    const qs = params.toString();
+    try {
+      const { counts } = await apiFetch<{ counts: SignalCounts }>(
+        `/trades/summary${qs ? `?${qs}` : ''}`,
+      );
+      setSignalCounts(counts);
+    } catch {
+      // Non-fatal: the chips fall back to counting the loaded rows.
+      setSignalCounts(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchSignalCounts('', '');
+  }, [fetchSignalCounts]);
+
+  const handleSignalRangeChange = useCallback(
+    (from: string, to: string) => {
+      const toIso = (local: string) => (local ? new Date(local).toISOString() : '');
+      void fetchSignalCounts(toIso(from), toIso(to));
+    },
+    [fetchSignalCounts],
+  );
 
   return (
     <div className="min-h-screen bg-background text-primary lg:h-screen lg:overflow-hidden">
@@ -1582,6 +1625,10 @@ export default function DashboardClient({ initialTrades, initialStats }: Dashboa
                   isLoadingMore={isLoadingMore}
                   hasMore={hasMore}
                   totalCount={dashboardStats?.analyzed}
+                  serverCounts={signalCounts}
+                  onRangeChange={handleSignalRangeChange}
+                  loadError={loadMoreError}
+                  onRetry={retryLoadMore}
                   onDeleteTrade={isSuperUser ? handleDeleteTrade : undefined}
                 />
                 <div className="hidden min-w-0 flex-col gap-3 lg:flex">

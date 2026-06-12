@@ -148,6 +148,17 @@ export interface DashboardStats {
   avgSentiment: number;
 }
 
+// Server-side signal counts for the feed filter chips. All-time when no range is
+// applied, otherwise scoped to the selected date range. Independent of the
+// cursor-loaded rows in the UI. Served by GET /trades/summary.
+export interface SignalCounts {
+  all: number;
+  buy: number;
+  sell: number;
+  hold: number;
+  sim: number;
+}
+
 export interface PortfolioPoint {
   t: number; // epoch milliseconds — used for the time-scale X-axis
   timestamp: string; // ISO string — used for tooltips

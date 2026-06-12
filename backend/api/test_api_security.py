@@ -12,6 +12,7 @@ import hmac
 import json
 import os
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -150,6 +151,47 @@ def test_delete_trade_validates_uuid(client):
     finally:
         main.is_super_user = monkey_super
     assert response.status_code == 400
+
+
+def test_trades_summary_validates_timestamps(client):
+    # Bad range params are rejected with a 400 — and critically, this proves the
+    # request routes to /trades/summary rather than being captured by the
+    # /trades/{trade_id} path param (which would 400 with "Invalid trade id").
+    response = client.get("/trades/summary?from=not-a-timestamp")
+    assert response.status_code == 400
+    assert "from" in response.json()["detail"].lower()
+
+
+def test_trades_summary_counts(client, monkeypatch):
+    # Happy path: each filter variant resolves to an exact count. Stub the
+    # Supabase query builder so .execute() reports a per-call count.
+    counts = iter([100, 12, 8, 3])  # all, buy, sell, sim
+
+    class _Q:
+        def select(self, *a, **k):
+            return self
+
+        def limit(self, *a, **k):
+            return self
+
+        def gte(self, *a, **k):
+            return self
+
+        def lte(self, *a, **k):
+            return self
+
+        def or_(self, *a, **k):
+            return self
+
+        def eq(self, *a, **k):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(count=next(counts))
+
+    monkeypatch.setattr(main, "get_supabase", lambda: SimpleNamespace(table=lambda _n: _Q()))
+    body = client.get("/trades/summary").json()["counts"]
+    assert body == {"all": 100, "buy": 12, "sell": 8, "hold": 80, "sim": 3}
 
 
 # ── Metrics token ─────────────────────────────────────────────────────────────

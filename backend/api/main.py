@@ -1121,6 +1121,57 @@ def trades(
     return {"trades": rows[:PAGE_SIZE] if has_more else rows, "hasMore": has_more}
 
 
+@app.get("/trades/summary")
+@limiter.limit(PUBLIC_READ_RATE_LIMIT)
+def trades_summary(
+    request: Request,
+    response: Response,
+    from_: str | None = Query(default=None, alias="from"),
+    to: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """Server-side signal counts by recommendation, optionally scoped to a date
+    range. The dashboard's filter chips read these aggregates so the numbers
+    reflect *all* matching rows in the DB, not just the cursor-loaded page.
+
+    Counts are computed with exact-count queries (no rows transferred) and use
+    the same ``coalesce(pm_recommendation, trade_action)`` action precedence as
+    ``dashboard_stats``. ``hold`` is the remainder so the parts always sum to all.
+    """
+    for label, value in (("from", from_), ("to", to)):
+        if value and not valid_iso_timestamp(value):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid '{label}' parameter. Must be a valid ISO 8601 timestamp.",
+            )
+
+    def _count(apply) -> int:
+        q = get_supabase().table("trades").select("id", count="exact").limit(1)
+        if from_:
+            q = q.gte("created_at", from_)
+        if to:
+            q = q.lte("created_at", to)
+        return int(apply(q).execute().count or 0)
+
+    buy_or = "pm_recommendation.eq.BUY,and(pm_recommendation.is.null,trade_action.eq.BUY)"
+    sell_or = "pm_recommendation.eq.SELL,and(pm_recommendation.is.null,trade_action.eq.SELL)"
+
+    total = _count(lambda q: q)
+    buy = _count(lambda q: q.or_(buy_or))
+    sell = _count(lambda q: q.or_(sell_or))
+    sim = _count(lambda q: q.eq("is_simulated", True))
+
+    return {
+        "counts": {
+            "all": total,
+            "buy": buy,
+            "sell": sell,
+            "hold": max(total - buy - sell, 0),
+            "sim": sim,
+        },
+        "fetchedAt": now_iso(),
+    }
+
+
 @app.get("/trades/{trade_id}")
 @limiter.limit(PUBLIC_READ_RATE_LIMIT)
 def trade_detail(request: Request, response: Response, trade_id: str) -> dict[str, Any]:
@@ -1272,6 +1323,7 @@ def calibration(
 # Enhanced trading field validation — matches defaults in agent/config.py
 _ENHANCED_BOOL_KEYS = {
     "bracket_orders",
+    "atr_stops",
     "trailing_stops",
     "concentration_limits",
     "circuit_breaker",
@@ -1289,6 +1341,10 @@ _ENHANCED_BOOL_KEYS = {
 _ENHANCED_FLOAT_RANGES: dict[str, tuple[float, float]] = {
     "stop_loss_pct": (0.001, 0.50),
     "take_profit_pct": (0.001, 1.0),
+    "atr_stop_mult": (0.5, 10.0),
+    "atr_tp_mult": (0.5, 20.0),
+    "atr_stop_min_pct": (0.001, 0.50),
+    "atr_stop_max_pct": (0.001, 0.50),
     "trailing_stop_pct": (0.001, 0.50),
     "trailing_stop_activation_pct": (0.0, 0.50),
     "max_single_ticker_pct": (0.01, 1.0),
@@ -1300,6 +1356,7 @@ _ENHANCED_FLOAT_RANGES: dict[str, tuple[float, float]] = {
 
 _ENHANCED_INT_RANGES: dict[str, tuple[int, int]] = {
     "feedback_loop_lookback_days": (1, 365),
+    "atr_period": (2, 100),
 }
 
 

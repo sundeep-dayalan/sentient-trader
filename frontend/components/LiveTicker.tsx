@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { safeArticleUrl, unescapeHtml } from '@/lib/news';
-import { Trade } from '@/lib/types';
+import { SignalCounts, Trade } from '@/lib/types';
 
 const ACTION_STYLE: Record<string, string> = {
   BUY: 'bg-positive-soft text-positive border-positive-border',
@@ -78,6 +78,16 @@ interface LiveTickerProps {
   hasMore: boolean;
   previewLimit?: number;
   totalCount?: number;
+  /** Server-side filter-chip counts (all-time or date-range-scoped). When absent,
+   *  the chips fall back to counting the cursor-loaded rows. */
+  serverCounts?: SignalCounts | null;
+  /** Fired (debounced) when the feed's date range changes, so the parent can
+   *  refetch the server-side counts for that range. Receives datetime-local values. */
+  onRangeChange?: (from: string, to: string) => void;
+  /** Set when a load-more request failed, so the feed can show a graceful
+   *  message + Retry instead of silently stalling. */
+  loadError?: 'rate_limited' | 'error' | null;
+  onRetry?: () => void;
   /** Super-admin only: when provided, simulated rows show a delete control. */
   onDeleteTrade?: (trade: Trade) => Promise<void>;
 }
@@ -92,6 +102,10 @@ export default function LiveTicker({
   hasMore,
   previewLimit,
   totalCount,
+  serverCounts,
+  onRangeChange,
+  loadError,
+  onRetry,
   onDeleteTrade,
 }: LiveTickerProps) {
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -102,22 +116,34 @@ export default function LiveTicker({
   const [isRangeOpen, setIsRangeOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const onLoadMoreRef = useRef(onLoadMore);
+  const onRangeChangeRef = useRef(onRangeChange);
+  const loadErrorRef = useRef(loadError);
   const rangePickerRef = useRef<HTMLDivElement>(null);
   const hasRangeFilter = rangeStart !== '' || rangeEnd !== '';
 
-  const filterCounts = useMemo(
-    () =>
-      trades.reduce<Record<SignalFilter, number>>(
-        (counts, trade) => {
-          counts.ALL += 1;
-          counts[recommendationFor(trade)] += 1;
-          if (trade.is_simulated) counts.SIM += 1;
-          return counts;
-        },
-        { ALL: 0, BUY: 0, SELL: 0, HOLD: 0, SIM: 0 },
-      ),
-    [trades],
-  );
+  // Server-side counts (all-time or range-scoped) drive the chips so they reflect
+  // every matching row in the DB, not just the cursor-loaded page. Fall back to
+  // counting loaded rows when the server count isn't available (e.g. preview).
+  const filterCounts = useMemo<Record<SignalFilter, number>>(() => {
+    if (serverCounts) {
+      return {
+        ALL: serverCounts.all,
+        BUY: serverCounts.buy,
+        SELL: serverCounts.sell,
+        HOLD: serverCounts.hold,
+        SIM: serverCounts.sim,
+      };
+    }
+    return trades.reduce<Record<SignalFilter, number>>(
+      (counts, trade) => {
+        counts.ALL += 1;
+        counts[recommendationFor(trade)] += 1;
+        if (trade.is_simulated) counts.SIM += 1;
+        return counts;
+      },
+      { ALL: 0, BUY: 0, SELL: 0, HOLD: 0, SIM: 0 },
+    );
+  }, [serverCounts, trades]);
 
   const filteredTrades = useMemo(() => {
     if (isPreview) return trades;
@@ -149,6 +175,24 @@ export default function LiveTicker({
   }, [onLoadMore]);
 
   useEffect(() => {
+    onRangeChangeRef.current = onRangeChange;
+  }, [onRangeChange]);
+
+  useEffect(() => {
+    loadErrorRef.current = loadError;
+  }, [loadError]);
+
+  // Notify the parent (debounced) when the date range changes so it can refetch
+  // the server-side counts for the new window. Skipped in preview mode.
+  useEffect(() => {
+    if (isPreview || !onRangeChangeRef.current) return;
+    const handle = window.setTimeout(() => {
+      onRangeChangeRef.current?.(rangeStart, rangeEnd);
+    }, 350);
+    return () => window.clearTimeout(handle);
+  }, [isPreview, rangeStart, rangeEnd]);
+
+  useEffect(() => {
     if (!isRangeOpen) return;
 
     function closeOnOutsideClick(event: MouseEvent) {
@@ -175,7 +219,10 @@ export default function LiveTicker({
     if (!sentinel) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting) onLoadMoreRef.current();
+        // Don't auto-load while a previous load-more is in an error state —
+        // otherwise the sentinel keeps re-firing and hammering the rate limit.
+        // The user resumes via the Retry button.
+        if (entry.isIntersecting && !loadErrorRef.current) onLoadMoreRef.current();
       },
       { rootMargin: '0px 0px 120px 0px', threshold: 0 },
     );
@@ -200,9 +247,7 @@ export default function LiveTicker({
           <span className="rounded-full bg-[var(--dashboard-control)] px-3 py-1 text-[11px] font-semibold text-[var(--dashboard-subtle)]">
             {isPreview
               ? `${visibleTrades.length} latest`
-              : totalCount !== undefined
-                ? `${visibleTrades.length}/${totalCount} events`
-                : `${visibleTrades.length}/${trades.length} events`}
+              : `${visibleTrades.length}/${serverCounts?.all ?? totalCount ?? trades.length} events`}
           </span>
         </div>
         {!isPreview && (
@@ -474,7 +519,23 @@ export default function LiveTicker({
                 Loading more signals…
               </div>
             )}
-            {!isLoadingMore && !hasMore && trades.length > 0 && (
+            {!isLoadingMore && loadError && (
+              <div className="flex flex-col items-center gap-2 text-center">
+                <span className="text-[11px] text-muted">
+                  {loadError === 'rate_limited'
+                    ? 'Too many requests — paused to respect the rate limit.'
+                    : 'Couldn’t load more signals.'}
+                </span>
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  className="rounded-lg border border-accent-border bg-accent-soft px-3 py-1.5 text-[11px] font-semibold text-accent transition hover:brightness-110"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            {!isLoadingMore && !loadError && !hasMore && trades.length > 0 && (
               <span className="text-[11px] text-muted opacity-50">
                 You've reached the beginning
               </span>

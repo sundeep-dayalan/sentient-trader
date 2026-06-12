@@ -41,6 +41,12 @@ interface EnhancedTradingConfig {
   bracket_orders: boolean;
   stop_loss_pct: number;
   take_profit_pct: number;
+  atr_stops: boolean;
+  atr_period: number;
+  atr_stop_mult: number;
+  atr_tp_mult: number;
+  atr_stop_min_pct: number;
+  atr_stop_max_pct: number;
   trailing_stops: boolean;
   trailing_stop_pct: number;
   trailing_stop_activation_pct: number;
@@ -1016,6 +1022,12 @@ const ENHANCED_DEFAULTS: EnhancedTradingConfig = {
   bracket_orders: false,
   stop_loss_pct: 0.03,
   take_profit_pct: 0.06,
+  atr_stops: false,
+  atr_period: 14,
+  atr_stop_mult: 2.0,
+  atr_tp_mult: 4.0,
+  atr_stop_min_pct: 0.025,
+  atr_stop_max_pct: 0.12,
   trailing_stops: false,
   trailing_stop_pct: 0.03,
   trailing_stop_activation_pct: 0.02,
@@ -1126,6 +1138,18 @@ function EnhancedTradingTab({
             </FeatureEditCard>
 
             <FeatureEditCard
+              label="Volatility (ATR) Stops"
+              description="Size the bracket stop to each stock's own daily range instead of a flat percent — wider for jumpy names, tighter for calm ones (requires Bracket Orders; falls back to the flat stop if ATR is unavailable)"
+              enabled={draft.atr_stops}
+              onToggle={(v) => setDraft((d) => ({ ...d, atr_stops: v }))}
+            >
+              <NumberField label="Stop multiplier" hint="Stop distance = ATR × this (≈ days of normal range)" value={draft.atr_stop_mult} min={0.5} max={10} step={0.5} onChange={(v) => setDraft((d) => ({ ...d, atr_stop_mult: v }))} />
+              <NumberField label="Target multiplier" hint="Take-profit distance = ATR × this" value={draft.atr_tp_mult} min={0.5} max={20} step={0.5} onChange={(v) => setDraft((d) => ({ ...d, atr_tp_mult: v }))} />
+              <NumberField label="Min stop" hint="Floor — never tighter than this" value={draft.atr_stop_min_pct} min={0.005} max={0.2} step={0.005} onChange={(v) => setDraft((d) => ({ ...d, atr_stop_min_pct: v }))} />
+              <NumberField label="Max stop" hint="Ceiling — never wider than this" value={draft.atr_stop_max_pct} min={0.02} max={0.5} step={0.01} onChange={(v) => setDraft((d) => ({ ...d, atr_stop_max_pct: v }))} />
+            </FeatureEditCard>
+
+            <FeatureEditCard
               label="Trailing Stops"
               description="Tighten stop-loss as the position gains, locking in profits"
               enabled={draft.trailing_stops}
@@ -1156,6 +1180,7 @@ function EnhancedTradingTab({
         ) : (
           <div className="space-y-2">
             <FeatureReadCard label="Bracket Orders" enabled={current.bracket_orders} params={[['Stop-loss', pct(current.stop_loss_pct)], ['Take-profit', pct(current.take_profit_pct)]]} />
+            <FeatureReadCard label="Volatility (ATR) Stops" enabled={current.atr_stops} params={[['Stop', `${current.atr_stop_mult}× ATR`], ['Target', `${current.atr_tp_mult}× ATR`], ['Clamp', `${pct(current.atr_stop_min_pct)}–${pct(current.atr_stop_max_pct)}`]]} />
             <FeatureReadCard label="Trailing Stops" enabled={current.trailing_stops} params={[['Trail distance', pct(current.trailing_stop_pct)], ['Activation', pct(current.trailing_stop_activation_pct)]]} />
             <FeatureReadCard label="Concentration Limits" enabled={current.concentration_limits} params={[['Max per ticker', pct(current.max_single_ticker_pct)]]} />
             <FeatureReadCard label="Circuit Breaker" enabled={current.circuit_breaker} params={[['Max daily loss', pct(current.max_daily_loss_pct)]]} />
