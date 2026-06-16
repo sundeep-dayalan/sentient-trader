@@ -188,10 +188,12 @@ class AlpacaTrader:
 
         When limit_price is provided, submits a limit IOC order instead of market DAY.
 
-        When take_profit_price and/or stop_loss_price are provided AND action is BUY,
-        submits a native Alpaca bracket order (order_class=BRACKET) that atomically
-        attaches take-profit and stop-loss legs to the primary order. This avoids
-        the "potential wash trade" error that occurs when submitting separate orders.
+        When take_profit_price and stop_loss_price are provided, submits a native
+        Alpaca bracket order (order_class=BRACKET) that atomically attaches
+        take-profit and stop-loss legs to the primary order. This avoids the
+        "potential wash trade" error that occurs when submitting separate orders.
+        A BUY brackets long (target above, stop below); a SELL whose legs are
+        mirrored (target below < stop above) opens a *protected short*.
         """
         qty = quantity if quantity is not None else config.ORDER_QTY
         side = OrderSide.BUY if action == "BUY" else OrderSide.SELL
@@ -214,14 +216,21 @@ class AlpacaTrader:
                 status="accepted",
             )
 
-        # Determine if this should be a bracket order
-        use_bracket = (
-            action == "BUY"
-            and take_profit_price is not None
+        # Determine if this should be a bracket order. A BUY brackets with the
+        # target above and stop below entry; a SELL that *opens a short* brackets
+        # mirrored — target below, stop above — which we detect by the legs'
+        # geometry (take_profit < stop_loss). A reduce-long SELL passes no legs
+        # and never brackets.
+        have_legs = (
+            take_profit_price is not None
             and stop_loss_price is not None
             and take_profit_price > 0
             and stop_loss_price > 0
         )
+        is_short_bracket = (
+            action == "SELL" and have_legs and take_profit_price < stop_loss_price
+        )
+        use_bracket = (action == "BUY" and have_legs) or is_short_bracket
 
         # ── Bracket sanity guard ──────────────────────────────────────────────
         # Alpaca rejects brackets where TP/SL violate the live `base_price`:
@@ -236,15 +245,24 @@ class AlpacaTrader:
         if use_bracket:
             live_price = self._latest_trade_price(ticker)
             if live_price and live_price > 0:
-                tp_min = round(live_price + 0.01, 2)
-                sl_max = round(live_price - 0.01, 2)
-                tp_adjusted = max(round(take_profit_price, 2), tp_min)
-                sl_adjusted = min(round(stop_loss_price, 2), sl_max)
+                if is_short_bracket:
+                    # Short legs mirror the long guard: take-profit must sit at or
+                    # below base_price-0.01 (buy back lower), stop at or above
+                    # base_price+0.01 (buy back higher). Feasible requires sl > tp.
+                    tp_adjusted = min(round(take_profit_price, 2), round(live_price - 0.01, 2))
+                    sl_adjusted = max(round(stop_loss_price, 2), round(live_price + 0.01, 2))
+                    infeasible_order = sl_adjusted <= tp_adjusted
+                else:
+                    tp_min = round(live_price + 0.01, 2)
+                    sl_max = round(live_price - 0.01, 2)
+                    tp_adjusted = max(round(take_profit_price, 2), tp_min)
+                    sl_adjusted = min(round(stop_loss_price, 2), sl_max)
+                    infeasible_order = tp_adjusted <= sl_adjusted
                 tp_drift = abs(tp_adjusted - take_profit_price) / max(take_profit_price, 0.01)
                 sl_drift = abs(sl_adjusted - stop_loss_price) / max(stop_loss_price, 0.01)
                 # Cap the auto-adjust at 2% — beyond that the price has run
                 # too far for the original thesis; abandon the bracket.
-                if tp_drift > 0.02 or sl_drift > 0.02 or tp_adjusted <= sl_adjusted:
+                if tp_drift > 0.02 or sl_drift > 0.02 or infeasible_order:
                     log.warning(
                         "Bracket aborted for %s: live=$%.2f drifted past TP=$%.2f / SL=$%.2f "
                         "(tp_drift=%.2f%% sl_drift=%.2f%%). Falling back to simple order.",

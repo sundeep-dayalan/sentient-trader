@@ -119,18 +119,29 @@ def compute_bracket_prices(
     """
     Compute take-profit and stop-loss prices for a bracket order.
 
-    For BUY: stop below entry, target above.
-    SELL (short) brackets are not supported — returns None.
+    For BUY (long):  stop *below* entry, target *above* — you profit as price rises.
+    For SELL (short): stop *above* entry, target *below* — you profit as price falls,
+                      and the protective stop buys back if it rises against you.
+    Returns None for unknown actions or a non-positive price.
     """
-    if action != "BUY" or entry_price <= 0:
+    if entry_price <= 0:
         return None
 
-    return BracketParams(
-        take_profit_price=round(entry_price * (1 + take_profit_pct), 2),
-        stop_loss_price=round(entry_price * (1 - stop_loss_pct), 2),
-        take_profit_pct=take_profit_pct,
-        stop_loss_pct=stop_loss_pct,
-    )
+    if action == "BUY":
+        return BracketParams(
+            take_profit_price=round(entry_price * (1 + take_profit_pct), 2),
+            stop_loss_price=round(entry_price * (1 - stop_loss_pct), 2),
+            take_profit_pct=take_profit_pct,
+            stop_loss_pct=stop_loss_pct,
+        )
+    if action == "SELL":
+        return BracketParams(
+            take_profit_price=round(entry_price * (1 - take_profit_pct), 2),
+            stop_loss_price=round(entry_price * (1 + stop_loss_pct), 2),
+            take_profit_pct=take_profit_pct,
+            stop_loss_pct=stop_loss_pct,
+        )
+    return None
 
 
 # ── Volatility-scaled (ATR) bracket prices ──────────────────────────────────
@@ -189,10 +200,15 @@ def compute_atr_bracket_prices(
     range"), clamped to ``[stop_min_pct, stop_max_pct]`` so a hyper-quiet name
     still gets a floor and a meme stock is capped. The take-profit is set off the
     *clamped* stop so the intended reward:risk (``tp_mult / stop_mult``) is
-    preserved regardless of clamping. Returns ``None`` for non-BUY actions or
-    when ATR is unavailable, so the caller can fall back to a flat-percent stop.
+    preserved regardless of clamping.
+
+    Geometry follows the side: a BUY (long) puts the stop *below* and target
+    *above* entry; a SELL (short) mirrors it — stop *above*, target *below* —
+    so a short is protected by a buy-back stop if the price rises against it.
+    Returns ``None`` for unknown actions or when ATR is unavailable, so the
+    caller can fall back to a flat-percent stop.
     """
-    if action != "BUY" or entry_price <= 0 or not atr_pct or atr_pct <= 0:
+    if action not in ("BUY", "SELL") or entry_price <= 0 or not atr_pct or atr_pct <= 0:
         return None
     if stop_mult <= 0:
         return None
@@ -203,9 +219,11 @@ def compute_atr_bracket_prices(
     # Preserve reward:risk off the (possibly clamped) stop distance.
     take_profit_pct = stop_pct * (tp_mult / stop_mult)
 
+    # Long: target up / stop down. Short: target down / stop up (mirror).
+    direction = 1 if action == "BUY" else -1
     return AtrBracketParams(
-        take_profit_price=round(entry_price * (1 + take_profit_pct), 2),
-        stop_loss_price=round(entry_price * (1 - stop_pct), 2),
+        take_profit_price=round(entry_price * (1 + direction * take_profit_pct), 2),
+        stop_loss_price=round(entry_price * (1 - direction * stop_pct), 2),
         take_profit_pct=round(take_profit_pct, 4),
         stop_loss_pct=round(stop_pct, 4),
         atr_pct=round(atr_pct, 4),
@@ -231,13 +249,21 @@ def compute_trailing_stop(
     current_stop: Optional[float],
     trail_pct: float = 0.03,
     activation_profit_pct: float = 0.02,
+    side: str = "long",
 ) -> TrailingStopParams:
     """
     Compute a trailing stop that tightens as the position gains.
 
-    Activates once the position is up at least `activation_profit_pct`
-    from entry. The stop trails `trail_pct` below the current price, but
-    never moves down (only ratchets up).
+    Activates once the position is up at least `activation_profit_pct` from
+    entry. The stop trails `trail_pct` away from the current price on the
+    losing side, and only ever ratchets in the favourable direction:
+
+      - long  (side="long"):  stop sits *below* price, ratchets *up*    as price rises.
+      - short (side="short"): stop sits *above* price, ratchets *down*  as price falls.
+
+    A short's "gain" is the drop from entry, so its activation/trail mirror the
+    long case. This is what lets a winning short "ride" while still being cut
+    the moment the price reverses up through the trailing stop.
     """
     if entry_price <= 0 or current_price <= 0:
         return TrailingStopParams(
@@ -247,8 +273,17 @@ def compute_trailing_stop(
             reason="Invalid price data.",
         )
 
-    gain_pct = (current_price - entry_price) / entry_price
-    new_trail_stop = round(current_price * (1 - trail_pct), 2)
+    is_short = str(side).lower() == "short"
+    # Gain is signed so that "more positive = more profitable" for either side.
+    gain_pct = (
+        (entry_price - current_price) / entry_price
+        if is_short
+        else (current_price - entry_price) / entry_price
+    )
+    new_trail_stop = round(
+        current_price * (1 + trail_pct) if is_short else current_price * (1 - trail_pct),
+        2,
+    )
 
     if gain_pct < activation_profit_pct:
         return TrailingStopParams(
@@ -258,13 +293,17 @@ def compute_trailing_stop(
             reason=f"Position gain {gain_pct:.1%} below activation threshold {activation_profit_pct:.1%}.",
         )
 
-    if current_stop is not None and new_trail_stop <= current_stop:
-        return TrailingStopParams(
-            trail_pct=trail_pct,
-            current_stop=current_stop,
-            should_tighten=False,
-            reason="Trailing stop would not ratchet up; keeping current stop.",
-        )
+    # Only ratchet in the favourable direction: tighten down for a short
+    # (lower buy-back stop), up for a long (higher sell stop).
+    if current_stop is not None and current_stop > 0:
+        not_better = new_trail_stop >= current_stop if is_short else new_trail_stop <= current_stop
+        if not_better:
+            return TrailingStopParams(
+                trail_pct=trail_pct,
+                current_stop=current_stop,
+                should_tighten=False,
+                reason="Trailing stop would not ratchet further; keeping current stop.",
+            )
 
     return TrailingStopParams(
         trail_pct=trail_pct,

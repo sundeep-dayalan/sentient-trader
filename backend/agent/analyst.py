@@ -86,7 +86,6 @@ from trader import AlpacaTrader
 
 log = logging.getLogger("agent.analyst")
 
-ARTICLE_EXECUTION_SCORE_FLOOR = 0.60
 LOG_FIELD_LIMIT = 240
 
 
@@ -297,7 +296,7 @@ def _log_article_quality(ticker: str, quality: dict[str, Any], *, label: str) ->
         ticker,
         quality.get("grade", "LOW"),
         float(quality.get("score", 0.0) or 0.0),
-        ARTICLE_EXECUTION_SCORE_FLOOR,
+        config.ARTICLE_QUALITY_FLOOR,
         quality.get("category") or "unknown",
         quality.get("has_summary", False),
         _log_list(quality.get("flags")),
@@ -731,7 +730,7 @@ def _make_pre_screen_node(budget: "LLMBudget | None" = None):
         )
         score = quality.get("score", 0.0)
 
-        if isinstance(score, (int, float)) and score >= ARTICLE_EXECUTION_SCORE_FLOOR:
+        if isinstance(score, (int, float)) and score >= config.ARTICLE_QUALITY_FLOOR:
             # Budget gate: reserve the debate's call cost atomically. If the cap
             # is hit, HOLD deterministically instead of spending another call.
             if budget is not None:
@@ -744,7 +743,7 @@ def _make_pre_screen_node(budget: "LLMBudget | None" = None):
                 news.ticker,
                 quality.get("grade", "UNKNOWN"),
                 float(score),
-                ARTICLE_EXECUTION_SCORE_FLOOR,
+                config.ARTICLE_QUALITY_FLOOR,
                 quality.get("category") or "unknown",
                 _log_list(quality.get("flags")),
                 _log_list(quality.get("reasons")),
@@ -809,7 +808,7 @@ def _make_pre_screen_node(budget: "LLMBudget | None" = None):
             news.ticker,
             grade,
             logged_score,
-            ARTICLE_EXECUTION_SCORE_FLOOR,
+            config.ARTICLE_QUALITY_FLOOR,
             category,
             _log_list(quality.get("flags")),
             _log_list(reasons),
@@ -1454,7 +1453,7 @@ def _make_assess_risk_node():
             buy_threshold=config.BUY_SENTIMENT_THRESHOLD,
             sell_threshold=config.SELL_SENTIMENT_THRESHOLD,
             confidence_threshold=config.CONFIDENCE_THRESHOLD,
-            quality_floor=ARTICLE_EXECUTION_SCORE_FLOOR,
+            quality_floor=config.ARTICLE_QUALITY_FLOOR,
         )
         is_strong_buy = gate.is_strong_buy
         is_strong_sell = gate.is_strong_sell
@@ -1541,7 +1540,7 @@ def _make_assess_risk_node():
             config.SELL_SENTIMENT_THRESHOLD,
             config.CONFIDENCE_THRESHOLD,
             effective_confidence_threshold,
-            ARTICLE_EXECUTION_SCORE_FLOOR,
+            config.ARTICLE_QUALITY_FLOOR,
         )
         log.info(
             "Risk gate [%s]: committee_metrics agreement=%.3f net_weight=%.3f "
@@ -1982,7 +1981,11 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
         take_profit_price = None
         stop_loss_price = None
         bracket_info: dict[str, Any] = {}
-        if action == "BUY" and config.BRACKET_ORDERS_ENABLED:
+        # A short entry (SELL with no existing long) brackets like a BUY but
+        # mirrored: protective stop *above* entry, take-profit *below*.
+        is_short = plan.get("position_intent") == "open_short"
+        bracket_action = "SELL" if is_short else "BUY"
+        if (action == "BUY" or is_short) and config.BRACKET_ORDERS_ENABLED:
             try:
                 ctx = state.get("market_context") or {}
                 snapshot_price = ctx.get("price")
@@ -2011,7 +2014,7 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
                         atr_pct = _fetch_atr_pct(news.ticker)
                         atr_params = position_manager.compute_atr_bracket_prices(
                             float(entry_price),
-                            "BUY",
+                            bracket_action,
                             atr_pct,
                             stop_mult=config.ATR_STOP_MULT,
                             tp_mult=config.ATR_TP_MULT,
@@ -2023,8 +2026,10 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
                         sl_price = atr_params.stop_loss_price
                         sl_method = atr_params.method
                     else:
-                        tp_price = round(float(entry_price) * (1 + config.TAKE_PROFIT_PCT), 2)
-                        sl_price = round(float(entry_price) * (1 - config.STOP_LOSS_PCT), 2)
+                        # Direction sign: long targets up / stops down; short mirrors.
+                        d = 1 if bracket_action == "BUY" else -1
+                        tp_price = round(float(entry_price) * (1 + d * config.TAKE_PROFIT_PCT), 2)
+                        sl_price = round(float(entry_price) * (1 - d * config.STOP_LOSS_PCT), 2)
                     take_profit_price = tp_price
                     stop_loss_price = sl_price
                     # Re-anchor the entry limit to the SAME freshly-fetched live
@@ -2036,6 +2041,12 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
                     if config.USE_LIMIT_ORDERS and action == "BUY":
                         limit_price = round(
                             float(entry_price) * (1 + config.LIMIT_ORDER_BUFFER_PCT), 2
+                        )
+                    elif config.USE_LIMIT_ORDERS and is_short:
+                        # Marketable SELL limit: sit just *below* live so the
+                        # short fills crossing the spread (mirror of the BUY case).
+                        limit_price = round(
+                            float(entry_price) * (1 - config.LIMIT_ORDER_BUFFER_PCT), 2
                         )
                     # Record the percentages actually applied (ATR-derived when
                     # the volatility stop fired, else the flat config values).
@@ -2049,6 +2060,7 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
                         "entry_price": float(entry_price),
                         "snapshot_price": float(snapshot_price) if snapshot_price else None,
                         "price_source": price_source,
+                        "side": "short" if is_short else "long",
                         "take_profit_price": tp_price,
                         "stop_loss_price": sl_price,
                         "take_profit_pct": eff_tp_pct,
@@ -2058,9 +2070,11 @@ def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
                         "method": "atomic_bracket",
                     }
                     log.info(
-                        "Bracket prices for %s [%s/%s]: entry=$%.2f TP=$%.2f (+%.1f%%) SL=$%.2f (-%.1f%%)%s",
-                        news.ticker, price_source, sl_method, entry_price, tp_price,
-                        eff_tp_pct * 100, sl_price, eff_sl_pct * 100,
+                        "Bracket prices for %s [%s/%s/%s]: entry=$%.2f TP=$%.2f SL=$%.2f "
+                        "(tp%.1f%% sl%.1f%%)%s",
+                        news.ticker, "short" if is_short else "long", price_source, sl_method,
+                        entry_price, tp_price, sl_price,
+                        eff_tp_pct * 100, eff_sl_pct * 100,
                         f" ATR={atr_pct*100:.1f}%" if atr_pct else "",
                     )
             except Exception as bracket_exc:

@@ -202,7 +202,8 @@ def guarded_system_prompt(base_prompt: str, role: str) -> str:
         ),
         "synthesis": (
             "As Portfolio Manager, separate recommendation quality from executable order quality. "
-            "SELL means reduce/exit an existing long unless the system explicitly says shorting is allowed."
+            "SELL reduces/exits an existing long, or opens a new short position when the system has "
+            "shorting enabled — so a well-supported bearish catalyst is just as tradeable as a bullish one."
         ),
     }.get(role, "")
 
@@ -465,6 +466,18 @@ def build_execution_plan(
         plan["blocked_reasons"].append("Portfolio Manager chose HOLD.")
         return plan
 
+    # A SELL with no existing long is a *short entry* — only allowed when short
+    # selling is opted in AND the Alpaca account actually permits shorting. This
+    # flag drives both the sizing path below and the SELL branch further down.
+    opening_short = False
+    if action == "SELL" and position_qty <= 0:
+        try:
+            import config as _cfg
+            short_enabled = getattr(_cfg, "SHORT_SELLING_ENABLED", False)
+        except Exception:
+            short_enabled = False
+        opening_short = bool(short_enabled and account.get("shorting_enabled"))
+
     if account.get("trading_blocked") or account.get("account_blocked"):
         plan["blocked_reasons"].append("Alpaca account is trading/account blocked.")
 
@@ -501,7 +514,7 @@ def build_execution_plan(
         import config as _cfg
         if (
             getattr(_cfg, "DYNAMIC_POSITION_SIZING_ENABLED", False)
-            and action == "BUY"
+            and (action == "BUY" or opening_short)
             and price is not None
             and price > 0
             and portfolio_value > 0
@@ -561,10 +574,44 @@ def build_execution_plan(
     if action == "SELL":
         plan["side"] = "sell"
         if position_qty <= 0:
-            plan["position_intent"] = "no_long_position"
-            plan["blocked_reasons"].append(
-                "No long position to reduce; short sells are disabled by policy."
-            )
+            if opening_short:
+                # Open a NEW short position: sell shares we don't own, betting
+                # the price falls. Bounded by a protective bracket downstream
+                # (stop above entry). Sized like a BUY (effective_qty already
+                # reflects dynamic sizing when enabled).
+                plan["quantity"] = effective_qty
+                plan["position_intent"] = "open_short"
+                plan["is_short"] = True
+                if price is not None:
+                    plan["estimated_notional"] = round(price * effective_qty, 2)
+                    if buying_power is not None and buying_power < price * effective_qty * 1.02:
+                        plan["blocked_reasons"].append(
+                            "Insufficient buying power for short order plus safety buffer."
+                        )
+                # Concentration limits apply to shorts too (absolute exposure).
+                try:
+                    import config as _cfg
+                    if (
+                        getattr(_cfg, "CONCENTRATION_LIMITS_ENABLED", False)
+                        and price is not None
+                        and portfolio_value > 0
+                    ):
+                        from position_manager import check_portfolio_concentration
+                        conc_blockers = check_portfolio_concentration(
+                            ticker=ctx.get("position", {}).get("symbol", ""),
+                            order_notional=price * effective_qty,
+                            positions=all_positions or [],
+                            portfolio_value=portfolio_value,
+                            max_single_ticker_pct=getattr(_cfg, "MAX_SINGLE_TICKER_PCT", 0.10),
+                        )
+                        plan["blocked_reasons"].extend(conc_blockers)
+                except Exception:
+                    pass
+            else:
+                plan["position_intent"] = "no_long_position"
+                plan["blocked_reasons"].append(
+                    "No long position to reduce; short sells are disabled by policy."
+                )
         else:
             whole_share_qty = int(position_qty)
             if whole_share_qty <= 0:

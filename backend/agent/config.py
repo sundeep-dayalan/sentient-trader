@@ -104,6 +104,22 @@ SYNTHESIS_SYSTEM_PROMPT: str
 # ── Enhanced trading features — all default OFF for backward compatibility ───
 # These are read from agent_config.config JSON if present, with safe defaults.
 
+# Article quality floor: the minimum article-quality score (0..1) a headline
+# must score to (a) survive the cheap pre-screen and reach the LLM committee and
+# (b) be eligible for execution. Lower = more news reaches the committee and more
+# trades clear the gate; higher = stricter. 0.60 is the original baseline; the
+# grader marks >=0.72 HIGH, >=0.48 MEDIUM, else LOW, so ~0.45 lets MEDIUM-grade
+# catalysts through. Tunable from Supabase so frequency can be dialed without a
+# redeploy.
+ARTICLE_QUALITY_FLOOR: float = 0.60
+
+# Short selling: allow SELL signals with no existing long to OPEN a short
+# position (bet a stock falls), instead of being dropped. Every short is opened
+# with the same protective bracket/trailing stop the long side uses, just
+# mirrored (stop above entry, target below). Requires the Alpaca account to have
+# shorting enabled; default OFF so the system stays long-only unless opted in.
+SHORT_SELLING_ENABLED: bool = False
+
 # Dynamic position sizing: scale order qty with conviction/thesis quality
 DYNAMIC_POSITION_SIZING_ENABLED: bool = False
 MAX_POSITION_PCT: float = 0.05  # Max % of portfolio per trade
@@ -219,6 +235,8 @@ def reload_from_supabase() -> bool:
     global MOMENTUM_SYSTEM_PROMPT, VALUE_SYSTEM_PROMPT, RISK_SYSTEM_PROMPT, SYNTHESIS_SYSTEM_PROMPT
     global CONFIG_FINGERPRINT, LAST_CONFIG_REFRESH_EPOCH
     # Enhanced trading features
+    global ARTICLE_QUALITY_FLOOR
+    global SHORT_SELLING_ENABLED
     global DYNAMIC_POSITION_SIZING_ENABLED, MAX_POSITION_PCT
     global BRACKET_ORDERS_ENABLED, STOP_LOSS_PCT, TAKE_PROFIT_PCT
     global ATR_STOPS_ENABLED, ATR_PERIOD, ATR_STOP_MULT, ATR_TP_MULT
@@ -271,6 +289,8 @@ def reload_from_supabase() -> bool:
 
     # Enhanced features (optional — all default OFF for backward compatibility)
     enhanced = row.get("enhanced_trading") or {}
+    ARTICLE_QUALITY_FLOOR = _safe_float(enhanced.get("article_quality_floor"), 0.60)
+    SHORT_SELLING_ENABLED = _safe_bool(enhanced.get("short_selling"), False)
     DYNAMIC_POSITION_SIZING_ENABLED = _safe_bool(enhanced.get("dynamic_position_sizing"), False)
     MAX_POSITION_PCT = _safe_float(enhanced.get("max_position_pct"), 0.05)
     BRACKET_ORDERS_ENABLED = _safe_bool(enhanced.get("bracket_orders"), False)
@@ -320,6 +340,7 @@ def reload_from_supabase() -> bool:
             LLM_PROVIDER_CONFIG.get("type", "groq-always-free"),
         )
         active_features = [name for name, enabled in [
+            ("short_selling", SHORT_SELLING_ENABLED),
             ("dynamic_sizing", DYNAMIC_POSITION_SIZING_ENABLED),
             ("bracket_orders", BRACKET_ORDERS_ENABLED),
             ("atr_stops", ATR_STOPS_ENABLED),

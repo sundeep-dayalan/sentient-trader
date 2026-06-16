@@ -45,9 +45,14 @@ _current_stop_prices: dict[str, float] = {}
 
 
 def _find_existing_stop_order(
-    orders: list[dict], symbol: str
+    orders: list[dict], symbol: str, stop_side: str = "sell"
 ) -> Optional[dict]:
-    """Find the active stop-loss sell order for a given symbol."""
+    """Find the active protective stop order for a symbol.
+
+    ``stop_side`` is the side of the protective order: "sell" guards a long,
+    "buy" (buy-to-cover) guards a short.
+    """
+    stop_side = stop_side.lower()
     for order in orders:
         order_type = str(order.get("type", "")).lower()
         order_side = str(order.get("side", "")).lower()
@@ -56,7 +61,7 @@ def _find_existing_stop_order(
 
         if (
             order_symbol == symbol.upper()
-            and order_side == "sell"
+            and order_side == stop_side
             and order_type == "stop"
             and order_status in ("new", "accepted", "pending_new", "held")
         ):
@@ -69,7 +74,7 @@ def _find_existing_stop_order(
             leg_status = str(leg.get("status", "")).lower()
             if (
                 order_symbol == symbol.upper()
-                and leg_side == "sell"
+                and leg_side == stop_side
                 and leg_type == "stop"
                 and leg_status in ("new", "accepted", "pending_new", "held")
             ):
@@ -84,8 +89,13 @@ def _manage_trailing_stop(
     entry_price: float,
     current_price: float,
     position_qty: int,
+    side: str = "long",
 ) -> None:
-    """Check and update trailing stop for one position."""
+    """Check and update trailing stop for one position (long or short)."""
+    is_short = str(side).lower() == "short"
+    # A long is protected by a SELL stop below price; a short by a BUY-to-cover
+    # stop above price. The "better" direction flips accordingly.
+    stop_side = "buy" if is_short else "sell"
     current_stop = _current_stop_prices.get(symbol)
 
     trailing_result = compute_trailing_stop(
@@ -94,15 +104,22 @@ def _manage_trailing_stop(
         current_stop=current_stop,
         trail_pct=config.TRAILING_STOP_PCT,
         activation_profit_pct=config.TRAILING_STOP_ACTIVATION_PCT,
+        side="short" if is_short else "long",
     )
 
     if not trailing_result.should_tighten:
         return
 
     new_stop = trailing_result.current_stop
+
+    def _is_better(new: float, old: float) -> bool:
+        # Long ratchets up (higher sell stop); short ratchets down (lower buy stop).
+        return new < old if is_short else new > old
+
     log.info(
-        "Trailing stop [%s]: tightening $%.2f → $%.2f (price=$%.2f entry=$%.2f)",
+        "Trailing stop [%s/%s]: tightening $%.2f → $%.2f (price=$%.2f entry=$%.2f)",
         symbol,
+        "short" if is_short else "long",
         current_stop or 0.0,
         new_stop,
         current_price,
@@ -118,16 +135,16 @@ def _manage_trailing_stop(
         else:
             # If we can't cancel, try to find and cancel by searching open orders
             open_orders = trader.get_open_orders(symbol)
-            existing = _find_existing_stop_order(open_orders, symbol)
+            existing = _find_existing_stop_order(open_orders, symbol, stop_side)
             if existing and existing.get("id"):
                 trader.cancel_order(existing["id"])
     else:
         # No tracked stop order — search for bracket leg or standalone stop
         open_orders = trader.get_open_orders(symbol)
-        existing = _find_existing_stop_order(open_orders, symbol)
+        existing = _find_existing_stop_order(open_orders, symbol, stop_side)
         if existing and existing.get("id"):
             old_stop_price = existing.get("stop_price")
-            if old_stop_price and new_stop <= old_stop_price:
+            if old_stop_price and not _is_better(new_stop, old_stop_price):
                 # New stop isn't better than the existing one
                 _current_stop_prices[symbol] = old_stop_price
                 return
@@ -147,7 +164,7 @@ def _manage_trailing_stop(
         ticker=symbol,
         quantity=position_qty,
         stop_price=new_stop,
-        side="sell",
+        side=stop_side,
     )
 
     if result.submitted and result.order_id:
@@ -217,7 +234,10 @@ def _monitor_loop(trader, lock=None) -> None:
                 entry_price = float(pos.get("avg_entry_price") or 0)
                 current_price = float(pos.get("current_price") or 0)
 
-                if not symbol or qty <= 0 or side != "long":
+                # Alpaca reports a short's qty as negative; trail on the absolute
+                # size. Skip anything that isn't a clean long/short with prices.
+                qty_abs = abs(qty)
+                if not symbol or qty_abs <= 0 or side not in ("long", "short"):
                     continue
                 if entry_price <= 0 or current_price <= 0:
                     continue
@@ -228,7 +248,8 @@ def _monitor_loop(trader, lock=None) -> None:
                     symbol=symbol,
                     entry_price=entry_price,
                     current_price=current_price,
-                    position_qty=int(qty),
+                    position_qty=int(qty_abs),
+                    side=side,
                 )
 
             # Clean up tracking for positions that were closed
