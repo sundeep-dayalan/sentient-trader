@@ -1,0 +1,39 @@
+title: "[Idea]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for architecture ideas, feature concepts, experiments, or design trade-offs. If the idea is already scoped for implementation, open a feature issue instead.
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea
+      description: What should Sentient Trader explore?
+      placeholder: "A deterministic replay mode with seeded market context..."
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it matters
+      placeholder: "This would help new users understand..."
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - AI committee
+        - Trading/risk controls
+        - Local demo/onboarding
+        - Dashboard UX
+        - Observability
+        - Deployment
+        - Community/docs
+        - Other
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes, links, or examples

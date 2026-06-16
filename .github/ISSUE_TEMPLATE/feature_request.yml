@@ -1,0 +1,50 @@
+name: Feature request
+description: Suggest a scoped improvement to Sentient Trader.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user, operator, or contributor pain would this solve?
+      placeholder: "When running locally, it is hard to..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the smallest useful version.
+      placeholder: "Add a replay fixture command that..."
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - AI committee / LangGraph
+        - Risk gate / execution safety
+        - News ingestion
+        - API
+        - Dashboard UX
+        - Local setup / demo mode
+        - Observability
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: Trade-offs and safety notes
+      description: Mention risk, cost, auth, rate limits, or migration concerns.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This can work with paper trading only.
+          required: true
+        - label: This does not require committing secrets or private traces.
+          required: true

@@ -1,0 +1,24 @@
+name: Documentation improvement
+description: Suggest a clearer explanation, setup note, screenshot, or runbook.
+title: "docs: "
+labels: ["documentation"]
+body:
+  - type: textarea
+    id: page
+    attributes:
+      label: What page or section?
+      placeholder: "README Quick Start, Coolify deployment, Supabase setup..."
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: What is confusing or missing?
+      placeholder: "The Redis setup assumes..."
+    validations:
+      required: true
+  - type: textarea
+    id: suggested
+    attributes:
+      label: Suggested wording or structure
+      description: Optional, but very helpful.

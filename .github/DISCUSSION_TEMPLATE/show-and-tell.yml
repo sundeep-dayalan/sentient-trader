@@ -1,0 +1,23 @@
+title: "[Show and tell]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share a demo, deployment, fork, analysis query, dashboard screenshot, or paper-trading experiment inspired by Sentient Trader.
+  - type: textarea
+    id: showcase
+    attributes:
+      label: What did you build or learn?
+      placeholder: "I deployed the stack on..."
+    validations:
+      required: true
+  - type: textarea
+    id: links
+    attributes:
+      label: Links, screenshots, or recordings
+      description: Do not include credentials, private traces, or real account identifiers.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes for others
+      placeholder: "The tricky part was..."

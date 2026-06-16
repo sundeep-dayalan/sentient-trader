@@ -24,10 +24,11 @@ then trades **only** when conviction, risk, and quality gates all clear.
 [![Redis](https://img.shields.io/badge/Valkey-Streams-DC382D?style=flat-square&logo=redis&logoColor=white)](#tech-stack)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=flat-square&logo=fastapi&logoColor=white)](#tech-stack)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white)](#deployment)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 
 <br/>
 
-**[🚀 Live Demo](https://apps.sundeepdayalan.in/sentient-trader)** · **[📖 How It Works](#how-it-works)** · **[⚡ Quick Start](#quick-start)**
+**[🚀 Live Demo](https://apps.sundeepdayalan.in/sentient-trader)** · **[⚡ Quick Start](#quick-start)** · **[🧪 Local Demo](docs/LOCAL_DEMO.md)** · **[🤝 Contribute](CONTRIBUTING.md)** · **[🛡️ Security](SECURITY.md)**
 
 <br/>
 
@@ -45,6 +46,28 @@ then trades **only** when conviction, risk, and quality gates all clear.
 </a>
 
 </div>
+
+<br/>
+
+---
+
+<br/>
+
+## ⭐ Start Here
+
+Sentient Trader is a reference implementation for **auditable multi-agent AI decisions** in a real-time paper-trading pipeline. It is useful if you are exploring LangGraph agents, event-driven AI systems, risk-gated automation, or transparent LLM observability.
+
+| Want to... | Start here |
+|------------|------------|
+| Watch the system reason | Open the **[live dashboard](https://apps.sundeepdayalan.in/sentient-trader)** and expand any signal. No login required for browsing. |
+| Replay a full decision | Open one of the permanent pipeline replays below: BUY, SELL, and HOLD examples are included. |
+| Try a safe signal | Use the dashboard **Signal Injector** or `POST /simulate`; simulated signals are marked `is_simulated=true` and cannot submit Alpaca orders. |
+| Run it yourself | Follow **[Quick Start](#quick-start)** or the shorter **[Local Demo Guide](docs/LOCAL_DEMO.md)**. |
+| Help the project | Pick up a `good first issue`, improve setup docs, or add demo material. See **[CONTRIBUTING.md](CONTRIBUTING.md)**. |
+
+> **Safety boundary:** paper trading only, educational use only, not financial advice. Use Alpaca paper credentials, never live-trading keys.
+
+> If this helps you learn multi-agent systems, paper-trading architecture, or auditable AI workflows, a GitHub star helps other builders find it too.
 
 <br/>
 
@@ -689,6 +712,18 @@ sentient-trader/
 | Alpaca | Free paper trading account |
 | LLM Provider | Groq API key **or** OpenRouter API key |
 
+### Fastest Safe Demo Path
+
+You do not need to wait for a live market headline to see the pipeline move:
+
+1. Start the stack with Alpaca **paper** credentials and `MOCK_ALPACA=true` for local dry-run execution.
+2. Open the dashboard and use **Signal Injector** to submit a realistic ticker/headline.
+3. The API writes a simulated message to Redis via `POST /simulate`.
+4. The agent processes the normal debate and risk-gate pipeline, but simulated signals are blocked from Alpaca order submission.
+5. Open the resulting signal or pipeline replay to inspect the full decision trace.
+
+See [`docs/LOCAL_DEMO.md`](docs/LOCAL_DEMO.md) for a shorter demo guide and CLI injection option.
+
 ### 1. Set Up the Database
 
 Run the single master setup script once via the Supabase SQL Editor:
@@ -894,6 +929,19 @@ Update agent parameters via the **Settings** page in the dashboard. The worker r
 <br/>
 
 </details>
+
+---
+
+## 🤝 Community & Project Health
+
+Sentient Trader is open for contributors who care about transparent AI systems, safer automation, and practical paper-trading infrastructure.
+
+- **Contributing:** see [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup checks, safety rules, and PR expectations.
+- **Security:** report vulnerabilities privately via [`SECURITY.md`](SECURITY.md).
+- **Local demos:** use [`docs/LOCAL_DEMO.md`](docs/LOCAL_DEMO.md) to exercise the pipeline with simulated signals.
+- **Roadmap:** see [`docs/ROADMAP.md`](docs/ROADMAP.md) for the next onboarding and community priorities.
+- **Releases:** maintainers can cut the first public release with [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
+- **Launch:** community/share checklist and post templates live in [`docs/LAUNCH_PLAN.md`](docs/LAUNCH_PLAN.md).
 
 ---
 

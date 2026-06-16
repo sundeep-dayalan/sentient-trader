@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: mailto:sundeep.dayalan@gmail.com
+    about: Please report security issues privately instead of opening a public issue.
+  - name: Live demo
+    url: https://apps.sundeepdayalan.in/sentient-trader
+    about: Explore the public dashboard before opening a setup or behavior question.

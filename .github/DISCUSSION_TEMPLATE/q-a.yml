@@ -1,0 +1,33 @@
+title: "[Q&A]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ask setup, architecture, deployment, or behavior questions here. Please redact credentials, Supabase service-role keys, account IDs, and private traces.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      placeholder: "How should I configure Redis when running the agent and API separately?"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Local setup
+        - Supabase
+        - Redis/Valkey
+        - Alpaca paper trading
+        - LLM provider
+        - Dashboard
+        - Deployment
+        - Architecture
+        - Other
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Include relevant commands, redacted logs, OS, or hosting provider.
+      render: shell

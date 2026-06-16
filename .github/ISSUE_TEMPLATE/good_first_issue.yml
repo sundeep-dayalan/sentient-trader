@@ -1,0 +1,27 @@
+name: Good first issue proposal
+description: Propose a small, well-contained task for new contributors.
+title: "good first issue: "
+labels: ["good first issue", "help wanted"]
+body:
+  - type: textarea
+    id: task
+    attributes:
+      label: Task
+      description: What should a new contributor change?
+      placeholder: "Add a screenshot to docs/LOCAL_DEMO.md showing..."
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Likely files
+      placeholder: "frontend/components/SystemStatus.tsx, README.md"
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - The docs show...
+        - The relevant check passes...
+    validations:
+      required: true
