@@ -92,13 +92,24 @@ class ChargePerCallTests(unittest.TestCase):
                 self.assertTrue(budget.check()["allowed"])
             self.assertEqual(budget.used(), 0)
 
-    def test_check_blocks_without_room_for_full_debate(self):
+    def test_check_allows_near_cap_and_blocks_only_when_full(self):
+        # Hardened semantics: check() needs room for one more call, not a whole
+        # debate — so it stays independent of a (possibly misconfigured)
+        # per-debate cost and only blocks when the budget is truly used up.
         with mock.patch.dict(os.environ, {"LLM_DAILY_CALL_BUDGET": "8"}):
             budget = LLMBudget(redis_client=FakeRedis())
-            budget.charge(6)  # 6/8 used → no room for a 4-call debate
-            blocked = budget.check()
-            self.assertFalse(blocked["allowed"])
-            self.assertEqual(blocked["used"], 6)
+            budget.charge(7)  # 7/8 — still room for one call
+            self.assertTrue(budget.check()["allowed"])
+            budget.charge(1)  # 8/8 — full
+            self.assertFalse(budget.check()["allowed"])
+
+    def test_check_not_bricked_by_huge_debate_cost(self):
+        # The exact prod bug: LLM_DEBATE_CALL_COST set ~= the daily budget must
+        # NOT block a brand-new day with plenty of real budget left.
+        with mock.patch.dict(os.environ, {"LLM_DAILY_CALL_BUDGET": "4000"}):
+            budget = LLMBudget(redis_client=FakeRedis())
+            budget.charge(4)  # one real debate's worth of calls
+            self.assertTrue(budget.check()["allowed"])  # 4/4000 → obviously fine
 
     def test_charge_tracks_real_calls(self):
         with mock.patch.dict(os.environ, {"LLM_DAILY_CALL_BUDGET": "100"}):

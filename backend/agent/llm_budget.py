@@ -134,22 +134,24 @@ class LLMBudget:
 
         return {"allowed": True, "enabled": True, "used": result, "budget": budget}
 
-    def check(self, cost: int = DEBATE_CALL_COST) -> dict[str, Any]:
+    def check(self, cost: int = 1) -> dict[str, Any]:
         """
-        Non-mutating authorization peek for an upcoming debate.
+        Non-mutating authorization peek before starting a debate.
 
-        Unlike ``try_consume`` this does NOT reserve anything — it only reports
-        whether there is room for a full debate (``cost`` calls) at the current
-        usage. The actual budget is spent later, one unit per *real* LLM call via
-        ``charge``. This is what makes the counter reflect work actually done:
-        a debate that fails or a message that is retried never leaves a phantom
-        reservation behind. Fails *open* on any Redis error.
+        Reports only whether there is room for at least one more call
+        (``used < budget``). It deliberately does NOT require headroom for a
+        whole debate: the budget is spent one unit per *real* LLM call via
+        ``charge``, so a debate that starts near the cap simply overshoots by a
+        few calls — negligible — rather than being blocked. Crucially, this keeps
+        ``check`` independent of ``DEBATE_CALL_COST``: a misconfigured per-debate
+        cost (e.g. accidentally set equal to the daily budget) can no longer brick
+        the gate. Fails *open* on any Redis error.
         """
         budget = daily_budget()
         if budget <= 0:
             return {"allowed": True, "enabled": False, "used": 0, "budget": 0}
         used = self.used()
-        allowed = used + cost <= budget
+        allowed = used + max(1, cost) <= budget
         if not allowed:
             log.warning(
                 "LLM daily budget exhausted: used=%s budget=%s — pre-screen-only "
