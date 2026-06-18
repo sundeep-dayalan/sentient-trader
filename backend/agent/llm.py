@@ -155,11 +155,21 @@ class ModelRouter:
             raise TypeError(
                 "ModelRouter.call expected an LLMClient from create_llm_client()"
             )
-        return client.provider.call(
+        result = client.provider.call(
             response_model,
             messages,
             max_retries=max_retries,
         )
+        # Charge the daily budget one unit per *real* successful call. A raised
+        # call never reaches here, so failed/retried attempts cost nothing — the
+        # counter tracks work actually done, not up-front reservations.
+        budget = getattr(client, "budget", None)
+        if budget is not None:
+            try:
+                budget.charge(1)
+            except Exception:  # never let accounting break a live debate
+                pass
+        return result
 
 
 __all__ = [

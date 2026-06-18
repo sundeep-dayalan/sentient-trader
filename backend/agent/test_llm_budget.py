@@ -30,6 +30,15 @@ class FakeRedis:
         value = self.store.get(key)
         return str(value) if value is not None else None
 
+    def incrby(self, key, amount):
+        if self.raise_on_eval:
+            raise RuntimeError("redis down")
+        self.store[key] = self.store.get(key, 0) + int(amount)
+        return self.store[key]
+
+    def expireat(self, key, _when):
+        return True
+
 
 class LLMBudgetTests(unittest.TestCase):
     def test_disabled_when_budget_zero(self):
@@ -70,6 +79,54 @@ class LLMBudgetTests(unittest.TestCase):
     def test_invalid_budget_env_disables(self):
         with mock.patch.dict(os.environ, {"LLM_DAILY_CALL_BUDGET": "not-a-number"}):
             self.assertEqual(llm_budget.daily_budget(), 0)
+
+
+class ChargePerCallTests(unittest.TestCase):
+    """The new model: check() is non-mutating; charge() records real calls."""
+
+    def test_check_does_not_consume(self):
+        with mock.patch.dict(os.environ, {"LLM_DAILY_CALL_BUDGET": "8"}):
+            budget = LLMBudget(redis_client=FakeRedis())
+            # Checking many times must never move the counter.
+            for _ in range(5):
+                self.assertTrue(budget.check()["allowed"])
+            self.assertEqual(budget.used(), 0)
+
+    def test_check_blocks_without_room_for_full_debate(self):
+        with mock.patch.dict(os.environ, {"LLM_DAILY_CALL_BUDGET": "8"}):
+            budget = LLMBudget(redis_client=FakeRedis())
+            budget.charge(6)  # 6/8 used → no room for a 4-call debate
+            blocked = budget.check()
+            self.assertFalse(blocked["allowed"])
+            self.assertEqual(blocked["used"], 6)
+
+    def test_charge_tracks_real_calls(self):
+        with mock.patch.dict(os.environ, {"LLM_DAILY_CALL_BUDGET": "100"}):
+            budget = LLMBudget(redis_client=FakeRedis())
+            for _ in range(4):  # one full debate = 4 real calls
+                budget.charge(1)
+            self.assertEqual(budget.used(), 4)
+
+    def test_failed_debate_costs_nothing(self):
+        # The whole point of the fix: a debate that checks-OK but never makes a
+        # call (crash / retry) leaves the budget untouched — no phantom charge.
+        with mock.patch.dict(os.environ, {"LLM_DAILY_CALL_BUDGET": "8"}):
+            budget = LLMBudget(redis_client=FakeRedis())
+            self.assertTrue(budget.check()["allowed"])  # authorized...
+            # ...but the debate blew up before any provider.call → no charge.
+            self.assertEqual(budget.used(), 0)
+
+    def test_charge_noop_when_disabled(self):
+        with mock.patch.dict(os.environ, {"LLM_DAILY_CALL_BUDGET": "0"}):
+            budget = LLMBudget(redis_client=FakeRedis())
+            self.assertEqual(budget.charge(1), 0)
+            self.assertEqual(budget.used(), 0)
+
+    def test_charge_fails_open_on_redis_error(self):
+        with mock.patch.dict(os.environ, {"LLM_DAILY_CALL_BUDGET": "8"}):
+            budget = LLMBudget(redis_client=FakeRedis(raise_on_eval=True))
+            # Must not raise even if Redis is down mid-debate.
+            self.assertEqual(budget.charge(1), 0)
 
 
 if __name__ == "__main__":

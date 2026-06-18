@@ -63,6 +63,10 @@ class Provider(Protocol):
 @dataclass
 class LLMClient:
     provider: Provider
+    # Optional daily-call budget. When set, the router charges it one unit per
+    # real, successful provider call so the counter reflects work actually done.
+    # Typed as Any to avoid importing the agent's LLMBudget into the provider layer.
+    budget: Any = None
 
 
 def _as_float(value: Any, default: float) -> float:

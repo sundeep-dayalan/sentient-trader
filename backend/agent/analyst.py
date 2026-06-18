@@ -731,10 +731,12 @@ def _make_pre_screen_node(budget: "LLMBudget | None" = None):
         score = quality.get("score", 0.0)
 
         if isinstance(score, (int, float)) and score >= config.ARTICLE_QUALITY_FLOOR:
-            # Budget gate: reserve the debate's call cost atomically. If the cap
-            # is hit, HOLD deterministically instead of spending another call.
+            # Budget gate: non-mutating check for room to run a full debate. The
+            # budget is actually spent later, one unit per real LLM call (see
+            # ModelRouter.call), so a failed or retried debate never leaves a
+            # phantom charge behind. If the cap is already hit, HOLD deterministically.
             if budget is not None:
-                consume = budget.try_consume()
+                consume = budget.check()
                 if not consume.get("allowed", True):
                     return _make_budget_hold(news, quality, consume)
             log.info(
@@ -2342,11 +2344,13 @@ def build_agent_graph(
     The ModelRouter and LLM client are created once here and shared
     across all four persona nodes via closure — no re-initialization per message.
     """
-    llm_client = create_llm_client()
-    router = ModelRouter()
     # Daily LLM-call budget kill-switch. Shares the cache's Redis connection so we
     # don't open a second one. Disabled unless LLM_DAILY_CALL_BUDGET > 0.
     budget = LLMBudget(redis_client=cache.redis_client)
+    llm_client = create_llm_client()
+    # Attach the budget so the router charges one unit per real LLM call.
+    llm_client.budget = budget
+    router = ModelRouter()
 
     graph = StateGraph(AgentState)
 

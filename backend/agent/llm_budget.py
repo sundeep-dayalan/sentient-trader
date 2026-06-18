@@ -9,8 +9,15 @@ deterministic HOLD without spending another LLM call, until the counter resets a
 
 Disabled by default (``LLM_DAILY_CALL_BUDGET=0`` ⇒ unlimited). Set a positive
 integer to enable the cap. The cost of one full committee debate is four calls
-(momentum, value, risk, synthesis); the pre-screen node consumes that whole cost
-up front so a debate is authorized atomically or not at all.
+(momentum, value, risk, synthesis).
+
+Accounting model: the pre-screen node only *checks* (``check``) that there is
+room for a debate — it does not reserve anything. The budget is then spent one
+unit per *real* successful LLM call (``charge``), from the router. This keeps the
+counter equal to work actually done: a debate that errors out, or a message that
+is retried, never leaves a phantom charge behind. (The older ``try_consume``
+reserve-up-front path is retained for compatibility but is no longer on the hot
+path — it over-counted whenever a debate failed or a message was retried.)
 """
 
 from __future__ import annotations
@@ -126,6 +133,52 @@ class LLMBudget:
             return {"allowed": False, "enabled": True, "used": used, "budget": budget}
 
         return {"allowed": True, "enabled": True, "used": result, "budget": budget}
+
+    def check(self, cost: int = DEBATE_CALL_COST) -> dict[str, Any]:
+        """
+        Non-mutating authorization peek for an upcoming debate.
+
+        Unlike ``try_consume`` this does NOT reserve anything — it only reports
+        whether there is room for a full debate (``cost`` calls) at the current
+        usage. The actual budget is spent later, one unit per *real* LLM call via
+        ``charge``. This is what makes the counter reflect work actually done:
+        a debate that fails or a message that is retried never leaves a phantom
+        reservation behind. Fails *open* on any Redis error.
+        """
+        budget = daily_budget()
+        if budget <= 0:
+            return {"allowed": True, "enabled": False, "used": 0, "budget": 0}
+        used = self.used()
+        allowed = used + cost <= budget
+        if not allowed:
+            log.warning(
+                "LLM daily budget exhausted: used=%s budget=%s — pre-screen-only "
+                "mode until UTC reset.",
+                used,
+                budget,
+            )
+        return {"allowed": allowed, "enabled": True, "used": used, "budget": budget}
+
+    def charge(self, cost: int = 1) -> int:
+        """
+        Record ``cost`` real LLM calls that actually happened.
+
+        Called once per successful provider call, so the daily counter tracks
+        true usage rather than up-front reservations. Fails *open* (a Redis error
+        never breaks an in-flight debate) and is a no-op when the cap is disabled.
+        Returns the post-increment day total (0 when disabled/degraded).
+        """
+        if daily_budget() <= 0 or cost <= 0:
+            return 0
+        now = time.time()
+        key = _utc_day_key(now)
+        try:
+            total = int(self._redis.incrby(key, cost))
+            self._redis.expireat(key, _end_of_utc_day_epoch(now))
+            return total
+        except Exception:
+            log.warning("LLM budget charge failed; continuing (fail-open)", exc_info=True)
+            return 0
 
     def used(self) -> int:
         try:
