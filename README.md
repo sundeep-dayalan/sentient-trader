@@ -994,6 +994,59 @@ Sentient Trader is open for contributors who care about transparent AI systems, 
 > A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
 
 <details>
+<summary><b>BUG-2026-06-25-03 — News-driven trades earned their edge in the first hour, then round-tripped it back to a loss by the close</b></summary>
+
+<br/>
+
+**Identified:** 2026-06-25, during an 8-day performance review of the live paper account. Joining each executed trade to its `signal_outcomes` returns (direction-aware — a short counts as a win when the price *falls*) showed the edge decaying with hold time.
+
+**Impact:** Across 115 executed trades, the system was good at catching the *initial pop* on a news catalyst but held far too long, giving it all back:
+
+| Time after entry | Avg P&L / trade | Win rate |
+|------------------|-----------------|----------|
+| 15 minutes | **+1.18%** | 60.9% |
+| 1 hour | **+0.59%** | 57.9% |
+| End of day | **−0.87%** | 46.8% |
+
+By the close the average trade was a small loss and worse than a coin-flip — the position monitor only ever *tightened* stops, so winners drifted back to break-even (or below) with nothing harvesting the early move.
+
+**Resolution:** A config-gated time-based exit in the position monitor (`enhanced_trading.time_based_exit`, default OFF; `max_position_hold_seconds`, default 3600).
+- `backend/agent/position_monitor.py` — `_maybe_time_exit()` flattens any position held past the window and takes priority over trailing-stop work for that symbol. The hold clock is anchored to the **actual entry fill** (`trader.get_position_entry_time()`), falling back to first-observed time so a restart doesn't reset every clock; a `_closing_positions` guard prevents double-submitting a close. The monitor loop now fetches positions when *either* trailing stops or the time exit is enabled (previously it bailed out whenever trailing stops were off).
+- `backend/agent/trader.py` — `close_position()` (cancels working orders first, then liquidates long *or* short) and `get_position_entry_time()` (most recent entry-side fill from closed orders).
+- `backend/agent/config.py` — `time_based_exit`, `max_position_hold_seconds`.
+- `backend/agent/test_order_execution_fixes.py` — holds under the window, closes once past it, and no second close while one is in flight.
+
+</details>
+
+<details>
+<summary><b>BUG-2026-06-25-02 — Short sells on hard-to-borrow stocks were rejected and silently dropped (wrong time-in-force)</b></summary>
+
+<br/>
+
+**Identified:** 2026-06-25 performance review — 3 trades in 8 days (ATLN ×2, KEQU) failed with Alpaca `42210000: "only day orders are allowed for hard-to-borrow asset"`.
+
+**Impact:** Opening a short submits a bracket order with `time_in_force = GTC`. For a hard-to-borrow (HTB) name Alpaca only accepts **DAY** orders, so the whole order was rejected and the fully-vetted trade was dropped — no retry, no fallback. We can't know which tickers are HTB up front, so the failure only surfaced at submission.
+
+**Resolution:** `backend/agent/trader.py` — `place_order()` now submits normally and, on that specific rejection, **retries the order once as a DAY order** rather than dropping it. Any other rejection still fails fast. The build/submit path was refactored around a single `_build_request(tif)` helper so the retry rebuilds an identical order with only the time-in-force changed.
+- `backend/agent/test_order_execution_fixes.py` — an HTB short retries GTC→DAY exactly once; a normal asset is never retried.
+
+</details>
+
+<details>
+<summary><b>BUG-2026-06-25-01 — "Bracket orders must be entry orders" — a BUY on a stock we already held was rejected and dropped</b></summary>
+
+<br/>
+
+**Identified:** 2026-06-25 performance review — a BUY on MU failed with Alpaca `42210000: "bracket orders must be entry orders"`.
+
+**Impact:** A bracket (entry + attached take-profit/stop-loss legs) is only valid when it **opens** a position from flat. The code chose to bracket purely from the trade direction, never checking whether we already held the name or had a working order for it. When either was true, Alpaca rejected the entire order and the trade was lost — again with no fallback.
+
+**Resolution:** `backend/agent/trader.py` — a new `_can_open_bracket()` guard checks the position is flat with no working orders *before* committing to a bracket; when it isn't, `place_order()` falls back to a plain order so the trade still goes through (the position monitor attaches/maintains a protective stop afterwards).
+- `backend/agent/test_order_execution_fixes.py` — brackets when flat; falls back to a simple order when a position or a working order already exists.
+
+</details>
+
+<details>
 <summary><b>BUG-2026-06-11-02 — Flat 3% stop-loss sat <em>inside</em> a volatile stock's daily noise, knocking out good trades</b></summary>
 
 <br/>

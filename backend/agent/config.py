@@ -147,6 +147,14 @@ TRAILING_STOPS_ENABLED: bool = False
 TRAILING_STOP_PCT: float = 0.03
 TRAILING_STOP_ACTIVATION_PCT: float = 0.02  # Activate once 2% in profit
 
+# Time-based exit: news-driven entries earn their edge fast — measured returns
+# peak within the first ~15-60 min and decay to a small loss by the close (see
+# README Bug Log: BUG-2026-06-25-03). When enabled, the position monitor
+# flattens any position older than MAX_POSITION_HOLD_SECONDS, harvesting the
+# early move instead of round-tripping it back to break-even. Default OFF / 1h.
+TIME_BASED_EXIT_ENABLED: bool = False
+MAX_POSITION_HOLD_SECONDS: int = 3600  # 1 hour
+
 # Portfolio concentration limits
 CONCENTRATION_LIMITS_ENABLED: bool = False
 MAX_SINGLE_TICKER_PCT: float = 0.10  # Max 10% per ticker
@@ -242,6 +250,7 @@ def reload_from_supabase() -> bool:
     global ATR_STOPS_ENABLED, ATR_PERIOD, ATR_STOP_MULT, ATR_TP_MULT
     global ATR_STOP_MIN_PCT, ATR_STOP_MAX_PCT
     global TRAILING_STOPS_ENABLED, TRAILING_STOP_PCT, TRAILING_STOP_ACTIVATION_PCT
+    global TIME_BASED_EXIT_ENABLED, MAX_POSITION_HOLD_SECONDS
     global CONCENTRATION_LIMITS_ENABLED, MAX_SINGLE_TICKER_PCT
     global CIRCUIT_BREAKER_ENABLED, MAX_DAILY_LOSS_PCT
     global TECHNICAL_INDICATORS_ENABLED, SIGNAL_MOMENTUM_ENABLED
@@ -305,6 +314,8 @@ def reload_from_supabase() -> bool:
     TRAILING_STOPS_ENABLED = _safe_bool(enhanced.get("trailing_stops"), False)
     TRAILING_STOP_PCT = _safe_float(enhanced.get("trailing_stop_pct"), 0.03)
     TRAILING_STOP_ACTIVATION_PCT = _safe_float(enhanced.get("trailing_stop_activation_pct"), 0.02)
+    TIME_BASED_EXIT_ENABLED = _safe_bool(enhanced.get("time_based_exit"), False)
+    MAX_POSITION_HOLD_SECONDS = _safe_int(enhanced.get("max_position_hold_seconds"), 3600)
     CONCENTRATION_LIMITS_ENABLED = _safe_bool(enhanced.get("concentration_limits"), False)
     MAX_SINGLE_TICKER_PCT = _safe_float(enhanced.get("max_single_ticker_pct"), 0.10)
     CIRCUIT_BREAKER_ENABLED = _safe_bool(enhanced.get("circuit_breaker"), False)
@@ -345,6 +356,7 @@ def reload_from_supabase() -> bool:
             ("bracket_orders", BRACKET_ORDERS_ENABLED),
             ("atr_stops", ATR_STOPS_ENABLED),
             ("trailing_stops", TRAILING_STOPS_ENABLED),
+            ("time_exit", TIME_BASED_EXIT_ENABLED),
             ("concentration", CONCENTRATION_LIMITS_ENABLED),
             ("circuit_breaker", CIRCUIT_BREAKER_ENABLED),
             ("technicals", TECHNICAL_INDICATORS_ENABLED),

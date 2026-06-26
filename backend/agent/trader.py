@@ -172,6 +172,30 @@ class AlpacaTrader:
             log.debug("Live price re-fetch failed for %s: %s", ticker, exc)
         return None
 
+    def _can_open_bracket(self, ticker: str) -> bool:
+        """True only when ``ticker`` is flat with no working orders.
+
+        Alpaca rejects a bracket unless it *opens* a fresh position ("bracket
+        orders must be entry orders"). Stacking a bracket on an existing
+        position or a still-working order for the same symbol fails and loses
+        the whole trade, so callers fall back to a plain order when this returns
+        False. Best-effort: the underlying lookups already swallow transient
+        broker errors (treating them as flat/no-orders), so an unverifiable
+        state lets the bracket proceed — no worse than before this guard.
+        """
+        try:
+            position = self.get_position_context(ticker)
+            if str(position.get("side", "flat")).lower() != "flat":
+                return False
+            if abs(position.get("qty") or 0.0) > 0:
+                return False
+            if self.get_open_orders(ticker):
+                return False
+            return True
+        except Exception as exc:
+            log.warning("Bracket eligibility check failed for %s: %s", ticker, exc)
+            return False
+
     def place_order(
         self,
         ticker: str,
@@ -232,6 +256,23 @@ class AlpacaTrader:
         )
         use_bracket = (action == "BUY" and have_legs) or is_short_bracket
 
+        # ── Bug #1 guard: a bracket must be an *entry* order ──────────────────
+        # Alpaca only accepts a bracket (entry + attached TP/SL legs) when it
+        # opens a position from flat — "bracket orders must be entry orders".
+        # If we already hold the name, or have an unfilled order working for it,
+        # the bracket is rejected and the *whole* trade is dropped. In that case
+        # fall back to a plain order so the trade still goes through; the
+        # position monitor attaches/maintains a protective stop afterwards.
+        if use_bracket and not self._can_open_bracket(ticker):
+            log.info(
+                "Bracket skipped for %s: an existing position or working order "
+                "means this isn't an entry order. Falling back to a simple order.",
+                ticker,
+            )
+            use_bracket = False
+            take_profit_price = None
+            stop_loss_price = None
+
         # ── Bracket sanity guard ──────────────────────────────────────────────
         # Alpaca rejects brackets where TP/SL violate the live `base_price`:
         #   - take_profit.limit_price must be >= base_price + 0.01
@@ -286,117 +327,137 @@ class AlpacaTrader:
                         )
                         stop_loss_price = sl_adjusted
 
-        # Use limit order if price provided, otherwise market order
-        if limit_price is not None and limit_price > 0:
-            order_kwargs = dict(
-                symbol=ticker,
-                qty=qty,
-                side=side,
-                limit_price=round(limit_price, 2),
-                time_in_force=TimeInForce.GTC if use_bracket else TimeInForce.IOC,
-                client_order_id=client_order_id,
-            )
-            if use_bracket:
-                order_kwargs["order_class"] = OrderClass.BRACKET
-                order_kwargs["take_profit"] = TakeProfitRequest(
-                    limit_price=round(take_profit_price, 2)
-                )
-                order_kwargs["stop_loss"] = StopLossRequest(
-                    stop_price=round(stop_loss_price, 2)
-                )
-                log.info(
-                    "Submitting BRACKET LIMIT order: %s %d %s @ $%.2f "
-                    "(TP=$%.2f, SL=$%.2f)",
-                    action, qty, ticker, limit_price,
-                    take_profit_price, stop_loss_price,
-                )
-            else:
-                log.info(
-                    "Submitting LIMIT order: %s %d %s @ $%.2f",
-                    action, qty, ticker, limit_price,
-                )
-            order_request = LimitOrderRequest(**order_kwargs)
+        # ── Time-in-force selection ───────────────────────────────────────────
+        # Brackets use GTC so the protective TP/SL legs outlive the session; a
+        # simple limit uses IOC (fill what's available now, cancel the rest); a
+        # simple market uses DAY. Bug #2: hard-to-borrow assets can *only* be
+        # shorted with a DAY order, and we don't know which tickers are
+        # hard-to-borrow up front — so we submit normally and retry once as DAY
+        # if Alpaca rejects with that specific reason (see the submit loop).
+        is_limit = limit_price is not None and limit_price > 0
+        if use_bracket:
+            time_in_force = TimeInForce.GTC
+        elif is_limit:
+            time_in_force = TimeInForce.IOC
         else:
-            order_kwargs = dict(
+            time_in_force = TimeInForce.DAY
+
+        def _build_request(tif):
+            """Build the order request for a given time-in-force."""
+            kwargs = dict(
                 symbol=ticker,
                 qty=qty,
                 side=side,
-                time_in_force=TimeInForce.GTC if use_bracket else TimeInForce.DAY,
+                time_in_force=tif,
                 client_order_id=client_order_id,
             )
             if use_bracket:
-                order_kwargs["order_class"] = OrderClass.BRACKET
-                order_kwargs["take_profit"] = TakeProfitRequest(
+                kwargs["order_class"] = OrderClass.BRACKET
+                kwargs["take_profit"] = TakeProfitRequest(
                     limit_price=round(take_profit_price, 2)
                 )
-                order_kwargs["stop_loss"] = StopLossRequest(
+                kwargs["stop_loss"] = StopLossRequest(
                     stop_price=round(stop_loss_price, 2)
                 )
+            if is_limit:
+                kwargs["limit_price"] = round(limit_price, 2)
+                return LimitOrderRequest(**kwargs)
+            return MarketOrderRequest(**kwargs)
+
+        kind = "BRACKET" if use_bracket else "SIMPLE"
+        legs_note = (
+            " (TP=$%.2f, SL=$%.2f)" % (take_profit_price, stop_loss_price)
+            if use_bracket
+            else ""
+        )
+        if is_limit:
+            log.info(
+                "Submitting %s LIMIT order: %s %d %s @ $%.2f%s",
+                kind, action, qty, ticker, round(limit_price, 2), legs_note,
+            )
+        else:
+            log.info(
+                "Submitting %s MARKET order: %s %d %s%s",
+                kind, action, qty, ticker, legs_note,
+            )
+
+        # Submit, retrying once as a DAY order if the asset is hard-to-borrow.
+        retried_as_day = False
+        while True:
+            order_request = _build_request(time_in_force)
+            try:
+                order = self._client.submit_order(order_data=order_request)
+                order_id = str(getattr(order, "id", "") or "")
+                status = _normalize_status(getattr(order, "status", None))
+                lookup_error: Optional[str] = None
+
+                if not order_id and client_order_id:
+                    try:
+                        order = self._client.get_order_by_client_id(client_order_id)
+                        order_id = str(getattr(order, "id", "") or "")
+                        status = _normalize_status(getattr(order, "status", None)) or status
+                    except Exception as exc:
+                        lookup_error = str(exc)
+
+                if not order_id:
+                    error = "Alpaca order submission returned no order_id."
+                    if lookup_error:
+                        error = f"{error} Lookup by client_order_id failed: {lookup_error}"
+                    log.error(
+                        "Order submission for %s %s returned no Alpaca order_id "
+                        "(client_order_id=%s status=%s)",
+                        action,
+                        ticker,
+                        client_order_id,
+                        status or "unknown",
+                    )
+                    return OrderResult(
+                        submitted=False,
+                        client_order_id=client_order_id,
+                        status=status or None,
+                        error=error,
+                    )
+
                 log.info(
-                    "Submitting BRACKET MARKET order: %s %d %s "
-                    "(TP=$%.2f, SL=$%.2f)",
-                    action, qty, ticker,
-                    take_profit_price, stop_loss_price,
-                )
-            order_request = MarketOrderRequest(**order_kwargs)
-
-        try:
-            order = self._client.submit_order(order_data=order_request)
-            order_id = str(getattr(order, "id", "") or "")
-            status = _normalize_status(getattr(order, "status", None))
-            lookup_error: Optional[str] = None
-
-            if not order_id and client_order_id:
-                try:
-                    order = self._client.get_order_by_client_id(client_order_id)
-                    order_id = str(getattr(order, "id", "") or "")
-                    status = _normalize_status(getattr(order, "status", None)) or status
-                except Exception as exc:
-                    lookup_error = str(exc)
-
-            if not order_id:
-                error = "Alpaca order submission returned no order_id."
-                if lookup_error:
-                    error = f"{error} Lookup by client_order_id failed: {lookup_error}"
-                log.error(
-                    "Order submission for %s %s returned no Alpaca order_id "
-                    "(client_order_id=%s status=%s)",
+                    "%s order submitted: %s %d %s → order_id=%s",
+                    kind,
                     action,
+                    qty,
                     ticker,
-                    client_order_id,
-                    status or "unknown",
+                    order_id,
                 )
+                return OrderResult(
+                    submitted=True,
+                    order_id=order_id,
+                    client_order_id=client_order_id,
+                    status=status,
+                )
+
+            except APIError as e:
+                # Bug #2: a hard-to-borrow asset can only be shorted with a DAY
+                # order. Retry once as DAY rather than dropping the trade — this
+                # is cheaper and safer than pre-fetching every asset's
+                # borrow status. Any other rejection still fails fast.
+                if (
+                    not retried_as_day
+                    and time_in_force != TimeInForce.DAY
+                    and "only day orders are allowed" in str(e).lower()
+                ):
+                    log.info(
+                        "Retrying %s %s as a DAY order — Alpaca flagged it "
+                        "hard-to-borrow.",
+                        action, ticker,
+                    )
+                    retried_as_day = True
+                    time_in_force = TimeInForce.DAY
+                    continue
+                # Log and continue — we record the analysis in Supabase either way
+                log.warning("Order failed for %s %s: %s", action, ticker, e)
                 return OrderResult(
                     submitted=False,
                     client_order_id=client_order_id,
-                    status=status or None,
-                    error=error,
+                    error=str(e),
                 )
-
-            order_type_label = "BRACKET" if use_bracket else "SIMPLE"
-            log.info(
-                "%s order submitted: %s %d %s → order_id=%s",
-                order_type_label,
-                action,
-                qty,
-                ticker,
-                order_id,
-            )
-            return OrderResult(
-                submitted=True,
-                order_id=order_id,
-                client_order_id=client_order_id,
-                status=status,
-            )
-
-        except APIError as e:
-            # Log and continue — we record the analysis in Supabase either way
-            log.warning("Order failed for %s %s: %s", action, ticker, e)
-            return OrderResult(
-                submitted=False,
-                client_order_id=client_order_id,
-                error=str(e),
-            )
 
     def place_bracket_orders(
         self,
@@ -719,4 +780,66 @@ class AlpacaTrader:
         except APIError as e:
             log.warning("Stop order failed for %s %s: %s", side, ticker, e)
             return OrderResult(submitted=False, error=str(e))
+
+    def close_position(self, ticker: str) -> OrderResult:
+        """Flatten the entire position in ``ticker`` with a market order.
+
+        Cancels any working orders for the symbol first — a leftover protective
+        stop on a now-flat position could later fire and open an *unwanted* new
+        position — then asks Alpaca to liquidate. Works for both longs and
+        shorts; Alpaca submits the offsetting side automatically. Used by the
+        time-based exit (see position_monitor).
+        """
+        if self._dry_run:
+            import uuid
+            mock_id = str(uuid.uuid4())
+            log.info("MOCK CLOSE (Dry Run): %s → order_id=%s", ticker, mock_id)
+            return OrderResult(submitted=True, order_id=mock_id, status="accepted")
+
+        try:
+            for o in self.get_open_orders(ticker):
+                if o.get("id"):
+                    self.cancel_order(o["id"])
+            order = self._client.close_position(ticker)
+            order_id = str(getattr(order, "id", "") or "")
+            status = _normalize_status(getattr(order, "status", None))
+            log.info("Close-position submitted: %s → order_id=%s", ticker, order_id)
+            return OrderResult(submitted=True, order_id=order_id, status=status)
+        except Exception as e:
+            log.warning("Close-position failed for %s: %s", ticker, e)
+            return OrderResult(submitted=False, error=str(e))
+
+    def get_position_entry_time(self, ticker: str, side: str = "long"):
+        """Best-effort UTC timestamp of the fill that opened the position.
+
+        Lets the time-based exit survive a process restart without resetting
+        every position's hold clock. Scans recently-closed orders for the
+        symbol and returns the most recent *entry-side* fill (BUY for a long,
+        SELL for a short). Returns None when it can't be determined, in which
+        case the caller falls back to when it first observed the position.
+        """
+        if self._dry_run:
+            return None
+        try:
+            from alpaca.trading.enums import QueryOrderStatus
+            from alpaca.trading.requests import GetOrdersRequest
+
+            entry_side = "buy" if str(side).lower() == "long" else "sell"
+            request = GetOrdersRequest(
+                status=QueryOrderStatus.CLOSED,
+                symbols=[ticker],
+                limit=50,
+            )
+            orders = self._client.get_orders(filter=request)
+            entry_fills = [
+                getattr(o, "filled_at", None)
+                for o in orders
+                if _enum_token(getattr(o, "side", None)) == entry_side
+                and getattr(o, "filled_at", None)
+            ]
+            if entry_fills:
+                return max(entry_fills)
+        except Exception as exc:
+            log.debug("Entry-time lookup failed for %s: %s", ticker, exc)
+        return None
 

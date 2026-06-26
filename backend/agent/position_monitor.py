@@ -42,6 +42,21 @@ STALE_ENTRY_MAX_AGE_SECONDS = 600  # 10 minutes
 _trailing_stop_orders: dict[str, str] = {}
 # Track the current stop price per symbol to avoid redundant API calls
 _current_stop_prices: dict[str, float] = {}
+# Time-based exit: when each open position's hold clock started (epoch seconds),
+# anchored to the real entry fill when Alpaca can tell us. Survives across loop
+# iterations so the age keeps accumulating.
+_position_first_seen: dict[str, float] = {}
+# Symbols for which a time-based close has already been submitted — avoids
+# firing a second close while the first is still settling.
+_closing_positions: set[str] = set()
+
+
+def _clear_tracking() -> None:
+    """Forget all per-symbol state (used when there are no open positions)."""
+    _trailing_stop_orders.clear()
+    _current_stop_prices.clear()
+    _position_first_seen.clear()
+    _closing_positions.clear()
 
 
 def _find_existing_stop_order(
@@ -185,6 +200,50 @@ def _manage_trailing_stop(
         )
 
 
+def _maybe_time_exit(trader, symbol: str, side: str) -> bool:
+    """Flatten the position if it has been held past the max-hold window.
+
+    News-driven entries earn their edge fast and then give it back: measured
+    returns peak within the first ~15-60 min and decay to a small loss by the
+    close (README Bug Log: BUG-2026-06-25-03). Holding to a fixed clock harvests
+    the early move instead of round-tripping it.
+
+    Returns True when the position is being closed (so the caller skips
+    trailing-stop work for it). The hold clock is anchored to the actual entry
+    fill when Alpaca reports one, falling back to first-observed time so a
+    process restart doesn't reset every position to zero.
+    """
+    # A close is already in flight — wait for it to settle, don't double-submit.
+    if symbol in _closing_positions:
+        return True
+
+    now = time.time()
+    entry_epoch = _position_first_seen.get(symbol)
+    if entry_epoch is None:
+        entry_time = trader.get_position_entry_time(symbol, side)
+        try:
+            entry_epoch = entry_time.timestamp() if entry_time is not None else now
+        except Exception:
+            entry_epoch = now
+        _position_first_seen[symbol] = entry_epoch
+
+    age = now - entry_epoch
+    if age < config.MAX_POSITION_HOLD_SECONDS:
+        return False
+
+    log.info(
+        "Time-based exit [%s/%s]: held %.0fs ≥ %ds limit — flattening to lock in "
+        "the early move before it decays.",
+        symbol, side, age, config.MAX_POSITION_HOLD_SECONDS,
+    )
+    result = trader.close_position(symbol)
+    if result.submitted:
+        _closing_positions.add(symbol)
+        return True
+    log.warning("Time-based exit [%s]: close failed: %s", symbol, result.error)
+    return False
+
+
 def _monitor_loop(trader, lock=None) -> None:
     """Main monitoring loop — runs forever in a daemon thread."""
     log.info(
@@ -199,8 +258,7 @@ def _monitor_loop(trader, lock=None) -> None:
             # Singleton guard: only the replica holding the leader lock manages
             # orders. Two replicas reaping/replacing the same stops would race.
             if lock is not None and not lock.acquire_or_renew():
-                _trailing_stop_orders.clear()
-                _current_stop_prices.clear()
+                _clear_tracking()
                 time.sleep(MONITOR_INTERVAL)
                 continue
             # Reap stale unfilled entry orders first — this must run even when
@@ -213,16 +271,19 @@ def _monitor_loop(trader, lock=None) -> None:
                 except Exception as exc:
                     log.warning("Stale-entry reap failed: %s", exc)
 
-            # Re-check config in case it was hot-reloaded
-            if not config.TRAILING_STOPS_ENABLED:
+            # Both position-management features below need the open positions.
+            # Re-check config each loop in case it was hot-reloaded.
+            trailing_on = config.TRAILING_STOPS_ENABLED
+            time_exit_on = config.TIME_BASED_EXIT_ENABLED
+            if not trailing_on and not time_exit_on:
+                _clear_tracking()
                 time.sleep(MONITOR_INTERVAL)
                 continue
 
             positions = trader.get_all_positions()
             if not positions:
                 # Clean up tracking for closed positions
-                _trailing_stop_orders.clear()
-                _current_stop_prices.clear()
+                _clear_tracking()
                 time.sleep(MONITOR_INTERVAL)
                 continue
 
@@ -243,20 +304,34 @@ def _monitor_loop(trader, lock=None) -> None:
                     continue
 
                 open_symbols.add(symbol)
-                _manage_trailing_stop(
-                    trader=trader,
-                    symbol=symbol,
-                    entry_price=entry_price,
-                    current_price=current_price,
-                    position_qty=int(qty_abs),
-                    side=side,
-                )
 
-            # Clean up tracking for positions that were closed
-            closed = set(_trailing_stop_orders.keys()) - open_symbols
+                # Time-based exit takes priority: if we're flattening the
+                # position, there's no point also re-trailing its stop.
+                if time_exit_on and _maybe_time_exit(trader, symbol, side):
+                    continue
+
+                if trailing_on:
+                    _manage_trailing_stop(
+                        trader=trader,
+                        symbol=symbol,
+                        entry_price=entry_price,
+                        current_price=current_price,
+                        position_qty=int(qty_abs),
+                        side=side,
+                    )
+
+            # Clean up tracking for positions that were closed (out of the open
+            # set entirely — both trailing state and time-exit clocks).
+            closed = (
+                set(_trailing_stop_orders)
+                | set(_position_first_seen)
+                | _closing_positions
+            ) - open_symbols
             for sym in closed:
                 _trailing_stop_orders.pop(sym, None)
                 _current_stop_prices.pop(sym, None)
+                _position_first_seen.pop(sym, None)
+                _closing_positions.discard(sym)
 
         except Exception as exc:
             log.error("Position monitor error: %s", exc, exc_info=True)
@@ -275,8 +350,15 @@ def start_position_monitor(trader, lock=None) -> Optional[threading.Thread]:
     only the replica holding it actually manages orders, making multi-replica
     deployments safe.
     """
-    if not config.TRAILING_STOPS_ENABLED and not REAP_STALE_ENTRIES:
-        log.info("Trailing stops + stale-entry reaper disabled — position monitor not started")
+    if (
+        not config.TRAILING_STOPS_ENABLED
+        and not config.TIME_BASED_EXIT_ENABLED
+        and not REAP_STALE_ENTRIES
+    ):
+        log.info(
+            "Trailing stops + time-based exit + stale-entry reaper all disabled "
+            "— position monitor not started"
+        )
         return None
 
     thread = threading.Thread(
