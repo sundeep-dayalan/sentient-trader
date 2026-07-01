@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -174,8 +174,34 @@ export default function PnLChart() {
     return () => clearInterval(id);
   }, [fetchPortfolio, period]);
 
-  const latest = summary?.equity ?? data.at(-1)?.equity ?? 0;
-  const start = data[0]?.equity ?? 0;
+  // Alpaca pads every day before the account was funded with equity=0. Plotting
+  // those produces a flat $0 shelf and a vertical jump to the funded value (most
+  // visible on 3M+). Drop the leading zero/non-positive points so the chart
+  // starts at inception.
+  const chartData = useMemo(() => {
+    const firstReal = data.findIndex((p) => (p.equity ?? 0) > 0);
+    return firstReal > 0 ? data.slice(firstReal) : data;
+  }, [data]);
+
+  // Recharts auto-ticks land at a finer spacing than the label resolution (hour
+  // for D, day for W), so neighbours format to the same string ("4 AM, 4 AM" /
+  // "Jun 25, Jun 25"). Emit one tick per distinct label — the first timestamp
+  // that produces it — so every label is unique; minTickGap still thins them.
+  const xTicks = useMemo(() => {
+    const seen = new Set<string>();
+    const ticks: number[] = [];
+    for (const point of chartData) {
+      const label = tickLabel(point.t, period);
+      if (!seen.has(label)) {
+        seen.add(label);
+        ticks.push(point.t);
+      }
+    }
+    return ticks;
+  }, [chartData, period]);
+
+  const latest = summary?.equity ?? chartData.at(-1)?.equity ?? 0;
+  const start = chartData[0]?.equity ?? 0;
   const pnl = summary?.profitLoss ?? latest - start;
   const isUp = pnl >= 0;
   const pct = summary?.profitLossPct ?? (start > 0 ? pnl / start : 0);
@@ -188,6 +214,7 @@ export default function PnLChart() {
       type="number"
       scale="time"
       domain={['dataMin', 'dataMax']}
+      ticks={xTicks}
       tickFormatter={(value) => tickLabel(Number(value), period)}
       tick={{ fill: 'var(--dashboard-subtle)', fontSize: 12 }}
       axisLine={false}
@@ -209,7 +236,9 @@ export default function PnLChart() {
     <CartesianGrid strokeDasharray="7 7" stroke="var(--dashboard-chart-grid)" vertical={false} />
   );
   const tooltip = <Tooltip content={<ChartTooltip />} />;
-  const liveDot = (props: LiveDotProps) => <LiveChartDot {...props} dataLength={data.length} />;
+  const liveDot = (props: LiveDotProps) => (
+    <LiveChartDot {...props} dataLength={chartData.length} />
+  );
 
   return (
     <section className="relative min-h-[360px] overflow-hidden rounded-2xl border border-[var(--dashboard-border)] bg-[var(--dashboard-chart)] p-5 shadow-[var(--dashboard-shadow)] md:min-h-[400px]">
@@ -338,15 +367,15 @@ export default function PnLChart() {
               <AppErrorNotice error={error} centered className="max-w-md" />
             </div>
           )}
-          {!loading && !error && data.length === 0 && (
+          {!loading && !error && chartData.length === 0 && (
             <div className="flex h-full items-center justify-center text-sm text-[var(--dashboard-muted)]">
               No portfolio history yet.
             </div>
           )}
-          {!loading && data.length > 0 && (
+          {!loading && chartData.length > 0 && (
             <ResponsiveContainer width="100%" height="100%">
               {chartType === 'line' ? (
-                <LineChart data={data} margin={chartMargin}>
+                <LineChart data={chartData} margin={chartMargin}>
                   {grid}
                   {xAxis}
                   {yAxis}
@@ -367,7 +396,7 @@ export default function PnLChart() {
                   />
                 </LineChart>
               ) : chartType === 'bar' ? (
-                <BarChart data={data} margin={chartMargin}>
+                <BarChart data={chartData} margin={chartMargin}>
                   {grid}
                   {xAxis}
                   {yAxis}
@@ -381,7 +410,7 @@ export default function PnLChart() {
                   />
                 </BarChart>
               ) : (
-                <AreaChart data={data} margin={chartMargin}>
+                <AreaChart data={chartData} margin={chartMargin}>
                   <defs>
                     <linearGradient id="paper-portfolio-fill" x1="0" y1="0" x2="0" y2="1">
                       <stop
