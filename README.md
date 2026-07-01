@@ -994,6 +994,21 @@ Sentient Trader is open for contributors who care about transparent AI systems, 
 > A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
 
 <details>
+<summary><b>BUG-2026-07-01-01 — Stale-entry reaper cancelled every short's protective legs, leaving all shorts naked</b></summary>
+
+<br/>
+
+**Identified:** 2026-07-01, investigating a −0.40% day (−$196) on the live paper account. Every long held its bracket take-profit/stop-loss legs (`qty_available = 0`), but **all ~21 short positions had `qty_available == qty` — zero protective orders**. The day's losses were concentrated in unprotected shorts (MSTR −$104 intraday, stock +10.9%, with no stop). Order history was the smoking gun: the LI short filled at `13:36:12` and its two `buy_to_close` protective legs were cancelled **13 seconds later** at `13:36:25`.
+
+**Impact:** `reap_stale_entry_orders()` cancels unfilled BUY orders older than 10 min to kill zombie GTC entries. Its filter was **side-only** (`side == "buy"`), resting on the comment *"the system only ever submits BUY orders to open positions."* That premise broke when protected shorts were added (BUG-2026-06-25-02): a short's protection is a pair of **`buy_to_close`** legs — also BUY side, unfilled, and inheriting the bracket parent's `created_at`. So as soon as a short's entry filled, the reaper saw its protective legs as stale entries and cancelled them, leaving the short naked with unbounded downside. (The reaper only started actually firing after BUG-2026-06-10-01 fixed its enum-prefix no-op, so the two fixes together surfaced this.) The trailing-stop net didn't save shorts either — a short's replacement stop is also a BUY order, and it only arms once the short is in profit.
+
+**Resolution:** Reap strictly by **`position_intent == "buy_to_open"`**, never by side alone.
+- `backend/agent/trader.py` — `get_open_orders()` now surfaces `position_intent`; `reap_stale_entry_orders()` skips any order that isn't a genuine `buy_to_open` entry (missing/empty intent → skip, failing safe toward keeping protection).
+- `backend/agent/test_order_execution_fixes.py` — a `buy_to_close` short leg survives the reaper, a stale `buy_to_open` entry is still cancelled, and an intent-less BUY is left alone.
+
+</details>
+
+<details>
 <summary><b>BUG-2026-06-25-03 — News-driven trades earned their edge in the first hour, then round-tripped it back to a loss by the close</b></summary>
 
 <br/>

@@ -655,6 +655,7 @@ class AlpacaTrader:
                     "symbol": str(getattr(o, "symbol", "") or ""),
                     "side": _enum_token(getattr(o, "side", None)),
                     "type": _enum_token(getattr(o, "type", None)),
+                    "position_intent": _enum_token(getattr(o, "position_intent", None)),
                     "qty": _floatish(getattr(o, "qty", None)) or 0.0,
                     "filled_qty": _floatish(getattr(o, "filled_qty", None)) or 0.0,
                     "created_at": getattr(o, "created_at", None),
@@ -695,15 +696,20 @@ class AlpacaTrader:
             return False
 
     def reap_stale_entry_orders(self, max_age_seconds: float) -> int:
-        """Cancel unfilled BUY entry orders older than ``max_age_seconds``.
+        """Cancel unfilled ``buy_to_open`` entry orders older than ``max_age_seconds``.
 
-        The system only ever submits BUY orders to *open* positions. An entry
-        that is still open with zero fills after a few minutes is a missed
-        catalyst — under GTC it would otherwise linger for ~90 days and could
-        fill weeks later on dead news. We only touch BUY orders with zero
-        fills, so protective SELL legs and trailing stops are never affected.
-        Cancelling a bracket parent cancels its child legs too, which is
-        correct since no position exists. (See README Bug Log: BUG-2026-06-08-02)
+        An entry that is still open with zero fills after a few minutes is a
+        missed catalyst — under GTC it would otherwise linger for ~90 days and
+        could fill weeks later on dead news. Cancelling a bracket parent cancels
+        its child legs too, which is correct since no position exists.
+        (See README Bug Log: BUG-2026-06-08-02)
+
+        We reap strictly by ``position_intent == "buy_to_open"``, never by side
+        alone. A *protected short* attaches its take-profit/stop-loss as
+        ``buy_to_close`` legs — which are also BUY side — so a side-only filter
+        cancels the short's protection and leaves it naked with unbounded
+        downside. When Alpaca doesn't report an intent we skip (fail safe toward
+        keeping protection). (See README Bug Log: BUG-2026-07-01-01)
 
         Returns the number of orders cancelled.
         """
@@ -715,6 +721,11 @@ class AlpacaTrader:
         reaped = 0
         for o in self.get_open_orders():
             if str(o.get("side", "")).lower() != "buy":
+                continue
+            # Only genuine entry orders may be reaped. buy_to_close legs protect
+            # an open short; cancelling them is exactly the bug we're guarding
+            # against. Missing/empty intent → skip rather than risk a naked short.
+            if o.get("position_intent") != "buy_to_open":
                 continue
             if (o.get("filled_qty") or 0.0) > 0:
                 continue  # partially filled — a position exists, leave it

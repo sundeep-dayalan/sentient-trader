@@ -185,3 +185,77 @@ def test_time_exit_holds_then_closes(monkeypatch):
     assert trader.closed == ["MU"]
 
     pm._clear_tracking()
+
+
+# ── Bug #4: reaper must not cancel a short's protective buy_to_close legs ──────
+
+
+class _FakeOpenOrder:
+    """Stand-in for an alpaca-py order returned by get_orders(OPEN)."""
+
+    def __init__(self, *, oid, side, position_intent, filled_qty="0",
+                 age_seconds=3600.0, symbol="MSTR") -> None:
+        from datetime import datetime, timedelta, timezone
+
+        self.id = oid
+        self.symbol = symbol
+        self.side = side
+        self.type = "stop"
+        self.position_intent = position_intent
+        self.qty = "10"
+        self.filled_qty = filled_qty
+        self.created_at = datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
+        self.stop_price = "100"
+        self.limit_price = None
+        self.status = "new"
+        self.order_class = "bracket"
+        self.legs = []
+
+
+class _ReapClient:
+    def __init__(self, open_orders) -> None:
+        self._open_orders = open_orders
+        self.cancelled: list[str] = []
+
+    def get_orders(self, filter=None):
+        return self._open_orders
+
+    def cancel_order_by_id(self, order_id):
+        self.cancelled.append(order_id)
+
+
+def test_reaper_skips_short_protective_buy_to_close_leg():
+    # An old, unfilled BUY leg that protects a short (buy_to_close) must survive.
+    protective = _FakeOpenOrder(oid="prot-1", side="buy",
+                                position_intent="buy_to_close", age_seconds=4000)
+    client = _ReapClient([protective])
+    trader = _make_trader(client)
+
+    reaped = trader.reap_stale_entry_orders(600)
+
+    assert reaped == 0
+    assert client.cancelled == []  # the short keeps its stop/take-profit
+
+
+def test_reaper_still_cancels_stale_buy_to_open_entry():
+    # A genuine zombie entry (buy_to_open, unfilled, old) is still reaped.
+    zombie = _FakeOpenOrder(oid="entry-1", side="buy",
+                            position_intent="buy_to_open", age_seconds=4000)
+    client = _ReapClient([zombie])
+    trader = _make_trader(client)
+
+    reaped = trader.reap_stale_entry_orders(600)
+
+    assert reaped == 1
+    assert client.cancelled == ["entry-1"]
+
+
+def test_reaper_skips_intentless_buy_order():
+    # No intent reported → err toward safety and leave it alone.
+    unknown = _FakeOpenOrder(oid="mystery-1", side="buy",
+                             position_intent=None, age_seconds=4000)
+    client = _ReapClient([unknown])
+    trader = _make_trader(client)
+
+    assert trader.reap_stale_entry_orders(600) == 0
+    assert client.cancelled == []
