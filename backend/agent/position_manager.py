@@ -401,6 +401,103 @@ def check_daily_loss_limit(
     )
 
 
+def equity_snapshot_consistent(
+    equity: Optional[float],
+    reference_equity: Optional[float],
+    *,
+    tolerance_pct: float = 0.05,
+) -> Optional[bool]:
+    """Cross-check the account snapshot's equity against an independent source.
+
+    The circuit breaker acts on a single ``get_account`` snapshot, and we have
+    observed that snapshot reporting equity ~23% below reality on a bad mark
+    (README Bug Log: BUG-2026-07-10-01) — tripping the daily-loss breaker on a
+    phantom crash. ``reference_equity`` comes from Alpaca's independently
+    computed portfolio-history series (see ``AlpacaTrader.get_risk_context``);
+    when the two disagree by more than ``tolerance_pct`` the snapshot cannot be
+    trusted and the caller should pause *entries* with a data-integrity reason
+    rather than a false loss figure.
+
+    Returns True (consistent), False (inconsistent), or None when either side
+    is unavailable — corroboration is an extra safety layer, so its absence
+    must not disable the primary breaker.
+    """
+    if (
+        equity is None
+        or reference_equity is None
+        or equity <= 0
+        or reference_equity <= 0
+    ):
+        return None
+    return abs(equity - reference_equity) / reference_equity <= tolerance_pct
+
+
+# ── Total (high-water-mark) Drawdown Circuit Breaker ─────────────────────────
+
+
+@dataclass(frozen=True)
+class DrawdownResult:
+    is_tripped: bool
+    drawdown_pct: float
+    reason: str
+
+
+def check_total_drawdown(
+    *,
+    equity: Optional[float],
+    high_water_mark: Optional[float],
+    max_total_drawdown_pct: float = 0.05,
+) -> DrawdownResult:
+    """Hard floor on cumulative loss from the account's high-water mark.
+
+    The daily-loss breaker is blind by construction to a slow bleed: a system
+    losing ~0.3% every day never touches a −2% *daily* limit yet compounds into
+    a large cumulative loss (measured: −$1,638 realized over 3 weeks with 11 of
+    14 days negative). This check trips once equity falls
+    ``max_total_drawdown_pct`` below the high-water mark and stays tripped until
+    equity recovers or the operator raises the limit — bounding the worst case
+    regardless of how gradually it is approached.
+
+    Missing data returns not-tripped: the caller (execution gate) applies its
+    own fail-closed policy for unavailable equity, and the HWM side is an
+    optional enhancement on top of the primary daily breaker.
+    """
+    if (
+        equity is None
+        or high_water_mark is None
+        or equity <= 0
+        or high_water_mark <= 0
+    ):
+        return DrawdownResult(
+            is_tripped=False,
+            drawdown_pct=0.0,
+            reason="Equity or high-water mark unavailable; drawdown breaker inactive.",
+        )
+
+    drawdown_pct = (equity - high_water_mark) / high_water_mark
+
+    if drawdown_pct < -max_total_drawdown_pct:
+        return DrawdownResult(
+            is_tripped=True,
+            drawdown_pct=round(drawdown_pct, 4),
+            reason=(
+                f"Total drawdown limit reached ({drawdown_pct:.2%} from the "
+                f"high-water mark vs -{max_total_drawdown_pct:.0%} limit). "
+                f"New entries are halted until equity recovers or the operator "
+                f"raises max_total_drawdown_pct."
+            ),
+        )
+
+    return DrawdownResult(
+        is_tripped=False,
+        drawdown_pct=round(drawdown_pct, 4),
+        reason=(
+            f"Drawdown from high-water mark: {drawdown_pct:+.2%} "
+            f"(limit: -{max_total_drawdown_pct:.0%})."
+        ),
+    )
+
+
 # ── Market Hours ─────────────────────────────────────────────────────────────
 
 

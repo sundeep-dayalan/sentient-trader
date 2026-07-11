@@ -527,6 +527,26 @@ def _make_fetch_context_node(trader: AlpacaTrader):
         position_context = trader.get_position_context(news.ticker)
         all_positions = trader.get_all_positions()
 
+        # Enrich the account snapshot with the independent risk references the
+        # execution gate needs (see decision_rules.build_execution_plan):
+        #   market_open        — cached market clock, drives the market-hours gate
+        #   reference_equity   — portfolio-history equity that corroborates the
+        #                        snapshot before the circuit breaker trusts it
+        #   equity_hwm         — 1-month high-water mark for the drawdown floor
+        # Both helpers are TTL-cached inside the trader (60s / 5min) so this
+        # adds no per-signal API cost beyond the cache refresh. Failures leave
+        # the fields absent and each gate applies its own documented fallback.
+        if account_context is not None:
+            try:
+                if config.MARKET_HOURS_AWARENESS_ENABLED:
+                    account_context["market_open"] = trader.is_market_open()
+                if config.CIRCUIT_BREAKER_ENABLED:
+                    risk_ctx = trader.get_risk_context() or {}
+                    account_context["reference_equity"] = risk_ctx.get("reference_equity")
+                    account_context["equity_hwm"] = risk_ctx.get("equity_hwm")
+            except Exception as risk_exc:
+                log.warning("Risk-context enrichment failed: %s", risk_exc)
+
         if data_client is None:
             return {
                 "market_context": {

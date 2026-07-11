@@ -38,6 +38,16 @@ MONITOR_INTERVAL = 60
 REAP_STALE_ENTRIES = True
 STALE_ENTRY_MAX_AGE_SECONDS = 600  # 10 minutes
 
+# Protective-stop reconciliation: every open position should have a working
+# stop on its protective side (longs a SELL stop, shorts a BUY stop). Positions
+# can end up naked through several paths — a bracket that fell back to a simple
+# order, a trailing replacement whose re-place failed, a close that cancelled
+# legs and then errored. This pass sweeps positions with free (unheld) shares
+# and re-arms a policy stop. (See README Bug Log: BUG-2026-07-10-05)
+RECONCILE_PROTECTIVE_STOPS = True
+RECONCILE_INTERVAL_SECONDS = 300  # sweep at most every 5 minutes
+_last_reconcile_epoch: float = 0.0
+
 # Track the current trailing stop order ID per symbol so we can cancel/replace
 _trailing_stop_orders: dict[str, str] = {}
 # Track the current stop price per symbol to avoid redundant API calls
@@ -193,11 +203,40 @@ def _manage_trailing_stop(
             trailing_result.reason,
         )
     else:
+        # The old stop is already cancelled — if we stop here the position is
+        # naked, and the stale `_current_stop_prices` entry would make every
+        # future loop conclude "new stop isn't better" and never re-place it
+        # (README Bug Log: BUG-2026-07-10-05). Restore protection at the
+        # previous stop level, and clear tracking either way so the next loop
+        # (and the reconciliation sweep) re-derives state from the broker
+        # instead of trusting a wedged cache.
         log.warning(
             "Trailing stop [%s]: failed to place new stop order: %s",
             symbol,
             result.error,
         )
+        _trailing_stop_orders.pop(symbol, None)
+        _current_stop_prices.pop(symbol, None)
+        if current_stop and current_stop > 0:
+            restore = trader.place_stop_order(
+                ticker=symbol,
+                quantity=position_qty,
+                stop_price=current_stop,
+                side=stop_side,
+            )
+            if restore.submitted and restore.order_id:
+                _trailing_stop_orders[symbol] = restore.order_id
+                _current_stop_prices[symbol] = current_stop
+                log.info(
+                    "Trailing stop [%s]: restored previous stop @ $%.2f after "
+                    "failed tighten", symbol, current_stop,
+                )
+            else:
+                log.critical(
+                    "POSITION MAY BE UNPROTECTED: %s lost its stop during a "
+                    "failed trailing replacement and restore also failed: %s",
+                    symbol, restore.error,
+                )
 
 
 def _maybe_time_exit(trader, symbol: str, side: str) -> bool:
@@ -244,6 +283,99 @@ def _maybe_time_exit(trader, symbol: str, side: str) -> bool:
     return False
 
 
+def _ensure_protective_stops(trader, positions: list[dict]) -> None:
+    """Re-arm a policy stop on any position whose shares aren't protected.
+
+    Trigger: ``qty_available`` — shares not held by *any* working order. A
+    position with free whole shares has, at minimum, that many shares exposed
+    with no stop (measured in prod: several longs and one short 11% underwater
+    sat naked for days). For each such symbol we double-check the broker's open
+    orders for an active protective stop, then place a GTC stop for the free
+    shares at the policy distance (``config.STOP_LOSS_PCT``) from the *less
+    punitive* of entry vs current price:
+
+      - in profit → entry-anchored (a normal initial stop);
+      - in loss   → current-anchored, i.e. the position gets the policy
+        distance of room from *here* rather than being force-liquidated the
+        instant the stop is placed. This bounds future downside without
+        retroactively realizing the existing loss in one shot — the
+        deliberately conservative choice for an automated repair.
+
+    Shares locked by working orders that are *not* stops (e.g. a lone
+    take-profit leg after its sibling stop died) can't be re-protected without
+    cancelling those orders, which is too destructive for automation — that
+    state is logged CRITICAL for the operator instead.
+    """
+    stop_pct = getattr(config, "STOP_LOSS_PCT", 0.03)
+    for pos in positions:
+        symbol = str(pos.get("symbol", ""))
+        side = str(pos.get("side", "")).lower()
+        qty = float(pos.get("qty", 0) or 0)
+        entry = float(pos.get("avg_entry_price") or 0)
+        current = float(pos.get("current_price") or 0)
+        if not symbol or side not in ("long", "short") or entry <= 0 or current <= 0:
+            continue
+        if symbol in _closing_positions:
+            continue
+
+        qty_available = pos.get("qty_available")
+        if qty_available is None:
+            continue  # broker didn't report it; nothing safe to infer
+        free_shares = int(abs(float(qty_available)))
+
+        # Confirm against the broker: is there genuinely no protective stop?
+        is_short = side == "short"
+        stop_side = "buy" if is_short else "sell"
+        try:
+            open_orders = trader.get_open_orders(symbol)
+        except Exception as exc:
+            log.warning("Stop reconciliation: open-orders fetch failed for %s: %s",
+                        symbol, exc)
+            continue
+        if _find_existing_stop_order(open_orders, symbol, stop_side):
+            continue  # a stop exists (it just doesn't hold all the shares)
+
+        if free_shares < 1:
+            # Every share is held by working orders, yet none of them is a
+            # protective stop (e.g. a lone take-profit leg whose sibling stop
+            # was cancelled). Cancelling the operator's live orders to make
+            # room for a stop is too destructive for automation — escalate.
+            if abs(qty) >= 1:
+                log.critical(
+                    "POSITION HAS NO STOP: %s [%s] shares are held by working "
+                    "orders but none is a protective stop — operator action "
+                    "required (likely a lone take-profit leg).", symbol, side,
+                )
+            continue
+
+        if is_short:
+            anchor = max(entry, current)
+            stop_price = round(anchor * (1 + stop_pct), 2)
+        else:
+            anchor = min(entry, current)
+            stop_price = round(anchor * (1 - stop_pct), 2)
+
+        log.warning(
+            "Stop reconciliation [%s/%s]: %d unprotected share(s) "
+            "(entry=$%.2f current=$%.2f) — placing %s stop @ $%.2f",
+            symbol, side, free_shares, entry, current, stop_side.upper(), stop_price,
+        )
+        result = trader.place_stop_order(
+            ticker=symbol,
+            quantity=free_shares,
+            stop_price=stop_price,
+            side=stop_side,
+        )
+        if result.submitted and result.order_id:
+            _trailing_stop_orders[symbol] = result.order_id
+            _current_stop_prices[symbol] = stop_price
+        else:
+            log.critical(
+                "POSITION MAY BE UNPROTECTED: reconciliation could not place a "
+                "stop for %s (%d shares): %s", symbol, free_shares, result.error,
+            )
+
+
 def _monitor_loop(trader, lock=None) -> None:
     """Main monitoring loop — runs forever in a daemon thread."""
     log.info(
@@ -271,11 +403,14 @@ def _monitor_loop(trader, lock=None) -> None:
                 except Exception as exc:
                     log.warning("Stale-entry reap failed: %s", exc)
 
-            # Both position-management features below need the open positions.
+            # The position-management features below need the open positions.
             # Re-check config each loop in case it was hot-reloaded.
             trailing_on = config.TRAILING_STOPS_ENABLED
             time_exit_on = config.TIME_BASED_EXIT_ENABLED
-            if not trailing_on and not time_exit_on:
+            reconcile_on = RECONCILE_PROTECTIVE_STOPS and (
+                config.BRACKET_ORDERS_ENABLED or trailing_on
+            )
+            if not trailing_on and not time_exit_on and not reconcile_on:
                 _clear_tracking()
                 time.sleep(MONITOR_INTERVAL)
                 continue
@@ -286,6 +421,19 @@ def _monitor_loop(trader, lock=None) -> None:
                 _clear_tracking()
                 time.sleep(MONITOR_INTERVAL)
                 continue
+
+            # Time-based exits only fire while the market is verifiably open:
+            # an off-hours close cancels the position's protective legs and
+            # then has its market liquidation rejected, leaving the position
+            # naked overnight. close_position() enforces the same invariant
+            # internally; checking here just avoids churning against it.
+            # (README Bug Log: BUG-2026-07-10-03)
+            market_open = None
+            if time_exit_on:
+                try:
+                    market_open = trader.is_market_open()
+                except Exception:
+                    market_open = None
 
             open_symbols = set()
             for pos in positions:
@@ -307,7 +455,11 @@ def _monitor_loop(trader, lock=None) -> None:
 
                 # Time-based exit takes priority: if we're flattening the
                 # position, there's no point also re-trailing its stop.
-                if time_exit_on and _maybe_time_exit(trader, symbol, side):
+                if (
+                    time_exit_on
+                    and market_open is True
+                    and _maybe_time_exit(trader, symbol, side)
+                ):
                     continue
 
                 if trailing_on:
@@ -319,6 +471,21 @@ def _monitor_loop(trader, lock=None) -> None:
                         position_qty=int(qty_abs),
                         side=side,
                     )
+
+            # Protective-stop reconciliation sweep (throttled). Runs after the
+            # exit/trailing passes so it sees their results, and regardless of
+            # market hours — a GTC stop placed off-hours queues and protects
+            # the position from the next open.
+            global _last_reconcile_epoch
+            if (
+                reconcile_on
+                and time.time() - _last_reconcile_epoch >= RECONCILE_INTERVAL_SECONDS
+            ):
+                _last_reconcile_epoch = time.time()
+                try:
+                    _ensure_protective_stops(trader, positions)
+                except Exception as exc:
+                    log.warning("Protective-stop reconciliation failed: %s", exc)
 
             # Clean up tracking for positions that were closed (out of the open
             # set entirely — both trailing state and time-exit clocks).

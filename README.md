@@ -994,6 +994,89 @@ Sentient Trader is open for contributors who care about transparent AI systems, 
 > A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
 
 <details>
+<summary><b>BUG-2026-07-10-05 — Positions that lost their protective stop were never re-protected — several longs and an 11%-underwater short sat naked for days</b></summary>
+
+<br/>
+
+**Identified:** 2026-07-10, during a full-account audit of the consistent-loss investigation. Several open positions had `qty_available == qty` — no working order of any kind held their shares, i.e. **no stop-loss existed at all**. Worst case: a MAGS short 11.4% underwater (−$41 unrealized) with unbounded upside risk and nothing protecting it.
+
+**Impact:** Multiple code paths could strip or skip a position's protection, and *nothing ever put it back*: (1) `place_order()`'s bracket-ineligibility fallback submits a **plain unprotected order** with a comment promising "the position monitor attaches a stop afterwards" — but no such attach logic existed anywhere; (2) the trailing-stop manager **cancels the old stop first**, and if placing the replacement failed the position went naked *and* the stale `_current_stop_prices` cache made every later loop conclude "new stop isn't better" and never retry; (3) a failed close after leg-cancellation (see BUG-2026-07-10-03). The system's entire loss-bounding premise ("every position is protected by a stop") was silently false for any position that hit one of these paths.
+
+**Resolution:** Protection is now *reconciled*, not assumed.
+- `backend/agent/position_monitor.py` — new `_ensure_protective_stops()` sweep (every 5 min, gated on `bracket_orders`/`trailing_stops`): any position with free (unheld) whole shares and no working protective stop gets a GTC policy stop re-armed. The stop anchors to the **less punitive** of entry vs current price — in-profit positions get a normal entry-anchored stop, underwater positions get the policy distance from *here* (bounding future downside without force-realizing the whole existing loss in one shot). Shares locked by non-stop orders (e.g. a lone take-profit leg) are never cancelled by automation — that state logs CRITICAL for the operator.
+- `backend/agent/position_monitor.py` — a failed trailing-stop replacement now immediately re-places the previous stop and clears the wedged tracking cache either way, so the next loop re-derives state from the broker instead of trusting a stale cache.
+- `backend/agent/trader.py` — `get_all_positions()` now surfaces `qty_available`, the field that makes "unprotected shares" detectable in the first place.
+- `backend/agent/test_risk_hardening.py` — naked long gets a sell stop, underwater naked short gets a buy stop with room from current price, protected positions are untouched, and locked-but-stopless positions are escalated, never auto-cancelled.
+
+</details>
+
+<details>
+<summary><b>BUG-2026-07-10-04 — <code>market_hours_awareness</code> was loaded from config but enforced nowhere — after-hours signals produced broker rejections or overnight-queued entries on dead news</b></summary>
+
+<br/>
+
+**Identified:** 2026-07-10. `MARKET_HOURS_AWARENESS_ENABLED` (set `true` in the live Supabase config) was read by `config.py` and echoed by observability — and used by **zero** decision or execution code paths. Order history showed the consequences: 19 rejections for *"ioc orders are only accepted during market hours"*, and after-hours bracket entries (GTC) accepted by Alpaca and **filled at the next open**, 10–17 hours after the headline.
+
+**Impact:** For a news-driven system whose own measurements say the edge peaks within ~15–60 minutes (BUG-2026-06-25-03), an entry queued overnight executes on fully stale news — pure cost, no edge. The IOC path failed "safely" but noisily, by broker rejection rather than by design; the GTC bracket path didn't fail at all and actively traded dead catalysts.
+
+**Resolution:** The flag now does what its name says.
+- `backend/agent/trader.py` — new `get_market_clock()` / `is_market_open()` (60s TTL cache) off Alpaca's clock endpoint.
+- `backend/agent/analyst.py` — `fetch_context` attaches `market_open` to the account snapshot.
+- `backend/agent/decision_rules.py` — `build_execution_plan` blocks **risk-increasing** orders when the flag is on and the market is verifiably closed. When the clock is *unavailable* the gate stays permissive by design: the broker's own off-hours rejection is a safe backstop, whereas failing closed on a flaky clock endpoint would halt trading entirely.
+- `backend/agent/test_risk_hardening.py` — closed market blocks a BUY, unknown clock does not, and a de-risking SELL is never blocked.
+
+</details>
+
+<details>
+<summary><b>BUG-2026-07-10-03 — Off-hours time-based exit cancelled a position's protective legs, then had its liquidation rejected — leaving the position naked overnight</b></summary>
+
+<br/>
+
+**Identified:** 2026-07-10, tracing why time-based exit (1h max hold) coexisted with positions held for days and why some of them had no working orders (`qty_available == qty`).
+
+**Impact:** `close_position()` cancels all working orders for the symbol first (Alpaca can't liquidate shares held by open orders), *then* submits a market liquidation. Outside regular hours the cancels succeed but the market order is rejected — so the position kept its full size and **lost its stop-loss and take-profit**. The monitor retried every 60s all night, re-failing the same way. Any adverse gap at the next open hit a position with zero protection. The same cancel-then-fail hazard existed for *any* close failure, not just off-hours ones.
+
+**Resolution:** A close may never leave a position less protected than it found it.
+- `backend/agent/trader.py` — `close_position()` refuses up front (leaving every working order intact) unless the market is **verifiably open**; and it snapshots the protective stops it cancels so that, if the liquidation still fails, `_restore_protective_stops()` re-places them at their previous prices (failure to restore logs CRITICAL, and the BUG-2026-07-10-05 reconciliation sweep is the second line of defence).
+- `backend/agent/position_monitor.py` — the monitor skips time-exit work entirely when the market isn't open, instead of churning against the guard.
+- `backend/agent/test_risk_hardening.py` — a closed-market close cancels nothing; a failed liquidation restores the cancelled stop at its old price.
+
+</details>
+
+<details>
+<summary><b>BUG-2026-07-10-02 — Capital-preservation gates blocked <em>de-risking</em> SELLs — a tripped breaker locked losing longs in place</b></summary>
+
+<br/>
+
+**Identified:** 2026-07-10, reviewing the circuit-breaker call site in `build_execution_plan` while fixing BUG-2026-07-10-01.
+
+**Impact:** Breaker trips (and the new market-hours block) were appended to `blocked_reasons` unconditionally — for **every** action, including a SELL that reduces an existing long. On a real −2% day the system would pause new entries (correct) *and also refuse to exit losing positions* (exactly backwards): the risk machinery designed to preserve capital actively prevented de-risking. All day on 2026-07-07 — the false breaker-trip day — SELL-to-reduce signals were rejected with "Daily loss limit reached".
+
+**Resolution:** Gates now classify the order first: `risk_increasing = BUY or (SELL with no long position)`. Circuit breakers (daily, drawdown, data-integrity) and the market-hours gate apply **only** to risk-increasing orders; a reduce-long SELL passes through even in the worst state (breaker tripped + equity data missing + market closed).
+- `backend/agent/decision_rules.py` — `risk_increasing` predicate; all capital-preservation gates scoped to it.
+- `backend/agent/test_risk_hardening.py` — a de-risking SELL clears the gate with the breaker tripped, data missing, and the market closed simultaneously.
+
+</details>
+
+<details>
+<summary><b>BUG-2026-07-10-01 — Circuit breaker trusted a single unvalidated account snapshot (tripped at a phantom −22.7% on a −0.3% day) and was structurally blind to the slow bleed</b></summary>
+
+<br/>
+
+**Identified:** 2026-07-10, investigating the account's consistent −$115/day loss. On 2026-07-07 every gate log showed *"Daily loss limit reached (−22.5…−22.8% vs −2% limit)"* — while Alpaca's own portfolio-history showed a maximum intraday drawdown of **−0.3%** that day. The breaker had been fed a corrupted `get_account` snapshot (equity ≈ $38k vs real ≈ $49.3k, consistent with a bad position mark) and dutifully acted on it. Meanwhile on the genuinely losing days (−0.2…−0.5%/day, 11 of 14 days negative, −$1,638 realized) the breaker never fired once — a slow bleed can't touch a *daily* −2% limit.
+
+**Impact:** The system's only account-level safety mechanism was unreliable in both directions: it tripped on phantom data it had no way to sanity-check, reported a false loss figure to the audit trail, silently **deactivated** whenever its inputs were missing (`equity=None` → "breaker inactive"), and had no concept of cumulative drawdown — the failure mode the account was actually experiencing.
+
+**Resolution:** Three layers, all under the existing `circuit_breaker` config gate.
+- `backend/agent/trader.py` — new `get_risk_context()` (5-min TTL cache) pulls **independently computed** equity from Alpaca's portfolio-history endpoint: the latest intraday point (corroboration reference) and the 1-month equity maximum (high-water mark).
+- `backend/agent/position_manager.py` — new pure checks: `equity_snapshot_consistent()` (snapshot vs reference within 5%) and `check_total_drawdown()` (equity vs HWM, `max_total_drawdown_pct`, default −5%). The HWM is the rolling 1-month maximum, so the floor self-heals over time instead of pinning to an all-time high forever.
+- `backend/agent/decision_rules.py` — the execution gate now: (1) pauses entries with an accurate *data-integrity* reason when snapshot and reference disagree (can't trust our own eyes → don't open new risk — the safe direction either way); (2) **fails closed** for risk-increasing orders when equity data is missing or the breaker machinery itself errors — a breaker that deactivates when its inputs vanish is not a breaker; (3) checks the total-drawdown floor alongside the daily limit, so the slow bleed a per-day limit is blind to now has a hard stop.
+- `backend/agent/config.py` — new `max_total_drawdown_pct` knob (Supabase `enhanced_trading`, default 0.05).
+- `backend/agent/test_risk_hardening.py` — the observed Jul-7 corruption blocks with a data-integrity reason (not a phantom percentage), a corroborated real −3% day still trips the daily limit, missing equity fails closed, and a −0.4% day at −6% cumulative trips the drawdown floor.
+
+</details>
+
+<details>
 <summary><b>BUG-2026-07-01-01 — Stale-entry reaper cancelled every short's protective legs, leaving all shorts naked</b></summary>
 
 <br/>

@@ -162,6 +162,11 @@ MAX_SINGLE_TICKER_PCT: float = 0.10  # Max 10% per ticker
 # Daily loss circuit breaker
 CIRCUIT_BREAKER_ENABLED: bool = False
 MAX_DAILY_LOSS_PCT: float = 0.02  # Pause trading after 2% daily loss
+# Total (high-water-mark) drawdown floor, checked alongside the daily breaker.
+# The daily limit can't see a slow bleed (-0.3%/day never trips -2%/day); this
+# halts new entries once cumulative loss from the account's 1-month high-water
+# mark exceeds the limit. Same CIRCUIT_BREAKER_ENABLED gate.
+MAX_TOTAL_DRAWDOWN_PCT: float = 0.05
 
 # Technical indicators in LLM debate context
 TECHNICAL_INDICATORS_ENABLED: bool = False
@@ -252,7 +257,7 @@ def reload_from_supabase() -> bool:
     global TRAILING_STOPS_ENABLED, TRAILING_STOP_PCT, TRAILING_STOP_ACTIVATION_PCT
     global TIME_BASED_EXIT_ENABLED, MAX_POSITION_HOLD_SECONDS
     global CONCENTRATION_LIMITS_ENABLED, MAX_SINGLE_TICKER_PCT
-    global CIRCUIT_BREAKER_ENABLED, MAX_DAILY_LOSS_PCT
+    global CIRCUIT_BREAKER_ENABLED, MAX_DAILY_LOSS_PCT, MAX_TOTAL_DRAWDOWN_PCT
     global TECHNICAL_INDICATORS_ENABLED, SIGNAL_MOMENTUM_ENABLED
     global SOURCE_CREDIBILITY_ENABLED
     global FEEDBACK_LOOP_ENABLED, FEEDBACK_LOOP_LOOKBACK_DAYS
@@ -320,6 +325,7 @@ def reload_from_supabase() -> bool:
     MAX_SINGLE_TICKER_PCT = _safe_float(enhanced.get("max_single_ticker_pct"), 0.10)
     CIRCUIT_BREAKER_ENABLED = _safe_bool(enhanced.get("circuit_breaker"), False)
     MAX_DAILY_LOSS_PCT = _safe_float(enhanced.get("max_daily_loss_pct"), 0.02)
+    MAX_TOTAL_DRAWDOWN_PCT = _safe_float(enhanced.get("max_total_drawdown_pct"), 0.05)
     TECHNICAL_INDICATORS_ENABLED = _safe_bool(enhanced.get("technical_indicators"), False)
     SIGNAL_MOMENTUM_ENABLED = _safe_bool(enhanced.get("signal_momentum"), False)
     SOURCE_CREDIBILITY_ENABLED = _safe_bool(enhanced.get("source_credibility"), False)

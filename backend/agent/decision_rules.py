@@ -486,27 +486,121 @@ def build_execution_plan(
             "Live price unavailable; refusing blind market order."
         )
 
-    # Circuit breaker check (config-gated)
+    # Capital-preservation gates below (circuit breakers, market-hours) apply
+    # ONLY to orders that *increase* risk. A SELL that reduces an existing long
+    # is de-risking — blocking it during a drawdown is exactly backwards, and
+    # the old behavior did just that (README Bug Log: BUG-2026-07-10-02).
+    risk_increasing = action == "BUY" or (action == "SELL" and position_qty <= 0)
+
+    # Market-hours gate (config-gated). `market_hours_awareness` was loaded from
+    # Supabase but never enforced anywhere (README Bug Log: BUG-2026-07-10-04):
+    # after-hours entries were either rejected by the broker (19 IOC rejections
+    # observed) or — worse — queued as GTC brackets and filled at the next open
+    # on hours-old news, which measured returns show is when the edge is gone.
+    # `market_open` is attached to the account snapshot by fetch_context; when
+    # it is unavailable (None) we stay permissive because the broker's own
+    # rejection of off-hours orders is a safe backstop, whereas failing closed
+    # on a flaky clock endpoint would halt trading entirely.
     try:
         import config as _cfg
-        if getattr(_cfg, "CIRCUIT_BREAKER_ENABLED", False):
-            from position_manager import check_daily_loss_limit
-            equity = _floatish(account.get("equity"))
-            last_equity = _floatish(account.get("last_equity"))
-            breaker = check_daily_loss_limit(
-                equity=equity,
-                last_equity=last_equity,
-                max_daily_loss_pct=getattr(_cfg, "MAX_DAILY_LOSS_PCT", 0.02),
+        if (
+            getattr(_cfg, "MARKET_HOURS_AWARENESS_ENABLED", False)
+            and risk_increasing
+            and account.get("market_open") is False
+        ):
+            plan["blocked_reasons"].append(
+                "Market is closed; new entries are only sent during regular "
+                "trading hours (an entry queued overnight executes on stale news)."
             )
-            if breaker.is_tripped:
-                plan["blocked_reasons"].append(breaker.reason)
-                plan["circuit_breaker"] = {
-                    "tripped": True,
-                    "daily_pnl_pct": breaker.daily_pnl_pct,
-                    "reason": breaker.reason,
-                }
     except Exception:
         pass
+
+    # Circuit breaker check (config-gated). Policy decisions, in order:
+    #   1. The check runs on the account snapshot's equity/last_equity, but the
+    #      snapshot is CROSS-CHECKED against Alpaca's independently computed
+    #      portfolio-history equity — a corrupted snapshot once reported -22.7%
+    #      on a -0.3% day (README Bug Log: BUG-2026-07-10-01). An inconsistent
+    #      snapshot still pauses entries (we can't trust our own eyes → don't
+    #      open new risk) but with an accurate data-integrity reason.
+    #   2. Missing equity data FAILS CLOSED for risk-increasing orders: a
+    #      breaker that silently deactivates when its inputs vanish is not a
+    #      breaker. De-risking orders are never touched.
+    #   3. Alongside the daily limit, a total-drawdown floor vs the 1-month
+    #      high-water mark catches the slow bleed a per-day limit is blind to.
+    _breaker_enabled = False
+    try:
+        import config as _cfg
+        _breaker_enabled = bool(getattr(_cfg, "CIRCUIT_BREAKER_ENABLED", False))
+    except Exception:
+        pass
+    if _breaker_enabled and risk_increasing:
+        try:
+            import config as _cfg
+            from position_manager import (
+                check_daily_loss_limit,
+                check_total_drawdown,
+                equity_snapshot_consistent,
+            )
+            equity = _floatish(account.get("equity"))
+            last_equity = _floatish(account.get("last_equity"))
+            reference_equity = _floatish(account.get("reference_equity"))
+            equity_hwm = _floatish(account.get("equity_hwm"))
+            snapshot_ok = equity_snapshot_consistent(equity, reference_equity)
+
+            if equity is None or last_equity is None or last_equity <= 0:
+                reason = (
+                    "Account equity unavailable; circuit breaker cannot verify "
+                    "the daily loss — failing closed (no new entries)."
+                )
+                plan["blocked_reasons"].append(reason)
+                plan["circuit_breaker"] = {"tripped": True, "reason": reason,
+                                           "mode": "fail_closed_no_data"}
+            elif snapshot_ok is False:
+                reason = (
+                    f"Account snapshot inconsistent (equity=${equity:,.2f} vs "
+                    f"broker portfolio history=${reference_equity:,.2f}); pausing "
+                    f"new entries until the data sources agree."
+                )
+                plan["blocked_reasons"].append(reason)
+                plan["circuit_breaker"] = {"tripped": True, "reason": reason,
+                                           "mode": "snapshot_inconsistent",
+                                           "equity": equity,
+                                           "reference_equity": reference_equity}
+            else:
+                breaker = check_daily_loss_limit(
+                    equity=equity,
+                    last_equity=last_equity,
+                    max_daily_loss_pct=getattr(_cfg, "MAX_DAILY_LOSS_PCT", 0.02),
+                )
+                if breaker.is_tripped:
+                    plan["blocked_reasons"].append(breaker.reason)
+                    plan["circuit_breaker"] = {
+                        "tripped": True,
+                        "daily_pnl_pct": breaker.daily_pnl_pct,
+                        "reason": breaker.reason,
+                        "mode": "daily_loss",
+                    }
+                drawdown = check_total_drawdown(
+                    equity=equity,
+                    high_water_mark=equity_hwm,
+                    max_total_drawdown_pct=getattr(_cfg, "MAX_TOTAL_DRAWDOWN_PCT", 0.05),
+                )
+                if drawdown.is_tripped:
+                    plan["blocked_reasons"].append(drawdown.reason)
+                    plan["drawdown_breaker"] = {
+                        "tripped": True,
+                        "drawdown_pct": drawdown.drawdown_pct,
+                        "reason": drawdown.reason,
+                        "high_water_mark": equity_hwm,
+                    }
+        except Exception as exc:  # breaker machinery itself failed → fail closed
+            reason = (
+                f"Circuit breaker check errored ({type(exc).__name__}); "
+                f"failing closed (no new entries)."
+            )
+            plan["blocked_reasons"].append(reason)
+            plan["circuit_breaker"] = {"tripped": True, "reason": reason,
+                                       "mode": "fail_closed_error"}
 
     # Dynamic position sizing (config-gated)
     effective_qty = int(order_qty)

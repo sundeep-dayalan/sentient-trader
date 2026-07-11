@@ -15,6 +15,8 @@ Design choices:
 
 import logging
 import os
+import threading
+import time as _time
 from dataclasses import asdict, dataclass
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -126,6 +128,13 @@ class AlpacaTrader:
     Always operates in paper=True mode — no real money can ever be at risk.
     """
 
+    # Class-level fallbacks for the TTL caches so instances constructed via
+    # ``__new__`` (the offline-test pattern in this repo) still work; __init__
+    # replaces them with per-instance state.
+    _cache_lock = threading.Lock()
+    _clock_cache: tuple[float, Optional[dict]] = (0.0, None)
+    _risk_context_cache: tuple[float, Optional[dict]] = (0.0, None)
+
     def __init__(self) -> None:
         self._dry_run = os.environ.get("MOCK_ALPACA", "false").lower() == "true"
         if TradingClient is None:
@@ -139,6 +148,11 @@ class AlpacaTrader:
         )
         # Lazy data client for last-mile bracket-price sanity checks.
         self._data_client = None
+        # Small TTL caches for risk plumbing. Guarded by a lock because the
+        # position monitor thread and the consumer thread share this trader.
+        self._cache_lock = threading.Lock()
+        self._clock_cache: tuple[float, Optional[dict]] = (0.0, None)
+        self._risk_context_cache: tuple[float, Optional[dict]] = (0.0, None)
         if self._dry_run:
             log.info("Alpaca trader initialized in MOCK mode (Dry run)")
         else:
@@ -532,6 +546,10 @@ class AlpacaTrader:
                 {
                     "symbol": str(getattr(p, "symbol", "") or ""),
                     "qty": _floatish(getattr(p, "qty", None)) or 0.0,
+                    # Shares not tied up in working orders. qty == qty_available
+                    # means NO order (bracket leg, stop, anything) holds these
+                    # shares — i.e. the position is unprotected.
+                    "qty_available": _floatish(getattr(p, "qty_available", None)),
                     "side": str(getattr(p, "side", "") or "long"),
                     "market_value": _floatish(getattr(p, "market_value", None)),
                     "cost_basis": _floatish(getattr(p, "cost_basis", None)),
@@ -583,6 +601,120 @@ class AlpacaTrader:
         except Exception as exc:
             log.warning("Could not fetch Alpaca account context: %s", exc)
             return None
+
+    # ── Market clock ──────────────────────────────────────────────────────────
+
+    _CLOCK_CACHE_TTL_SECONDS = 60.0
+
+    def get_market_clock(self) -> Optional[dict]:
+        """Cached Alpaca market clock. Returns None when the clock can't be read.
+
+        Cached for 60s: the clock backs per-signal gating and the position
+        monitor loop, and neither needs sub-minute precision. Returning None on
+        failure (instead of guessing) lets each caller pick its own fail
+        direction — the entry gate stays permissive (the broker's own
+        rejections are the backstop) while ``close_position`` refuses to strip
+        protection it can't replace.
+        """
+        now = _time.time()
+        with self._cache_lock:
+            fetched_at, cached = self._clock_cache
+            if cached is not None and now - fetched_at < self._CLOCK_CACHE_TTL_SECONDS:
+                return cached
+        try:
+            clock = self._client.get_clock()
+            result = {
+                "is_open": bool(getattr(clock, "is_open", False)),
+                "next_open": getattr(clock, "next_open", None),
+                "next_close": getattr(clock, "next_close", None),
+            }
+        except Exception as exc:
+            log.warning("Could not fetch Alpaca market clock: %s", exc)
+            return None
+        with self._cache_lock:
+            self._clock_cache = (now, result)
+        return result
+
+    def is_market_open(self) -> Optional[bool]:
+        """True/False from the cached market clock; None when unknown."""
+        clock = self.get_market_clock()
+        return None if clock is None else clock["is_open"]
+
+    # ── Independent equity reference (circuit-breaker corroboration) ─────────
+
+    _RISK_CONTEXT_CACHE_TTL_SECONDS = 300.0
+
+    def get_risk_context(self) -> Optional[dict]:
+        """Equity figures from Alpaca's *portfolio-history* endpoint.
+
+        The account snapshot (``get_account_context``) is a single point-in-time
+        read whose ``equity`` can be corrupted by a bad mark — we observed it
+        reporting a −22.7% "daily loss" while the broker's own history showed
+        −0.3% (README Bug Log: BUG-2026-07-10-01). Portfolio history is an
+        independently computed series, so it corroborates (or refutes) the
+        snapshot before the circuit breaker acts on it, and its 1-month maximum
+        gives the high-water mark for the total-drawdown breaker.
+
+        Returns ``{"reference_equity", "equity_hwm", "as_of_epoch"}`` with any
+        member possibly None, or None entirely on failure. Cached for 5 minutes —
+        risk references don't need tick precision, and this keeps the two extra
+        REST calls off the per-signal hot path.
+        """
+        now = _time.time()
+        with self._cache_lock:
+            fetched_at, cached = self._risk_context_cache
+            if cached is not None and now - fetched_at < self._RISK_CONTEXT_CACHE_TTL_SECONDS:
+                return cached
+
+        reference_equity: Optional[float] = None
+        equity_hwm: Optional[float] = None
+        try:
+            # 1-month daily series → high-water mark. Includes the base_value so
+            # the HWM can't be *below* where the account started the window.
+            daily = self._client.get(
+                "/account/portfolio/history",
+                data={"period": "1M", "timeframe": "1D"},
+            )
+            equities = [
+                _floatish(v) for v in (daily or {}).get("equity") or []
+            ]
+            positives = [v for v in equities if v is not None and v > 0]
+            base_value = _floatish((daily or {}).get("base_value"))
+            if base_value is not None and base_value > 0:
+                positives.append(base_value)
+            if positives:
+                equity_hwm = max(positives)
+        except Exception as exc:
+            log.warning("Portfolio-history HWM fetch failed: %s", exc)
+
+        try:
+            # Latest intraday point → independent reference for today's equity.
+            intraday = self._client.get(
+                "/account/portfolio/history",
+                data={
+                    "period": "1D",
+                    "timeframe": "15Min",
+                    "intraday_reporting": "extended_hours",
+                },
+            )
+            for v in reversed((intraday or {}).get("equity") or []):
+                value = _floatish(v)
+                if value is not None and value > 0:
+                    reference_equity = value
+                    break
+        except Exception as exc:
+            log.warning("Portfolio-history intraday fetch failed: %s", exc)
+
+        if reference_equity is None and equity_hwm is None:
+            return None
+        result = {
+            "reference_equity": reference_equity,
+            "equity_hwm": equity_hwm,
+            "as_of_epoch": now,
+        }
+        with self._cache_lock:
+            self._risk_context_cache = (now, result)
+        return result
 
     def get_position_context(self, ticker: str) -> dict:
         """Return the current ticker position, or an explicit flat position."""
@@ -800,6 +932,18 @@ class AlpacaTrader:
         position — then asks Alpaca to liquidate. Works for both longs and
         shorts; Alpaca submits the offsetting side automatically. Used by the
         time-based exit (see position_monitor).
+
+        Two hazards guarded here (README Bug Log: BUG-2026-07-10-03):
+
+        1. *Market closed*: the cancel step succeeds 24/7 but the market-order
+           liquidation is rejected outside regular hours — which used to strip a
+           position's protective stops and then fail to flatten it, leaving it
+           naked overnight. So when the market isn't verifiably open, we refuse
+           up front and leave every working order intact; the caller simply
+           retries next cycle.
+        2. *Close fails after cancel*: any protective stop we cancelled is
+           re-placed at its previous price so the position is never left less
+           protected than we found it.
         """
         if self._dry_run:
             import uuid
@@ -807,10 +951,33 @@ class AlpacaTrader:
             log.info("MOCK CLOSE (Dry Run): %s → order_id=%s", ticker, mock_id)
             return OrderResult(submitted=True, order_id=mock_id, status="accepted")
 
+        if self.is_market_open() is not True:
+            return OrderResult(
+                submitted=False,
+                error=(
+                    "Market is not verifiably open; deferring close so protective "
+                    "orders are not cancelled ahead of a liquidation that would "
+                    "be rejected."
+                ),
+            )
+
+        # Snapshot the protective stops we're about to cancel so they can be
+        # restored if the liquidation itself fails.
+        cancelled_stops: list[dict] = []
         try:
             for o in self.get_open_orders(ticker):
-                if o.get("id"):
-                    self.cancel_order(o["id"])
+                if not o.get("id"):
+                    continue
+                if o.get("type") == "stop" and o.get("stop_price"):
+                    cancelled_stops.append(o)
+                for leg in o.get("legs", []) or []:
+                    if (
+                        leg.get("type") == "stop"
+                        and leg.get("stop_price")
+                        and str(leg.get("status", "")) in ("new", "accepted", "pending_new", "held")
+                    ):
+                        cancelled_stops.append({**leg, "symbol": ticker, "qty": o.get("qty")})
+                self.cancel_order(o["id"])
             order = self._client.close_position(ticker)
             order_id = str(getattr(order, "id", "") or "")
             status = _normalize_status(getattr(order, "status", None))
@@ -818,7 +985,49 @@ class AlpacaTrader:
             return OrderResult(submitted=True, order_id=order_id, status=status)
         except Exception as e:
             log.warning("Close-position failed for %s: %s", ticker, e)
+            self._restore_protective_stops(ticker, cancelled_stops)
             return OrderResult(submitted=False, error=str(e))
+
+    def _restore_protective_stops(self, ticker: str, stops: list[dict]) -> None:
+        """Re-place protective stops that were cancelled ahead of a failed close.
+
+        Best-effort: sizes each stop from its original qty, falling back to the
+        live position size. Failure here is logged CRITICAL — a naked position
+        is exactly the state this trade-off exists to prevent — and the position
+        monitor's stop reconciliation pass is the second line of defence.
+        """
+        if not stops:
+            return
+        position_qty: Optional[float] = None
+        for stop in stops:
+            try:
+                qty = _floatish(stop.get("qty"))
+                if not qty or qty <= 0:
+                    if position_qty is None:
+                        position_qty = abs(
+                            _floatish(self.get_position_context(ticker).get("qty")) or 0.0
+                        )
+                    qty = position_qty
+                if not qty or int(qty) < 1:
+                    raise ValueError(f"no usable qty (order={stop.get('qty')})")
+                result = self.place_stop_order(
+                    ticker=ticker,
+                    quantity=int(qty),
+                    stop_price=float(stop["stop_price"]),
+                    side=str(stop.get("side") or "sell"),
+                )
+                if not result.submitted:
+                    raise RuntimeError(result.error or "submit failed")
+                log.info(
+                    "Restored protective stop for %s @ $%.2f after failed close",
+                    ticker, float(stop["stop_price"]),
+                )
+            except Exception as exc:
+                log.critical(
+                    "POSITION MAY BE UNPROTECTED: could not restore stop for %s "
+                    "(stop_price=%s) after a failed close: %s",
+                    ticker, stop.get("stop_price"), exc,
+                )
 
     def get_position_entry_time(self, ticker: str, side: str = "long"):
         """Best-effort UTC timestamp of the fill that opened the position.
