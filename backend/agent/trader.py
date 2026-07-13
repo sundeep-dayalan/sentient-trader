@@ -63,6 +63,40 @@ import config
 
 log = logging.getLogger("agent.trader")
 
+# Hard ceiling for any single Alpaca REST call. alpaca-py (≤0.26) issues every
+# request through a plain requests.Session with NO timeout, so one stalled
+# connection blocks the calling thread FOREVER — this silently froze the
+# position-monitor safety loop for days while the consumer kept trading
+# (README Bug Log: BUG-2026-07-13-01). 20s is generous for Alpaca's API while
+# still guaranteeing a wedge becomes a raised requests.Timeout that the
+# caller's existing error handling logs and retries.
+ALPACA_HTTP_TIMEOUT_SECONDS = 20.0
+
+
+def harden_alpaca_client(client, timeout_seconds: float = ALPACA_HTTP_TIMEOUT_SECONDS):
+    """Install a default per-request timeout on an alpaca-py REST client.
+
+    Wraps the client's underlying ``requests.Session.request`` so every call
+    carries a timeout unless the caller passed one explicitly. Idempotent and
+    best-effort: if the SDK's internals change shape, the client is returned
+    unmodified rather than broken. Returns the client for call-site chaining.
+    """
+    try:
+        session = getattr(client, "_session", None)
+        if session is None or getattr(session, "_sentient_timeout_wrapped", False):
+            return client
+        original_request = session.request
+
+        def _timed_request(*args, **kwargs):
+            kwargs.setdefault("timeout", timeout_seconds)
+            return original_request(*args, **kwargs)
+
+        session.request = _timed_request
+        session._sentient_timeout_wrapped = True
+    except Exception as exc:
+        log.warning("Could not install HTTP timeout on Alpaca client: %s", exc)
+    return client
+
 
 @dataclass
 class OrderResult:
@@ -141,11 +175,11 @@ class AlpacaTrader:
             raise RuntimeError(
                 "alpaca-py is not installed. Install backend/agent requirements before running the agent."
             )
-        self._client = TradingClient(
+        self._client = harden_alpaca_client(TradingClient(
             api_key=os.environ["ALPACA_API_KEY"],
             secret_key=os.environ["ALPACA_SECRET_KEY"],
             paper=True,  # Hardcoded — this service must never touch live funds
-        )
+        ))
         # Lazy data client for last-mile bracket-price sanity checks.
         self._data_client = None
         # Small TTL caches for risk plumbing. Guarded by a lock because the
@@ -171,10 +205,10 @@ class AlpacaTrader:
             if self._data_client is None:
                 from alpaca.data.historical import StockHistoricalDataClient
                 from alpaca.data.requests import StockLatestTradeRequest
-                self._data_client = StockHistoricalDataClient(
+                self._data_client = harden_alpaca_client(StockHistoricalDataClient(
                     api_key=os.environ["ALPACA_API_KEY"],
                     secret_key=os.environ["ALPACA_SECRET_KEY"],
-                )
+                ))
                 self._StockLatestTradeRequest = StockLatestTradeRequest
             trades = self._data_client.get_stock_latest_trade(
                 self._StockLatestTradeRequest(symbol_or_symbols=ticker)

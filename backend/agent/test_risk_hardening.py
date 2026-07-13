@@ -304,3 +304,46 @@ def test_reconciliation_never_cancels_to_make_room(monkeypatch):
         trader, [_position("KGS", "long", 12, 0, 68.70, 67.84)]
     )
     assert trader.placed == []  # nothing placed, nothing cancelled
+
+
+# ── BUG-2026-07-13-01: wedge-proofing the monitor ─────────────────────────────
+
+
+def test_harden_alpaca_client_injects_default_timeout():
+    from trader import harden_alpaca_client
+
+    calls: list[dict] = []
+
+    class _Session:
+        def request(self, *args, **kwargs):
+            calls.append(kwargs)
+            return "ok"
+
+    class _Client:
+        _session = _Session()
+
+    client = _Client()
+    harden_alpaca_client(client, timeout_seconds=7.0)
+    client._session.request("GET", "/v2/clock")
+    assert calls[0]["timeout"] == 7.0
+    # An explicit caller timeout must win over the default.
+    client._session.request("GET", "/v2/clock", timeout=3.0)
+    assert calls[1]["timeout"] == 3.0
+    # Idempotent: wrapping twice must not stack wrappers.
+    first_wrapper = client._session.request
+    harden_alpaca_client(client, timeout_seconds=7.0)
+    assert client._session.request is first_wrapper
+
+
+def test_monitor_loop_exits_when_superseded():
+    # A zombie loop whose generation was bumped must exit immediately —
+    # before touching the trader — instead of double-managing orders.
+    class _MustNotBeUsed:
+        def __getattr__(self, name):
+            raise AssertionError("superseded loop must not act")
+
+    pm._monitor_generation[0] = 5
+    try:
+        pm._monitor_loop(_MustNotBeUsed(), lock=None, generation=4)  # returns at once
+    finally:
+        pm._monitor_generation[0] = 0

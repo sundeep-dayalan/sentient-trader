@@ -994,6 +994,23 @@ Sentient Trader is open for contributors who care about transparent AI systems, 
 > A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
 
 <details>
+<summary><b>BUG-2026-07-13-01 — Position monitor thread silently wedged on a timeout-less Alpaca HTTP call — the entire safety loop (stops, exits, reaper, reconciliation) was dead for days while the consumer kept trading</b></summary>
+
+<br/>
+
+**Identified:** 2026-07-13, first trading day after the risk-hardening deploy. The market-hours gate and circuit breaker (consumer-side code) were verifiably live, yet none of the monitor-side behaviors ran: positions opened at 13:50/13:56/14:07 UTC blew past the 1-hour time-exit untouched, no reconciliation stops appeared for known-naked positions, and — decisively — an unfilled `buy_to_open` BKR order from **July 8** was still working despite the 10-minute stale-entry reaper. Container logs confirmed it: `Position monitor thread started` at 04:10:20, `Acquired leader lock sentient:locks:position-monitor` at 04:11:20, then **zero output from `agent.position_monitor` for 2.5 days** — no actions, and no errors either. A running loop would have logged reaps/trails; an erroring loop would have logged errors; total silence means a thread frozen mid-call.
+
+**Impact:** alpaca-py (≤0.26) sends every REST request through a plain `requests.Session` **with no timeout** — `RESTClient._request` never passes one — so a single stalled connection blocks the calling thread *forever*, raising nothing. The monitor makes these calls serially in one thread; the first wedge (here, seconds after acquiring the leader lock) froze stop reconciliation, trailing stops, time-based exits, and the zombie-order reaper simultaneously and indefinitely. The consumer thread was unaffected, so the system kept **opening** positions while the machinery that protects and closes them was dead — the worst possible asymmetry. The BKR zombie surviving since July 8 shows the same failure predates the deploy and explains weeks of "time exit is enabled but positions live for days".
+
+**Resolution:** Two independent layers — kill the hang class, and survive anything that still hangs.
+- `backend/agent/trader.py` — new `harden_alpaca_client()`: wraps the SDK session's `request()` with a default 20s timeout (caller-supplied timeouts still win; idempotent; fails open to an unwrapped client if SDK internals change). Applied to the trading client and lazy data client.
+- `backend/agent/analyst.py` — the three `StockHistoricalDataClient` instances (context fetch, price confirmation, price-move gate) get the same hardening, so a stalled market-data call can no longer freeze signal processing either.
+- `backend/agent/position_monitor.py` — every loop iteration stamps a heartbeat; a dedicated **watchdog thread** (pure supervision, no network calls, cannot wedge) respawns the monitor loop when the heartbeat is >10 min stale, logging CRITICAL with the exact dead window. A generation token makes a later-unwedged zombie loop exit before touching the trader instead of double-managing orders. A periodic heartbeat INFO line (~30 min) makes "quiet" distinguishable from "dead" in future log pulls.
+- `backend/agent/test_risk_hardening.py` — timeout injection (default applied, explicit wins, idempotent wrap) and superseded-generation exit.
+
+</details>
+
+<details>
 <summary><b>BUG-2026-07-10-05 — Positions that lost their protective stop were never re-protected — several longs and an 11%-underwater short sat naked for days</b></summary>
 
 <br/>

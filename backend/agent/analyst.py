@@ -82,7 +82,7 @@ from schemas import (
     SynthesisResult,
     TradeAnalysis,
 )
-from trader import AlpacaTrader
+from trader import AlpacaTrader, harden_alpaca_client
 
 log = logging.getLogger("agent.analyst")
 
@@ -505,10 +505,10 @@ def _make_fetch_context_node(trader: AlpacaTrader):
     falls back to "live price unavailable".
     """
     try:
-        data_client = StockHistoricalDataClient(
+        data_client = harden_alpaca_client(StockHistoricalDataClient(
             api_key=os.environ["ALPACA_API_KEY"],
             secret_key=os.environ["ALPACA_SECRET_KEY"],
-        )
+        ))
     except Exception as exc:
         log.warning("Alpaca data client init failed: %s", exc)
         data_client = None
@@ -1668,10 +1668,10 @@ def _make_confirm_signal_node():
     to strict (block when the tape can't be verified).
     """
     try:
-        _conf_data_client = StockHistoricalDataClient(
+        _conf_data_client = harden_alpaca_client(StockHistoricalDataClient(
             api_key=os.environ["ALPACA_API_KEY"],
             secret_key=os.environ["ALPACA_SECRET_KEY"],
-        )
+        ))
     except Exception as exc:
         log.warning("Confirmation data client init failed: %s", exc)
         _conf_data_client = None
@@ -1797,10 +1797,10 @@ def _make_confirm_signal_node():
 def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
     """Build a data-client once for the price-move gate re-check."""
     try:
-        _exec_data_client = StockHistoricalDataClient(
+        _exec_data_client = harden_alpaca_client(StockHistoricalDataClient(
             api_key=os.environ["ALPACA_API_KEY"],
             secret_key=os.environ["ALPACA_SECRET_KEY"],
-        )
+        ))
     except Exception:
         _exec_data_client = None
 

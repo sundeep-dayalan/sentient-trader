@@ -32,6 +32,20 @@ log = logging.getLogger("agent.position_monitor")
 # How often to check positions (seconds)
 MONITOR_INTERVAL = 60
 
+# ── Watchdog ──────────────────────────────────────────────────────────────────
+# The monitor loop makes network calls; a single wedged call silently disabled
+# the entire safety loop for days while the consumer kept trading (README Bug
+# Log: BUG-2026-07-13-01). Every iteration stamps a heartbeat; a watchdog
+# thread respawns the loop when the heartbeat goes stale. The generation token
+# makes a later-unwedged zombie loop exit instead of double-managing orders.
+MONITOR_HEARTBEAT_STALL_SECONDS = 600  # 10 min without an iteration = wedged
+WATCHDOG_CHECK_SECONDS = 60
+_heartbeat_epoch = [0.0]
+_monitor_generation = [0]
+# Iterations between periodic "still alive" INFO logs (~30 min at 60s/loop),
+# so a silent log stream is distinguishable from a dead thread.
+HEARTBEAT_LOG_EVERY_N_ITERATIONS = 30
+
 # Stale-entry reaper: cancel unfilled BUY entry orders older than this so a
 # missed catalyst entry doesn't linger under GTC and fill weeks later on dead
 # news. Runs independently of trailing stops. (See README Bug Log: BUG-2026-06-08-02)
@@ -376,16 +390,28 @@ def _ensure_protective_stops(trader, positions: list[dict]) -> None:
             )
 
 
-def _monitor_loop(trader, lock=None) -> None:
-    """Main monitoring loop — runs forever in a daemon thread."""
+def _monitor_loop(trader, lock=None, generation: int = 0) -> None:
+    """Main monitoring loop — runs in a daemon thread until superseded.
+
+    Exits when the watchdog bumps ``_monitor_generation`` past this loop's
+    ``generation`` (i.e. a replacement was spawned because this one appeared
+    wedged) so a zombie that later un-wedges can't double-manage orders.
+    """
     log.info(
-        "Position monitor started (interval=%ds, trail=%.1f%%, activation=%.1f%%)",
+        "Position monitor started (generation=%d, interval=%ds, trail=%.1f%%, activation=%.1f%%)",
+        generation,
         MONITOR_INTERVAL,
         config.TRAILING_STOP_PCT * 100,
         config.TRAILING_STOP_ACTIVATION_PCT * 100,
     )
 
-    while True:
+    iterations = 0
+    while _monitor_generation[0] == generation:
+        _heartbeat_epoch[0] = time.time()
+        iterations += 1
+        if iterations % HEARTBEAT_LOG_EVERY_N_ITERATIONS == 0:
+            log.info("Position monitor heartbeat: generation=%d iteration=%d",
+                     generation, iterations)
         try:
             # Singleton guard: only the replica holding the leader lock manages
             # orders. Two replicas reaping/replacing the same stops would race.
@@ -505,6 +531,40 @@ def _monitor_loop(trader, lock=None) -> None:
 
         time.sleep(MONITOR_INTERVAL)
 
+    log.warning(
+        "Position monitor generation %d exiting — superseded by a newer "
+        "generation after a stale heartbeat.", generation,
+    )
+
+
+def _watchdog_loop(trader, lock=None) -> None:
+    """Respawn the monitor loop when its heartbeat goes stale.
+
+    Pure supervision — does no order management itself, so it makes no network
+    calls and cannot wedge the way the monitor can. The abandoned thread is a
+    daemon; if it ever un-wedges, the generation check makes it exit.
+    """
+    while True:
+        time.sleep(WATCHDOG_CHECK_SECONDS)
+        age = time.time() - _heartbeat_epoch[0]
+        if age <= MONITOR_HEARTBEAT_STALL_SECONDS:
+            continue
+        _monitor_generation[0] += 1
+        generation = _monitor_generation[0]
+        log.critical(
+            "POSITION MONITOR WEDGED: no heartbeat for %.0fs (limit %ds) — "
+            "respawning as generation %d. The safety loop (stops, exits, "
+            "reconciliation) was NOT running during that window.",
+            age, MONITOR_HEARTBEAT_STALL_SECONDS, generation,
+        )
+        _heartbeat_epoch[0] = time.time()
+        threading.Thread(
+            target=_monitor_loop,
+            args=(trader, lock, generation),
+            name=f"position-monitor-g{generation}",
+            daemon=True,
+        ).start()
+
 
 def start_position_monitor(trader, lock=None) -> Optional[threading.Thread]:
     """
@@ -528,13 +588,21 @@ def start_position_monitor(trader, lock=None) -> Optional[threading.Thread]:
         )
         return None
 
+    _heartbeat_epoch[0] = time.time()
     thread = threading.Thread(
         target=_monitor_loop,
-        args=(trader, lock),
+        args=(trader, lock, _monitor_generation[0]),
         name="position-monitor",
         daemon=True,
     )
     thread.start()
-    log.info("Position monitor thread started")
+    watchdog = threading.Thread(
+        target=_watchdog_loop,
+        args=(trader, lock),
+        name="position-monitor-watchdog",
+        daemon=True,
+    )
+    watchdog.start()
+    log.info("Position monitor thread started (with heartbeat watchdog)")
     return thread
 
