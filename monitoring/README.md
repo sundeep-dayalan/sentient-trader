@@ -72,6 +72,16 @@ docker exec <alertmanager-container> amtool alert add TestAlert severity=warning
 Plus: a failing scrape itself means the public API is unreachable — Prometheus's
 built-in `up == 0` covers total-outage detection.
 
+## Opening the Prometheus UI
+
+The UI is bound to the host's loopback only (`127.0.0.1:9090`) — never exposed
+to the internet, because Prometheus has no built-in auth. From your machine:
+
+```bash
+ssh -L 9090:localhost:9090 opc@<coolify-host-ip>
+# then open http://localhost:9090 in your browser
+```
+
 ## Design notes
 
 - **Separate Coolify resource, not part of the app compose** — independent
