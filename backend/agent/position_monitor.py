@@ -29,6 +29,10 @@ from position_manager import compute_trailing_stop
 
 log = logging.getLogger("agent.position_monitor")
 
+# ── Invariant thresholds (for the health gauges published to /metrics) ──────
+# An unfilled entry older than this is a "zombie" — mirrors the reaper policy.
+INVARIANT_STALE_ENTRY_SECONDS = 600
+
 # How often to check positions (seconds)
 MONITOR_INTERVAL = 60
 
@@ -390,7 +394,69 @@ def _ensure_protective_stops(trader, positions: list[dict]) -> None:
             )
 
 
-def _monitor_loop(trader, lock=None, generation: int = 0) -> None:
+def compute_invariants(positions: list[dict], open_orders: list[dict],
+                       *, now_epoch: float,
+                       stale_entry_seconds: float = INVARIANT_STALE_ENTRY_SECONDS) -> dict:
+    """Pure computation of the account-level safety invariants.
+
+    These are the checks that would have caught most of the bug history within
+    hours instead of weeks (README Bug Log: BUG-2026-06-10-01, -07-01-01,
+    -07-10-05, -07-13-01, -07-13-02). Published as numeric worker-health fields
+    so the API's generic /metrics exporter surfaces them to Prometheus with no
+    API changes:
+
+      positions_without_stop  — positions where qty_available == qty: no working
+                                order holds ANY share, therefore no stop exists.
+                                (A stop would hold shares and reduce
+                                qty_available — this proxy needs no per-symbol
+                                order lookups.)
+      stale_entry_orders      — unfilled *_to_open orders older than the reaper
+                                policy window (zombies).
+      open_positions          — book size; a runaway count means time-based
+                                exit stopped working.
+    """
+    naked = 0
+    for p in positions:
+        qty = float(p.get("qty") or 0)
+        qty_available = p.get("qty_available")
+        if qty_available is None or abs(qty) < 1:
+            continue
+        if abs(float(qty_available)) >= abs(qty):
+            naked += 1
+
+    zombies = 0
+    for o in open_orders:
+        if o.get("position_intent") not in ("buy_to_open", "sell_to_open"):
+            continue
+        if (o.get("filled_qty") or 0.0) > 0:
+            continue
+        created = o.get("created_at")
+        try:
+            age = now_epoch - created.timestamp()
+        except Exception:
+            continue
+        if age > stale_entry_seconds:
+            zombies += 1
+
+    return {
+        "positions_without_stop": naked,
+        "stale_entry_orders": zombies,
+        "open_positions": len(positions),
+    }
+
+
+def _publish_health(health_redis, state: dict) -> None:
+    """Best-effort worker-health write; the monitor must never die over Redis."""
+    if health_redis is None:
+        return
+    try:
+        from shared.worker_health import write_worker_state
+        write_worker_state(health_redis, "position-monitor", state)
+    except Exception as exc:
+        log.debug("Position monitor health write failed: %s", exc)
+
+
+def _monitor_loop(trader, lock=None, generation: int = 0, health_redis=None) -> None:
     """Main monitoring loop — runs in a daemon thread until superseded.
 
     Exits when the watchdog bumps ``_monitor_generation`` past this loop's
@@ -419,6 +485,18 @@ def _monitor_loop(trader, lock=None, generation: int = 0) -> None:
                 _clear_tracking()
                 time.sleep(MONITOR_INTERVAL)
                 continue
+
+            # Heartbeat for /metrics: published only by the ACTIVE (leader)
+            # monitor, so a stale `position-monitor` heartbeat means nobody is
+            # managing stops — exactly the condition worth paging on. This is
+            # the external-observer fix for the silent-death bug family
+            # (README Bug Log: BUG-2026-07-13-01).
+            _publish_health(health_redis, {
+                "status": "healthy",
+                "phase": "sweeping",
+                "generation": generation,
+                "iterations": iterations,
+            })
             # Reap stale unfilled entry orders first — this must run even when
             # trailing stops are off, because a zombie entry has no position.
             if REAP_STALE_ENTRIES:
@@ -442,6 +520,21 @@ def _monitor_loop(trader, lock=None, generation: int = 0) -> None:
                 continue
 
             positions = trader.get_all_positions()
+
+            # Safety-invariant gauges for /metrics (naked positions, zombie
+            # entries, book size). Computed from data this loop fetches anyway,
+            # published via worker health so the API's generic exporter picks
+            # them up with no API changes.
+            _publish_health(health_redis, {
+                "status": "healthy",
+                "phase": "sweeping",
+                "generation": generation,
+                "iterations": iterations,
+                **compute_invariants(
+                    positions, trader.get_open_orders(), now_epoch=time.time()
+                ),
+            })
+
             if not positions:
                 # Clean up tracking for closed positions
                 _clear_tracking()
@@ -537,7 +630,7 @@ def _monitor_loop(trader, lock=None, generation: int = 0) -> None:
     )
 
 
-def _watchdog_loop(trader, lock=None) -> None:
+def _watchdog_loop(trader, lock=None, health_redis=None) -> None:
     """Respawn the monitor loop when its heartbeat goes stale.
 
     Pure supervision — does no order management itself, so it makes no network
@@ -560,13 +653,13 @@ def _watchdog_loop(trader, lock=None) -> None:
         _heartbeat_epoch[0] = time.time()
         threading.Thread(
             target=_monitor_loop,
-            args=(trader, lock, generation),
+            args=(trader, lock, generation, health_redis),
             name=f"position-monitor-g{generation}",
             daemon=True,
         ).start()
 
 
-def start_position_monitor(trader, lock=None) -> Optional[threading.Thread]:
+def start_position_monitor(trader, lock=None, health_redis=None) -> Optional[threading.Thread]:
     """
     Start the position monitor as a daemon thread.
 
@@ -591,14 +684,14 @@ def start_position_monitor(trader, lock=None) -> Optional[threading.Thread]:
     _heartbeat_epoch[0] = time.time()
     thread = threading.Thread(
         target=_monitor_loop,
-        args=(trader, lock, _monitor_generation[0]),
+        args=(trader, lock, _monitor_generation[0], health_redis),
         name="position-monitor",
         daemon=True,
     )
     thread.start()
     watchdog = threading.Thread(
         target=_watchdog_loop,
-        args=(trader, lock),
+        args=(trader, lock, health_redis),
         name="position-monitor-watchdog",
         daemon=True,
     )

@@ -1,0 +1,203 @@
+# Self-hosted monitoring stack: Prometheus + Alertmanager → Telegram.
+#
+# PASTE-READY for Coolify's "Docker Compose Empty" resource: everything
+# (Prometheus config, Alertmanager config, alert rules) is inlined via
+# `configs.content`, so no Git checkout or bind mounts are needed. Paste this
+# whole file, set the 4 environment variables, deploy. See monitoring/README.md.
+#
+# NOTE: alert rules are duplicated from monitoring/prometheus-alerts.yml
+# (the canonical, documented copy). If you edit rules there, re-paste the
+# updated block here. `$$` below is Docker Compose escaping for a literal `$`
+# in Prometheus's {{ $value }} / {{ $labels }} templates.
+#
+# Resource footprint is hard-capped: Prometheus ≤256MB RAM / ≤512MB disk,
+# Alertmanager ≤64MB — sized for the 6GB Coolify node with room to spare.
+#
+# Required environment variables (set in the Coolify resource):
+#   SENTIENT_API_HOST    e.g. sentient-trader.coolify.sundeepdayalan.in
+#   METRICS_AUTH_TOKEN   must match the API's METRICS_AUTH_TOKEN
+#   TELEGRAM_BOT_TOKEN   from @BotFather
+#   TELEGRAM_CHAT_ID     your chat id (integer; negative for group chats)
+#
+# The scrape goes through the public HTTPS endpoint on purpose: it exercises
+# Traefik + TLS + the API end-to-end, so a failed scrape also means the public
+# API is down — one probe, two answers.
+
+configs:
+  prometheus_config:
+    content: |
+      global:
+        scrape_interval: 60s
+        evaluation_interval: 60s
+
+      rule_files:
+        - /etc/prometheus/rules/alerts.yml
+
+      alerting:
+        alertmanagers:
+          - static_configs:
+              - targets: ["alertmanager:9093"]
+
+      scrape_configs:
+        - job_name: sentient-api
+          scheme: https
+          metrics_path: /metrics
+          authorization:
+            type: Bearer
+            credentials: ${METRICS_AUTH_TOKEN}
+          static_configs:
+            - targets: ["${SENTIENT_API_HOST}"]
+
+  alert_rules:
+    content: |
+      groups:
+        - name: sentient-trader
+          rules:
+            - alert: ApiScrapeDown
+              expr: up{job="sentient-api"} == 0
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: 'Public API is unreachable or /metrics is failing'
+                description: >-
+                  Prometheus cannot scrape the API through Traefik/TLS. Either
+                  the API container, the proxy, or the whole node is down.
+
+            - alert: WorkerDown
+              expr: sentient_worker_up == 0
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: 'Worker {{ $$labels.worker }} is down or unhealthy'
+                description: >-
+                  Heartbeat for {{ $$labels.worker }} is stale (>180s) or its
+                  status is not "healthy". The trading pipeline is not
+                  processing signals.
+
+            - alert: WorkerHeartbeatStale
+              expr: sentient_worker_heartbeat_age_seconds > 180
+              for: 3m
+              labels:
+                severity: warning
+              annotations:
+                summary: 'Worker {{ $$labels.worker }} heartbeat is stale'
+                description: >-
+                  Last heartbeat is {{ $$value }}s old. The worker may be
+                  wedged on a blocking call even though the process is alive.
+
+            - alert: MetricsScrapeFailing
+              expr: sentient_metrics_scrape_ok == 0
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: 'API cannot read worker health from Redis'
+                description: >-
+                  /metrics is reachable but Redis worker-health reads are
+                  failing — health data is blind.
+
+        - name: sentient-trader-invariants
+          rules:
+            - alert: PositionMonitorSilent
+              expr: >-
+                absent(sentient_worker_up{worker="position-monitor"})
+                or sentient_worker_heartbeat_age_seconds{worker="position-monitor"} > 900
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: 'Position monitor is not running'
+                description: >-
+                  No fresh heartbeat from the position-monitor safety loop
+                  (stops, time exits, reaper, reconciliation). Positions are
+                  unmanaged. This exact condition went unnoticed for days
+                  before BUG-2026-07-13-01; it must page immediately.
+
+            - alert: NakedPositions
+              expr: sentient_worker_positions_without_stop{worker="position-monitor"} > 0
+              for: 15m
+              labels:
+                severity: critical
+              annotations:
+                summary: '{{ $$value }} position(s) have no protective stop'
+                description: >-
+                  At least one open position has every share unheld by any
+                  working order — i.e. no stop-loss exists. The 5-minute
+                  reconciliation sweep should self-heal this; if it persists
+                  15m, the sweep itself is failing.
+
+            - alert: ZombieEntryOrders
+              expr: sentient_worker_stale_entry_orders{worker="position-monitor"} > 0
+              for: 20m
+              labels:
+                severity: warning
+              annotations:
+                summary: '{{ $$value }} stale unfilled entry order(s) working'
+                description: >-
+                  Unfilled *_to_open orders older than the 10-minute reap
+                  policy are still live. They can fill days later on dead
+                  news. Persistence means the reaper is broken again.
+
+            - alert: PositionBookRunaway
+              expr: sentient_worker_open_positions{worker="position-monitor"} > 25
+              for: 30m
+              labels:
+                severity: warning
+              annotations:
+                summary: 'Open position count is {{ $$value }} — time-based exit may be dead'
+                description: >-
+                  With a 1-hour max hold the book should stay small. A
+                  sustained large book reproduces the pre-fix state where
+                  time_based_exit was enabled but never fired for 18 days.
+
+  alertmanager_config:
+    content: |
+      route:
+        receiver: telegram
+        group_by: ["alertname"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+
+      receivers:
+        - name: telegram
+          telegram_configs:
+            - bot_token: "${TELEGRAM_BOT_TOKEN}"
+              chat_id: ${TELEGRAM_CHAT_ID}
+              parse_mode: HTML
+              send_resolved: true
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    mem_limit: 256m
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=512MB
+    configs:
+      - source: prometheus_config
+        target: /etc/prometheus/prometheus.yml
+      - source: alert_rules
+        target: /etc/prometheus/rules/alerts.yml
+    volumes:
+      - prometheus-data:/prometheus
+    depends_on:
+      - alertmanager
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    restart: unless-stopped
+    mem_limit: 64m
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+    configs:
+      - source: alertmanager_config
+        target: /etc/alertmanager/alertmanager.yml
+
+volumes:
+  prometheus-data:

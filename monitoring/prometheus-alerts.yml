@@ -71,3 +71,62 @@ groups:
           description: >-
             The agent has hit its daily LLM call budget; signals fall back to
             budget pre-screen HOLDs until the UTC day rolls over.
+
+  # ── Safety invariants (published by the position monitor's worker health) ──
+  # These four rules exist because every mechanism failure in the Bug Log
+  # (dead reaper, naked positions, wedged monitor, zombie orders) violated one
+  # of them within hours while staying invisible in logs for days or weeks.
+  - name: sentient-trader-invariants
+    rules:
+      - alert: PositionMonitorSilent
+        expr: >-
+          absent(sentient_worker_up{worker="position-monitor"})
+          or sentient_worker_heartbeat_age_seconds{worker="position-monitor"} > 900
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Position monitor is not running'
+          description: >-
+            No fresh heartbeat from the position-monitor safety loop (stops,
+            time exits, reaper, reconciliation). Positions are unmanaged.
+            This exact condition went unnoticed for days before
+            BUG-2026-07-13-01; it must page immediately.
+
+      - alert: NakedPositions
+        expr: sentient_worker_positions_without_stop{worker="position-monitor"} > 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: '{{ $value }} position(s) have no protective stop'
+          description: >-
+            At least one open position has every share unheld by any working
+            order — i.e. no stop-loss exists (BUG-2026-07-01-01 /
+            BUG-2026-07-10-05 class). The 5-minute reconciliation sweep should
+            self-heal this; if it persists 15m, the sweep itself is failing.
+
+      - alert: ZombieEntryOrders
+        expr: sentient_worker_stale_entry_orders{worker="position-monitor"} > 0
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $value }} stale unfilled entry order(s) working'
+          description: >-
+            Unfilled *_to_open orders older than the 10-minute reap policy are
+            still live (BUG-2026-06-08-02 / BUG-2026-07-13-02 class). They can
+            fill days later on dead news. The reaper should clear these every
+            minute; persistence means it is broken again.
+
+      - alert: PositionBookRunaway
+        expr: sentient_worker_open_positions{worker="position-monitor"} > 25
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Open position count is {{ $value }} — time-based exit may be dead'
+          description: >-
+            With a 1-hour max hold the book should stay small. A sustained
+            large book reproduces the pre-fix state where time_based_exit was
+            enabled but never fired for 18 days.

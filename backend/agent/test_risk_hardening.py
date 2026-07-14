@@ -375,3 +375,60 @@ def test_reaper_still_skips_sell_to_close_protection():
 
     assert trader.reap_stale_entry_orders(600) == 0
     assert client.cancelled == []
+
+
+# ── Invariant gauges published to /metrics via worker health ─────────────────
+
+
+def test_compute_invariants_counts_naked_zombies_and_book_size():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    positions = [
+        # naked: every share free, no working order holds any of them
+        {"qty": 12, "qty_available": 12},
+        # protected: shares held by bracket legs / stops
+        {"qty": 4, "qty_available": 0},
+        # partially held still counts as protected (some order exists)
+        {"qty": 9, "qty_available": 4},
+        # naked short (negative quantities)
+        {"qty": -6, "qty_available": -6},
+        # fractional dust — ignored
+        {"qty": 0.4, "qty_available": 0.4},
+        # broker didn't report availability — nothing safe to infer
+        {"qty": 3, "qty_available": None},
+    ]
+    orders = [
+        # zombie: unfilled long entry, 2h old
+        {"position_intent": "buy_to_open", "filled_qty": 0.0,
+         "created_at": now - timedelta(hours=2)},
+        # zombie: unfilled short entry, 1 day old
+        {"position_intent": "sell_to_open", "filled_qty": 0.0,
+         "created_at": now - timedelta(days=1)},
+        # fresh entry — not stale yet
+        {"position_intent": "buy_to_open", "filled_qty": 0.0,
+         "created_at": now - timedelta(minutes=2)},
+        # partially filled — a position exists, not a zombie
+        {"position_intent": "buy_to_open", "filled_qty": 3.0,
+         "created_at": now - timedelta(hours=5)},
+        # protective leg — never a zombie regardless of age
+        {"position_intent": "sell_to_close", "filled_qty": 0.0,
+         "created_at": now - timedelta(days=30)},
+    ]
+
+    inv = pm.compute_invariants(positions, orders, now_epoch=now.timestamp())
+    assert inv == {
+        "positions_without_stop": 2,
+        "stale_entry_orders": 2,
+        "open_positions": 6,
+    }
+
+
+def test_publish_health_never_raises(monkeypatch):
+    class _ExplodingRedis:
+        def hset(self, *a, **k):
+            raise RuntimeError("redis down")
+
+    # Must swallow: the safety loop may never die over a health write.
+    pm._publish_health(_ExplodingRedis(), {"status": "healthy"})
+    pm._publish_health(None, {"status": "healthy"})  # no redis configured

@@ -84,7 +84,11 @@ def main() -> None:
         run_tracker=default_scheduler_run_tracker(),
         lock=RedisLeaderLock(lock_redis, "outcome-labeler"),
     )
-    start_position_monitor(trader, lock=RedisLeaderLock(lock_redis, "position-monitor"))
+    start_position_monitor(
+        trader,
+        lock=RedisLeaderLock(lock_redis, "position-monitor"),
+        health_redis=lock_redis,
+    )
 
     def process_news(news: NewsMessage) -> None:
         """Run one news article through the full agent graph."""
