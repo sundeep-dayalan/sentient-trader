@@ -587,3 +587,40 @@ def test_time_exit_respects_per_iteration_budget(monkeypatch):
         pm._maybe_time_exit(trader, f"SYM{i}", "long", budget2)
     assert len(trader.closed) == 16
     pm._clear_tracking()
+
+
+# ── Stale-mark recovery: re-anchor rejected stops to the broker's live price ─
+
+
+def test_reconciliation_reanchors_stop_from_rejection_price(monkeypatch):
+    pm._clear_tracking()
+    monkeypatch.setattr(config, "STOP_LOSS_PCT", 0.03, raising=False)
+
+    class _StaleMarkTrader:
+        def __init__(self):
+            self.attempts: list[float] = []
+
+        def get_open_orders(self, symbol=None):
+            return []
+
+        def place_stop_order(self, *, ticker, quantity, stop_price, side):
+            self.attempts.append(stop_price)
+            if len(self.attempts) == 1:
+                # Position mark says $357 but Alpaca knows it's $328.28.
+                return OrderResult(submitted=False, error=(
+                    '{"code":42210000,"market_price":"328.28",'
+                    '"message":"stop price must be less than current price",'
+                    '"stop_price":"346.92"}'
+                ))
+            return OrderResult(submitted=True, order_id="stop-retry",
+                               status="accepted")
+
+    trader = _StaleMarkTrader()
+    pm._ensure_protective_stops(
+        trader, [_position("WST", "long", 1, 1, 359.85, 357.65)]
+    )
+
+    assert len(trader.attempts) == 2
+    assert trader.attempts[1] == round(328.28 * 0.97, 2)  # anchored to LIVE price
+    assert pm._current_stop_prices["WST"] == trader.attempts[1]
+    pm._clear_tracking()

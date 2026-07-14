@@ -400,11 +400,35 @@ def _ensure_protective_stops(trader, positions: list[dict]) -> None:
             _trailing_stop_orders[symbol] = result.order_id
             _current_stop_prices[symbol] = stop_price
             _action_counters["stops_placed"] += 1
-        else:
-            log.critical(
-                "POSITION MAY BE UNPROTECTED: reconciliation could not place a "
-                "stop for %s (%d shares): %s", symbol, free_shares, result.error,
+            continue
+
+        # Stale-mark recovery: if the rejection carries Alpaca's live price,
+        # re-anchor the stop to it and retry once — otherwise this loop would
+        # retry the same phantom anchor every sweep while the position sits
+        # unprotected (observed with WST after a -9% after-hours move).
+        live = _market_price_from_error(result.error)
+        if live and live > 0:
+            retry_stop = round(live * (1 + stop_pct), 2) if is_short \
+                else round(live * (1 - stop_pct), 2)
+            log.warning(
+                "Stop reconciliation [%s]: stale mark (pos=$%.2f live=$%.2f) — "
+                "re-anchoring stop to $%.2f", symbol, current, live, retry_stop,
             )
+            retry = trader.place_stop_order(
+                ticker=symbol, quantity=free_shares,
+                stop_price=retry_stop, side=stop_side,
+            )
+            if retry.submitted and retry.order_id:
+                _trailing_stop_orders[symbol] = retry.order_id
+                _current_stop_prices[symbol] = retry_stop
+                _action_counters["stops_placed"] += 1
+                continue
+            result = retry
+
+        log.critical(
+            "POSITION MAY BE UNPROTECTED: reconciliation could not place a "
+            "stop for %s (%d shares): %s", symbol, free_shares, result.error,
+        )
 
 
 def compute_invariants(positions: list[dict], open_orders: list[dict],
@@ -456,6 +480,25 @@ def compute_invariants(positions: list[dict], open_orders: list[dict],
         "stale_entry_orders": zombies,
         "open_positions": len(positions),
     }
+
+
+def _market_price_from_error(error: str | None) -> float | None:
+    """Extract the live price Alpaca embeds in stop-price rejections.
+
+    When our position mark is stale (observed: WST marked $357 while really
+    trading $328 after hours), the stop we compute is on the wrong side of the
+    live price and Alpaca rejects it — but the rejection itself carries
+    ``"market_price":"328.28"``. Re-anchoring to that value converts a
+    retry-forever failure into an immediate correct placement.
+    """
+    import re
+    if not error:
+        return None
+    match = re.search(r'"market_price"\s*:\s*"?([0-9.]+)"?', error)
+    try:
+        return float(match.group(1)) if match else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _publish_health(health_redis, state: dict) -> None:
