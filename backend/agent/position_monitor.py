@@ -169,20 +169,15 @@ def _manage_trailing_stop(
         entry_price,
     )
 
-    # Find and cancel existing stop order
+    # Locate the working protective stop (tracked id, else broker search).
+    # A bracket's stop leg counts — its OCO take-profit sibling holds the
+    # shares, so it can only be MOVED via atomic replace, never cancel+place:
+    # the cancel frees nothing (the TP sibling survives and keeps holding the
+    # shares) and the re-place is rejected, leaving the position stop-less.
+    # That exact race stripped 66 positions of protection in one boot sweep
+    # (README Bug Log: BUG-2026-07-14-02).
     existing_stop_id = _trailing_stop_orders.get(symbol)
-    if existing_stop_id:
-        cancelled = trader.cancel_order(existing_stop_id)
-        if cancelled:
-            log.info("Cancelled old stop order %s for %s", existing_stop_id, symbol)
-        else:
-            # If we can't cancel, try to find and cancel by searching open orders
-            open_orders = trader.get_open_orders(symbol)
-            existing = _find_existing_stop_order(open_orders, symbol, stop_side)
-            if existing and existing.get("id"):
-                trader.cancel_order(existing["id"])
-    else:
-        # No tracked stop order — search for bracket leg or standalone stop
+    if not existing_stop_id:
         open_orders = trader.get_open_orders(symbol)
         existing = _find_existing_stop_order(open_orders, symbol, stop_side)
         if existing and existing.get("id"):
@@ -191,25 +186,41 @@ def _manage_trailing_stop(
                 # New stop isn't better than the existing one
                 _current_stop_prices[symbol] = old_stop_price
                 return
-            trader.cancel_order(existing["id"])
+            existing_stop_id = existing["id"]
+
+    if existing_stop_id:
+        # Atomic broker-side replace: the old stop keeps working until the
+        # replacement is accepted — no unprotected window, TP sibling intact.
+        result = trader.replace_stop_order(existing_stop_id, new_stop)
+        if result.submitted and result.order_id:
+            _trailing_stop_orders[symbol] = result.order_id
+            _current_stop_prices[symbol] = new_stop
             log.info(
-                "Cancelled existing stop order %s for %s (was $%s)",
-                existing["id"],
-                symbol,
-                old_stop_price,
+                "Trailing stop [%s]: replaced stop %s → %s @ $%.2f (reason: %s)",
+                symbol, existing_stop_id, result.order_id, new_stop,
+                trailing_result.reason,
             )
+        else:
+            # Replace failed → the OLD stop is still live and protecting the
+            # position; just clear tracking so the next loop re-derives state
+            # from the broker rather than a stale cache.
+            log.warning(
+                "Trailing stop [%s]: replace failed (old stop still active): %s",
+                symbol, result.error,
+            )
+            _trailing_stop_orders.pop(symbol, None)
+            _current_stop_prices.pop(symbol, None)
+        return
 
-    # Small delay to ensure the cancel is processed
-    time.sleep(0.3)
-
-    # Place new stop order at the tighter level
+    # No stop exists at all — place a fresh one. If this is rejected (e.g.
+    # shares held by a lone TP leg) nothing was lost, and the reconciliation
+    # sweep escalates the stop-less state.
     result = trader.place_stop_order(
         ticker=symbol,
         quantity=position_qty,
         stop_price=new_stop,
         side=stop_side,
     )
-
     if result.submitted and result.order_id:
         _trailing_stop_orders[symbol] = result.order_id
         _current_stop_prices[symbol] = new_stop
@@ -221,13 +232,6 @@ def _manage_trailing_stop(
             trailing_result.reason,
         )
     else:
-        # The old stop is already cancelled — if we stop here the position is
-        # naked, and the stale `_current_stop_prices` entry would make every
-        # future loop conclude "new stop isn't better" and never re-place it
-        # (README Bug Log: BUG-2026-07-10-05). Restore protection at the
-        # previous stop level, and clear tracking either way so the next loop
-        # (and the reconciliation sweep) re-derives state from the broker
-        # instead of trusting a wedged cache.
         log.warning(
             "Trailing stop [%s]: failed to place new stop order: %s",
             symbol,
@@ -235,26 +239,6 @@ def _manage_trailing_stop(
         )
         _trailing_stop_orders.pop(symbol, None)
         _current_stop_prices.pop(symbol, None)
-        if current_stop and current_stop > 0:
-            restore = trader.place_stop_order(
-                ticker=symbol,
-                quantity=position_qty,
-                stop_price=current_stop,
-                side=stop_side,
-            )
-            if restore.submitted and restore.order_id:
-                _trailing_stop_orders[symbol] = restore.order_id
-                _current_stop_prices[symbol] = current_stop
-                log.info(
-                    "Trailing stop [%s]: restored previous stop @ $%.2f after "
-                    "failed tighten", symbol, current_stop,
-                )
-            else:
-                log.critical(
-                    "POSITION MAY BE UNPROTECTED: %s lost its stop during a "
-                    "failed trailing replacement and restore also failed: %s",
-                    symbol, restore.error,
-                )
 
 
 def _maybe_time_exit(trader, symbol: str, side: str) -> bool:

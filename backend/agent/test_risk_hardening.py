@@ -474,3 +474,84 @@ def test_get_open_orders_uses_raw_rest_with_high_limit_and_intent():
     # A raw zombie like this must now be reapable end-to-end:
     trader.cancel_order = lambda oid: True  # type: ignore[method-assign]
     assert trader.reap_stale_entry_orders(600) == 1
+
+
+# ── BUG-2026-07-14-02: trailing must MOVE stops atomically, never cancel+place ─
+
+
+class _TrailTrader:
+    def __init__(self, open_orders):
+        self._orders = open_orders
+        self.replaced: list[tuple] = []
+        self.placed: list[dict] = []
+        self.cancelled: list[str] = []
+        self.replace_ok = True
+
+    def get_open_orders(self, symbol=None):
+        return self._orders
+
+    def replace_stop_order(self, order_id, stop_price):
+        self.replaced.append((order_id, stop_price))
+        if self.replace_ok:
+            return OrderResult(submitted=True, order_id=f"{order_id}-v2", status="accepted")
+        return OrderResult(submitted=False, error="rejected")
+
+    def place_stop_order(self, *, ticker, quantity, stop_price, side):
+        self.placed.append({"ticker": ticker, "qty": quantity, "stop": stop_price})
+        return OrderResult(submitted=True, order_id="new-stop", status="accepted")
+
+    def cancel_order(self, oid):  # must never be called by trailing
+        self.cancelled.append(oid)
+        return True
+
+
+def _bracket_stop(symbol, stop_price):
+    return {"id": "leg-1", "symbol": symbol, "side": "sell", "type": "stop",
+            "status": "new", "stop_price": stop_price, "legs": []}
+
+
+def test_trailing_replaces_existing_stop_atomically(monkeypatch):
+    pm._clear_tracking()
+    monkeypatch.setattr(config, "TRAILING_STOP_PCT", 0.03, raising=False)
+    monkeypatch.setattr(config, "TRAILING_STOP_ACTIVATION_PCT", 0.02, raising=False)
+    trader = _TrailTrader([_bracket_stop("ADI", 373.30)])
+
+    # Long up ~3.1%: trail to 385.04 should REPLACE the bracket leg in place.
+    pm._manage_trailing_stop(trader, "ADI", entry_price=385.01,
+                             current_price=396.95, position_qty=1, side="long")
+
+    assert trader.replaced == [("leg-1", 385.04)]
+    assert trader.cancelled == []          # the unprotected window is gone
+    assert trader.placed == []
+    assert pm._trailing_stop_orders["ADI"] == "leg-1-v2"
+    pm._clear_tracking()
+
+
+def test_trailing_replace_failure_keeps_old_stop(monkeypatch):
+    pm._clear_tracking()
+    monkeypatch.setattr(config, "TRAILING_STOP_PCT", 0.03, raising=False)
+    monkeypatch.setattr(config, "TRAILING_STOP_ACTIVATION_PCT", 0.02, raising=False)
+    trader = _TrailTrader([_bracket_stop("ADI", 373.30)])
+    trader.replace_ok = False
+
+    pm._manage_trailing_stop(trader, "ADI", entry_price=385.01,
+                             current_price=396.95, position_qty=1, side="long")
+
+    assert trader.cancelled == []          # old stop untouched → still protected
+    assert trader.placed == []
+    assert "ADI" not in pm._trailing_stop_orders  # cache cleared for re-derive
+    pm._clear_tracking()
+
+
+def test_trailing_places_fresh_stop_when_none_exists(monkeypatch):
+    pm._clear_tracking()
+    monkeypatch.setattr(config, "TRAILING_STOP_PCT", 0.03, raising=False)
+    monkeypatch.setattr(config, "TRAILING_STOP_ACTIVATION_PCT", 0.02, raising=False)
+    trader = _TrailTrader([])
+
+    pm._manage_trailing_stop(trader, "CCL", entry_price=27.25,
+                             current_price=26.47, position_qty=40, side="short")
+
+    assert trader.replaced == []
+    assert len(trader.placed) == 1 and trader.placed[0]["ticker"] == "CCL"
+    pm._clear_tracking()

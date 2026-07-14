@@ -998,6 +998,34 @@ class AlpacaTrader:
             log.warning("Stop order failed for %s %s: %s", side, ticker, e)
             return OrderResult(submitted=False, error=str(e))
 
+    def replace_stop_order(self, order_id: str, stop_price: float) -> OrderResult:
+        """Atomically move an existing stop order's trigger price via PATCH.
+
+        Replacement is broker-side atomic: the order keeps working at the old
+        price until the new one is accepted, so there is NO window where the
+        position is unprotected — unlike cancel-then-place, which stripped 66
+        positions of their stops in one sweep when the second step was rejected
+        (README Bug Log: BUG-2026-07-14-02). Returns the replacement order's id
+        on success (Alpaca issues a new id).
+        """
+        if self._dry_run:
+            import uuid
+            return OrderResult(submitted=True, order_id=str(uuid.uuid4()),
+                               status="accepted")
+        try:
+            from alpaca.trading.requests import ReplaceOrderRequest
+            order = self._client.replace_order_by_id(
+                order_id, ReplaceOrderRequest(stop_price=round(stop_price, 2))
+            )
+            return OrderResult(
+                submitted=True,
+                order_id=str(getattr(order, "id", "") or ""),
+                status=_normalize_status(getattr(order, "status", None)),
+            )
+        except Exception as e:
+            log.warning("Stop replace failed for order %s: %s", order_id, e)
+            return OrderResult(submitted=False, error=str(e))
+
     def close_position(self, ticker: str) -> OrderResult:
         """Flatten the entire position in ``ticker`` with a market order.
 

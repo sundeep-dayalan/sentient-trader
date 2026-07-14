@@ -994,6 +994,25 @@ Sentient Trader is open for contributors who care about transparent AI systems, 
 > A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
 
 <details>
+<summary><b>BUG-2026-07-14-02 — Trailing stops moved via cancel-then-place: the first real trailing sweep stripped 66 positions of their stop legs in two minutes</b></summary>
+
+<br/>
+
+**Identified:** 2026-07-14, minutes after deploying the BUG-2026-07-14-01 fix — the first boot where trailing stops could actually see the book. Watching the fresh container's logs live: `Trailing stop [ADI/long]: tightening $0.00 → $385.04` followed by `failed to place new stop order: insufficient qty available … held_for_orders`. An immediate account audit found **66 positions holding a take-profit leg and no stop**.
+
+**Impact:** `_manage_trailing_stop` moved a stop by **cancelling the old order, sleeping 0.3s, then placing a new one**. For bracket-protected positions that is structurally broken, not just racy: cancelling the stop leg does **not** release the shares — the OCO take-profit sibling survives and keeps holding them — so the re-place is *always* rejected and the position is left with upside protection but no downside protection. The failure-restore added in BUG-2026-07-10-05 only knew the *tracked* stop price, which is empty on a fresh boot, so nothing was restored. One sweep of a healthy monitor de-protected most of the book; had this happened before a red open instead of after hours, every one of those positions would have gapped unguarded.
+
+**Resolution:** Stops are now MOVED, never re-created.
+- `backend/agent/trader.py` — new `replace_stop_order()` using Alpaca's atomic order replacement (`PATCH /v2/orders/{id}`): the old stop keeps working until the replacement is accepted, so there is no unprotected window and the TP sibling is untouched.
+- `backend/agent/position_monitor.py` — `_manage_trailing_stop` uses replace whenever any stop exists (tracked or found via broker search); cancel+place is gone from the trailing path entirely. A failed replace leaves the old stop live by construction. Fresh placement happens only when no stop exists at all.
+- **Incident remediation:** the 66 orphan TP legs were cancelled (freeing the shares), after which the running monitor re-armed stops itself — trailing for in-profit positions within 60s, the reconciliation sweep for the rest within 5 minutes.
+- `backend/agent/test_risk_hardening.py` — replace is used for existing stops with zero cancels; a failed replace keeps the old stop; fresh placement still works when no stop exists.
+
+**Lesson:** any two-step mutate of protective orders is a bug by default. The broker offers atomic replace — use it everywhere a stop moves.
+
+</details>
+
+<details>
 <summary><b>BUG-2026-07-14-01 — The monitor ran perfectly and did nothing: un-normalized position sides made it skip its entire book, while the SDK dropped <code>position_intent</code> and truncated open orders at 50</b></summary>
 
 <br/>
