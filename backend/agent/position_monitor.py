@@ -56,6 +56,23 @@ HEARTBEAT_LOG_EVERY_N_ITERATIONS = 30
 REAP_STALE_ENTRIES = True
 STALE_ENTRY_MAX_AGE_SECONDS = 600  # 10 minutes
 
+# Time-exit pacing: at the first open after downtime the whole aged book
+# qualifies for closing at once; each close costs ~4-5 API calls, and Alpaca's
+# limit is 200 req/min. Capping submissions per iteration turns a 350-call
+# thundering herd at 09:30 into a calm drain over a few minutes — positions
+# beyond the cap simply retry next minute.
+MAX_TIME_EXITS_PER_ITERATION = 8
+
+# Action counters, published with worker health so Prometheus can graph what
+# the monitor DOES, not just that it is alive — the BUG-2026-07-14-01 lesson
+# ("the loop is alive" is not "the loop is acting").
+_action_counters = {
+    "time_exits_submitted": 0,
+    "stops_placed": 0,
+    "stops_replaced": 0,
+    "orders_reaped": 0,
+}
+
 # Protective-stop reconciliation: every open position should have a working
 # stop on its protective side (longs a SELL stop, shorts a BUY stop). Positions
 # can end up naked through several paths — a bracket that fell back to a simple
@@ -195,6 +212,7 @@ def _manage_trailing_stop(
         if result.submitted and result.order_id:
             _trailing_stop_orders[symbol] = result.order_id
             _current_stop_prices[symbol] = new_stop
+            _action_counters["stops_replaced"] += 1
             log.info(
                 "Trailing stop [%s]: replaced stop %s → %s @ $%.2f (reason: %s)",
                 symbol, existing_stop_id, result.order_id, new_stop,
@@ -224,6 +242,7 @@ def _manage_trailing_stop(
     if result.submitted and result.order_id:
         _trailing_stop_orders[symbol] = result.order_id
         _current_stop_prices[symbol] = new_stop
+        _action_counters["stops_placed"] += 1
         log.info(
             "Trailing stop [%s]: new stop order %s @ $%.2f (reason: %s)",
             symbol,
@@ -241,7 +260,8 @@ def _manage_trailing_stop(
         _current_stop_prices.pop(symbol, None)
 
 
-def _maybe_time_exit(trader, symbol: str, side: str) -> bool:
+def _maybe_time_exit(trader, symbol: str, side: str,
+                     submit_budget: list[int] | None = None) -> bool:
     """Flatten the position if it has been held past the max-hold window.
 
     News-driven entries earn their edge fast and then give it back: measured
@@ -272,6 +292,13 @@ def _maybe_time_exit(trader, symbol: str, side: str) -> bool:
     if age < config.MAX_POSITION_HOLD_SECONDS:
         return False
 
+    # Per-iteration pacing: defer past-due closes beyond the budget to the
+    # next minute instead of bursting through the broker's rate limit.
+    if submit_budget is not None:
+        if submit_budget[0] <= 0:
+            return False
+        submit_budget[0] -= 1
+
     log.info(
         "Time-based exit [%s/%s]: held %.0fs ≥ %ds limit — flattening to lock in "
         "the early move before it decays.",
@@ -280,6 +307,7 @@ def _maybe_time_exit(trader, symbol: str, side: str) -> bool:
     result = trader.close_position(symbol)
     if result.submitted:
         _closing_positions.add(symbol)
+        _action_counters["time_exits_submitted"] += 1
         return True
     log.warning("Time-based exit [%s]: close failed: %s", symbol, result.error)
     return False
@@ -371,6 +399,7 @@ def _ensure_protective_stops(trader, positions: list[dict]) -> None:
         if result.submitted and result.order_id:
             _trailing_stop_orders[symbol] = result.order_id
             _current_stop_prices[symbol] = stop_price
+            _action_counters["stops_placed"] += 1
         else:
             log.critical(
                 "POSITION MAY BE UNPROTECTED: reconciliation could not place a "
@@ -487,6 +516,7 @@ def _monitor_loop(trader, lock=None, generation: int = 0, health_redis=None) -> 
                 try:
                     reaped = trader.reap_stale_entry_orders(STALE_ENTRY_MAX_AGE_SECONDS)
                     if reaped:
+                        _action_counters["orders_reaped"] += reaped
                         log.info("Reaped %d stale unfilled entry order(s)", reaped)
                 except Exception as exc:
                     log.warning("Stale-entry reap failed: %s", exc)
@@ -517,6 +547,7 @@ def _monitor_loop(trader, lock=None, generation: int = 0, health_redis=None) -> 
                 **compute_invariants(
                     positions, trader.get_open_orders(), now_epoch=time.time()
                 ),
+                **_action_counters,
             })
 
             if not positions:
@@ -538,6 +569,7 @@ def _monitor_loop(trader, lock=None, generation: int = 0, health_redis=None) -> 
                 except Exception:
                     market_open = None
 
+            time_exit_budget = [MAX_TIME_EXITS_PER_ITERATION]
             open_symbols = set()
             for pos in positions:
                 symbol = str(pos.get("symbol", ""))
@@ -561,7 +593,7 @@ def _monitor_loop(trader, lock=None, generation: int = 0, health_redis=None) -> 
                 if (
                     time_exit_on
                     and market_open is True
-                    and _maybe_time_exit(trader, symbol, side)
+                    and _maybe_time_exit(trader, symbol, side, time_exit_budget)
                 ):
                     continue
 

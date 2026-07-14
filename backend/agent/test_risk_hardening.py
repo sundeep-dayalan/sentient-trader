@@ -555,3 +555,35 @@ def test_trailing_places_fresh_stop_when_none_exists(monkeypatch):
     assert trader.replaced == []
     assert len(trader.placed) == 1 and trader.placed[0]["ticker"] == "CCL"
     pm._clear_tracking()
+
+
+# ── Proactive: time-exit pacing (rate-limit thundering herd at first open) ───
+
+
+def test_time_exit_respects_per_iteration_budget(monkeypatch):
+    from test_order_execution_fixes import _ExitTrader
+    import time as _t
+
+    pm._clear_tracking()
+    monkeypatch.setattr(config, "MAX_POSITION_HOLD_SECONDS", 3600, raising=False)
+    trader = _ExitTrader()
+    # 20 positions all aged far past the hold window
+    for i in range(20):
+        pm._position_first_seen[f"SYM{i}"] = _t.time() - 90_000
+
+    budget = [8]
+    submitted = sum(
+        1 for i in range(20)
+        if pm._maybe_time_exit(trader, f"SYM{i}", "long", budget)
+    )
+    assert submitted == 8          # capped this iteration
+    assert len(trader.closed) == 8
+    assert budget[0] == 0
+
+    # Next iteration: fresh budget → the already-closing 8 short-circuit as
+    # True without resubmitting, and 8 MORE positions get their closes.
+    budget2 = [8]
+    for i in range(20):
+        pm._maybe_time_exit(trader, f"SYM{i}", "long", budget2)
+    assert len(trader.closed) == 16
+    pm._clear_tracking()
