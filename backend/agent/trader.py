@@ -156,6 +156,35 @@ def _normalize_status(value: Any) -> str:
     return _enum_token(value)
 
 
+def _normalize_side(value: Any) -> str:
+    """Normalize a position side to exactly "long" or "short".
+
+    The SDK returns `PositionSide.SHORT` enums whose `str()` is prefixed; raw
+    REST returns "short". Un-normalized, every `side in ("long", "short")`
+    check silently fails — which made the position monitor skip its ENTIRE
+    book on every sweep (README Bug Log: BUG-2026-07-14-01).
+    """
+    token = _enum_token(value)
+    return "short" if token == "short" else "long"
+
+
+def _parse_iso_utc(value: Any):
+    """Parse an ISO-8601 string (raw REST) to an aware datetime; None if not."""
+    from datetime import datetime, timezone
+    if value is None or hasattr(value, "timestamp"):
+        return value  # already a datetime (or None)
+    try:
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except (ValueError, TypeError):
+        return None
+
+
 class AlpacaTrader:
     """
     Wraps alpaca-py's TradingClient for paper trading.
@@ -584,7 +613,7 @@ class AlpacaTrader:
                     # means NO order (bracket leg, stop, anything) holds these
                     # shares — i.e. the position is unprotected.
                     "qty_available": _floatish(getattr(p, "qty_available", None)),
-                    "side": str(getattr(p, "side", "") or "long"),
+                    "side": _normalize_side(getattr(p, "side", None)),
                     "market_value": _floatish(getattr(p, "market_value", None)),
                     "cost_basis": _floatish(getattr(p, "cost_basis", None)),
                     "avg_entry_price": _floatish(getattr(p, "avg_entry_price", None)),
@@ -771,7 +800,7 @@ class AlpacaTrader:
             return {
                 "symbol": str(getattr(position, "symbol", ticker)),
                 "qty": _floatish(getattr(position, "qty", None)) or 0.0,
-                "side": str(getattr(position, "side", "") or "long"),
+                "side": _normalize_side(getattr(position, "side", None)),
                 "market_value": _floatish(getattr(position, "market_value", None)),
                 "cost_basis": _floatish(getattr(position, "cost_basis", None)),
                 "avg_entry_price": _floatish(
@@ -803,45 +832,53 @@ class AlpacaTrader:
             return flat
 
     def get_open_orders(self, ticker: Optional[str] = None) -> list[dict]:
-        """Return open orders, optionally filtered by ticker symbol."""
+        """Return open orders, optionally filtered by ticker symbol.
+
+        Fetched via RAW REST rather than the SDK's typed models, for three
+        production reasons (README Bug Log: BUG-2026-07-14-01):
+          1. alpaca-py 0.26's Order model predates ``position_intent`` and
+             silently drops it — which turned the intent-filtered reaper and
+             the zombie gauge into no-ops (every order looked intent-less).
+          2. The endpoint's default ``limit`` is 50; with ~100 working orders
+             the OLDEST half — exactly where zombies live — was invisible.
+          3. Raw JSON carries plain lowercase tokens, immune to the enum-prefix
+             normalization bugs that have bitten the SDK path repeatedly.
+        """
         if self._dry_run:
             return []
         try:
-            from alpaca.trading.enums import QueryOrderStatus
-            from alpaca.trading.requests import GetOrdersRequest
-
-            request_params = GetOrdersRequest(
-                status=QueryOrderStatus.OPEN,
-                symbols=[ticker] if ticker else None,
-            )
-            orders = self._client.get_orders(filter=request_params)
+            params: dict[str, Any] = {"status": "open", "limit": 500,
+                                      "nested": "false"}
+            if ticker:
+                params["symbols"] = ticker
+            raw = self._client.get("/orders", data=params) or []
             return [
                 {
-                    "id": str(getattr(o, "id", "") or ""),
-                    "symbol": str(getattr(o, "symbol", "") or ""),
-                    "side": _enum_token(getattr(o, "side", None)),
-                    "type": _enum_token(getattr(o, "type", None)),
-                    "position_intent": _enum_token(getattr(o, "position_intent", None)),
-                    "qty": _floatish(getattr(o, "qty", None)) or 0.0,
-                    "filled_qty": _floatish(getattr(o, "filled_qty", None)) or 0.0,
-                    "created_at": getattr(o, "created_at", None),
-                    "stop_price": _floatish(getattr(o, "stop_price", None)),
-                    "limit_price": _floatish(getattr(o, "limit_price", None)),
-                    "status": _normalize_status(getattr(o, "status", None)),
-                    "order_class": str(getattr(o, "order_class", "") or ""),
+                    "id": str(o.get("id") or ""),
+                    "symbol": str(o.get("symbol") or ""),
+                    "side": _enum_token(o.get("side")),
+                    "type": _enum_token(o.get("type")),
+                    "position_intent": _enum_token(o.get("position_intent")),
+                    "qty": _floatish(o.get("qty")) or 0.0,
+                    "filled_qty": _floatish(o.get("filled_qty")) or 0.0,
+                    "created_at": _parse_iso_utc(o.get("created_at")),
+                    "stop_price": _floatish(o.get("stop_price")),
+                    "limit_price": _floatish(o.get("limit_price")),
+                    "status": _normalize_status(o.get("status")),
+                    "order_class": str(o.get("order_class") or ""),
                     "legs": [
                         {
-                            "id": str(getattr(leg, "id", "") or ""),
-                            "type": _enum_token(getattr(leg, "type", None)),
-                            "side": _enum_token(getattr(leg, "side", None)),
-                            "stop_price": _floatish(getattr(leg, "stop_price", None)),
-                            "limit_price": _floatish(getattr(leg, "limit_price", None)),
-                            "status": _normalize_status(getattr(leg, "status", None)),
+                            "id": str(leg.get("id") or ""),
+                            "type": _enum_token(leg.get("type")),
+                            "side": _enum_token(leg.get("side")),
+                            "stop_price": _floatish(leg.get("stop_price")),
+                            "limit_price": _floatish(leg.get("limit_price")),
+                            "status": _normalize_status(leg.get("status")),
                         }
-                        for leg in (getattr(o, "legs", None) or [])
+                        for leg in (o.get("legs") or [])
                     ],
                 }
-                for o in orders
+                for o in raw
             ]
         except Exception as exc:
             log.warning("Could not fetch open orders%s: %s",

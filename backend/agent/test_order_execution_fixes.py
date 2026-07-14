@@ -48,9 +48,10 @@ class _FakeClient:
             raise trader_mod.APIError("position does not exist")
         return self._position
 
-    # used by get_open_orders (via _can_open_bracket)
-    def get_orders(self, filter=None):
-        return self._open_orders
+    # used by get_open_orders (via _can_open_bracket) — raw REST path
+    def get(self, path, data=None):
+        assert path == "/orders"
+        return [_raw_order(o) for o in self._open_orders]
 
     def submit_order(self, order_data=None):
         self.submitted.append(order_data)
@@ -63,6 +64,25 @@ class _FakeClient:
                 'for hard-to-borrow asset"}'
             )
         return _FakeOrder()
+
+
+def _raw_order(o) -> dict:
+    """Render a fake order object as the raw REST dict get_open_orders now consumes."""
+    return {
+        "id": getattr(o, "id", ""),
+        "symbol": getattr(o, "symbol", ""),
+        "side": getattr(o, "side", None),
+        "type": getattr(o, "type", None),
+        "position_intent": getattr(o, "position_intent", None),
+        "qty": getattr(o, "qty", None),
+        "filled_qty": getattr(o, "filled_qty", None),
+        "created_at": getattr(o, "created_at", None),
+        "stop_price": getattr(o, "stop_price", None),
+        "limit_price": getattr(o, "limit_price", None),
+        "status": getattr(o, "status", None),
+        "order_class": getattr(o, "order_class", ""),
+        "legs": getattr(o, "legs", None) or [],
+    }
 
 
 def _make_trader(client: _FakeClient) -> AlpacaTrader:
@@ -217,8 +237,9 @@ class _ReapClient:
         self._open_orders = open_orders
         self.cancelled: list[str] = []
 
-    def get_orders(self, filter=None):
-        return self._open_orders
+    def get(self, path, data=None):
+        assert path == "/orders"
+        return [_raw_order(o) for o in self._open_orders]
 
     def cancel_order_by_id(self, order_id):
         self.cancelled.append(order_id)

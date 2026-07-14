@@ -994,6 +994,27 @@ Sentient Trader is open for contributors who care about transparent AI systems, 
 > A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
 
 <details>
+<summary><b>BUG-2026-07-14-01 — The monitor ran perfectly and did nothing: un-normalized position sides made it skip its entire book, while the SDK dropped <code>position_intent</code> and truncated open orders at 50</b></summary>
+
+<br/>
+
+**Identified:** 2026-07-14, the first full session with a verifiably-alive monitor (heartbeat fresh, 1,050 iterations, zero errors) — yet zero time-exits, zero trailing stops, zero reconciliations all day; the 82-position book never drained, and a PSHG entry sat unfilled for 6h18m past the 10-minute reap policy while the zombie gauge read 0. Live introspection inside the container found three stacked data-layer defects:
+
+**Impact:**
+1. **`get_all_positions()`/`get_position_context()` returned `side` as the raw SDK enum string (`"PositionSide.SHORT"`).** The monitor's gate `side not in ("long", "short")` therefore skipped **every position on every sweep** — trailing stops, time-based exit, and stop reconciliation were all structurally unreachable, silently, with the heartbeat green. This is the same enum-prefix class as BUG-2026-06-10-01, fixed then in `get_open_orders` but never audited in the position methods; it means trailing stops and time-exit have likely *never* functioned through the SDK path.
+2. **alpaca-py 0.26's Order model predates `position_intent` and silently drops it** — every open order surfaced with intent `""`, so the intent-filtered reaper (BUG-2026-07-01-01 / -07-13-02 fixes) skipped everything, and the `stale_entry_orders` gauge always read 0. The reaper has been a no-op since the intent filter shipped; the Jun 29–Jul 10 zombie graveyard had two causes, not one.
+3. **`get_open_orders()` used the endpoint's default `limit` (50)** while ~100 orders were working — the invisible half is the *oldest*, exactly where zombies live and where the stop-finder needs to look.
+
+**Resolution:** Fetch open orders via **raw REST** (`GET /v2/orders?status=open&limit=500&nested=false`) — raw JSON carries `position_intent` regardless of SDK version, plain lowercase tokens immune to enum-prefix bugs, and an explicit 500 limit; `created_at` strings are parsed back to aware datetimes so the reaper's age math is unchanged. Position sides pass through a new `_normalize_side()` (enum or raw → exactly `long`/`short`).
+- `backend/agent/trader.py` — raw-REST `get_open_orders()`, `_normalize_side()`, `_parse_iso_utc()`; sides normalized in `get_all_positions()` and `get_position_context()`.
+- `backend/agent/test_risk_hardening.py` — enum-side normalization, raw-path limit/intent/datetime parsing, and an end-to-end reap of a raw zombie dict.
+- Live-verified against the paper API: 81 orders returned with real intents (was 50 with none); sides `long/short`.
+
+**Lesson (repeats BUG-2026-06-10-01):** every value crossing the SDK boundary must be normalized at the source, and "the loop is alive" is not "the loop is acting" — the next invariant worth exporting is an action counter.
+
+</details>
+
+<details>
 <summary><b>BUG-2026-07-13-02 — Stale-entry reaper was blind to short-entry zombies: a buy-side pre-filter made <code>sell_to_open</code> orders unreapable forever</b></summary>
 
 <br/>

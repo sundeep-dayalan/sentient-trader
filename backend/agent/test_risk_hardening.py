@@ -432,3 +432,45 @@ def test_publish_health_never_raises(monkeypatch):
     # Must swallow: the safety loop may never die over a health write.
     pm._publish_health(_ExplodingRedis(), {"status": "healthy"})
     pm._publish_health(None, {"status": "healthy"})  # no redis configured
+
+
+# ── BUG-2026-07-14-01: the monitor saw no positions and half-blind orders ────
+
+
+def test_normalize_side_handles_sdk_enum_prefix():
+    from trader import _normalize_side
+
+    assert _normalize_side("PositionSide.SHORT") == "short"
+    assert _normalize_side("PositionSide.LONG") == "long"
+    assert _normalize_side("short") == "short"
+    assert _normalize_side("long") == "long"
+    assert _normalize_side(None) == "long"  # conservative default
+
+
+def test_get_open_orders_uses_raw_rest_with_high_limit_and_intent():
+    from test_order_execution_fixes import _make_trader
+
+    captured: dict = {}
+
+    class _RawClient:
+        def get(self, path, data=None):
+            captured["path"] = path
+            captured["data"] = data
+            return [{
+                "id": "o1", "symbol": "PSHG", "side": "buy", "type": "limit",
+                "position_intent": "buy_to_open", "qty": "439",
+                "filled_qty": "0", "created_at": "2026-07-14T13:36:01.739919Z",
+                "stop_price": None, "limit_price": "1.68", "status": "new",
+                "order_class": "bracket", "legs": None,
+            }]
+
+    trader = _make_trader.__wrapped__(_RawClient()) if hasattr(_make_trader, "__wrapped__") else _make_trader(_RawClient())
+    orders = trader.get_open_orders()
+
+    assert captured["path"] == "/orders"
+    assert captured["data"]["limit"] == 500          # default-50 truncation fixed
+    assert orders[0]["position_intent"] == "buy_to_open"  # intent survives (raw)
+    assert orders[0]["created_at"].year == 2026      # ISO string parsed to datetime
+    # A raw zombie like this must now be reapable end-to-end:
+    trader.cancel_order = lambda oid: True  # type: ignore[method-assign]
+    assert trader.reap_stale_entry_orders(600) == 1
