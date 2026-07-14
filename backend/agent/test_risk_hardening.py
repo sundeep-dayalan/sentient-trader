@@ -347,3 +347,31 @@ def test_monitor_loop_exits_when_superseded():
         pm._monitor_loop(_MustNotBeUsed(), lock=None, generation=4)  # returns at once
     finally:
         pm._monitor_generation[0] = 0
+
+
+# ── BUG-2026-07-13-02: reaper must also reap sell_to_open (short-entry) zombies ─
+
+
+def test_reaper_cancels_stale_sell_to_open_zombie():
+    from test_order_execution_fixes import _FakeOpenOrder, _ReapClient, _make_trader as _mk
+
+    zombie = _FakeOpenOrder(oid="short-entry-1", side="sell",
+                            position_intent="sell_to_open", age_seconds=4000)
+    client = _ReapClient([zombie])
+    trader = _mk(client)
+
+    assert trader.reap_stale_entry_orders(600) == 1
+    assert client.cancelled == ["short-entry-1"]
+
+
+def test_reaper_still_skips_sell_to_close_protection():
+    from test_order_execution_fixes import _FakeOpenOrder, _ReapClient, _make_trader as _mk
+
+    # A long's protective stop leg is sell-side sell_to_close — must survive.
+    protective = _FakeOpenOrder(oid="prot-long-1", side="sell",
+                                position_intent="sell_to_close", age_seconds=4000)
+    client = _ReapClient([protective])
+    trader = _mk(client)
+
+    assert trader.reap_stale_entry_orders(600) == 0
+    assert client.cancelled == []

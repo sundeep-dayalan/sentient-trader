@@ -994,6 +994,21 @@ Sentient Trader is open for contributors who care about transparent AI systems, 
 > A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
 
 <details>
+<summary><b>BUG-2026-07-13-02 — Stale-entry reaper was blind to short-entry zombies: a buy-side pre-filter made <code>sell_to_open</code> orders unreapable forever</b></summary>
+
+<br/>
+
+**Identified:** 2026-07-13 (evening), sweeping open orders after the monitor-wedge diagnosis. **20 zombie unfilled entry orders dated Jun 29–Jul 10 were still working** — a graveyard left by the dead monitor (BUG-2026-07-13-01). Four of them (AMPH, AZN, IONS, RXT) were `sell_to_open` short entries, and inspection showed the reaper could never have cancelled those even when healthy.
+
+**Impact:** `reap_stale_entry_orders()` filtered `side == "buy"` *before* its intent check. That pre-filter dates from the long-only era; when protected shorts were added, short entries became SELL-side `sell_to_open` orders — skipped at the first gate, invisible to the 10-minute staleness policy, lingering under GTC for ~90 days. A stale short entry filling weeks later on dead news is the exact hazard the reaper exists to kill (BUG-2026-06-08-02), now on the short side: e.g. RXT `sell_to_open 55` would open a $360 short on a 4-day-old headline whenever the price drifted to its limit. All 20 zombies were cancelled manually during the incident.
+
+**Resolution:** Reap strictly by **intent ∈ {`buy_to_open`, `sell_to_open`}** — the two intents that open positions — with no side filter at all. Side is the wrong axis in both directions: buy-side filtering cancels a short's `buy_to_close` protection (BUG-2026-07-01-01), and it hides `sell_to_open` entries (this bug). `*_to_close` orders and intent-less orders are still always skipped (fail safe toward keeping protection).
+- `backend/agent/trader.py` — intent-only reap filter.
+- `backend/agent/test_risk_hardening.py` — a stale `sell_to_open` zombie is reaped; a long's protective `sell_to_close` stop leg still survives.
+
+</details>
+
+<details>
 <summary><b>BUG-2026-07-13-01 — Position monitor thread silently wedged on a timeout-less Alpaca HTTP call — the entire safety loop (stops, exits, reaper, reconciliation) was dead for days while the consumer kept trading</b></summary>
 
 <br/>

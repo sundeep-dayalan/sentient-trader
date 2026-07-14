@@ -862,7 +862,7 @@ class AlpacaTrader:
             return False
 
     def reap_stale_entry_orders(self, max_age_seconds: float) -> int:
-        """Cancel unfilled ``buy_to_open`` entry orders older than ``max_age_seconds``.
+        """Cancel unfilled *entry* orders older than ``max_age_seconds``.
 
         An entry that is still open with zero fills after a few minutes is a
         missed catalyst — under GTC it would otherwise linger for ~90 days and
@@ -870,12 +870,16 @@ class AlpacaTrader:
         its child legs too, which is correct since no position exists.
         (See README Bug Log: BUG-2026-06-08-02)
 
-        We reap strictly by ``position_intent == "buy_to_open"``, never by side
-        alone. A *protected short* attaches its take-profit/stop-loss as
-        ``buy_to_close`` legs — which are also BUY side — so a side-only filter
-        cancels the short's protection and leaves it naked with unbounded
-        downside. When Alpaca doesn't report an intent we skip (fail safe toward
-        keeping protection). (See README Bug Log: BUG-2026-07-01-01)
+        We reap strictly by position_intent in {``buy_to_open``,
+        ``sell_to_open``} — the two intents that *open* positions — never by
+        side. Side is the wrong axis in both directions: a protected short's
+        take-profit/stop-loss legs are BUY side (``buy_to_close``), so a
+        buy-side filter cancels the short's protection (README Bug Log:
+        BUG-2026-07-01-01); and a ``sell_to_open`` short entry is SELL side, so
+        the old buy-side pre-filter made short-entry zombies invisible to the
+        reaper forever — four of them survived 4+ days in prod (README Bug Log:
+        BUG-2026-07-13-02). When Alpaca doesn't report an intent we skip (fail
+        safe toward keeping protection).
 
         Returns the number of orders cancelled.
         """
@@ -886,12 +890,11 @@ class AlpacaTrader:
         now = datetime.now(timezone.utc)
         reaped = 0
         for o in self.get_open_orders():
-            if str(o.get("side", "")).lower() != "buy":
-                continue
-            # Only genuine entry orders may be reaped. buy_to_close legs protect
-            # an open short; cancelling them is exactly the bug we're guarding
-            # against. Missing/empty intent → skip rather than risk a naked short.
-            if o.get("position_intent") != "buy_to_open":
+            # Only genuine entry orders may be reaped. *_to_close orders are a
+            # position's protection; cancelling them is exactly the bug class
+            # we're guarding against. Missing/empty intent → skip rather than
+            # risk stripping protection.
+            if o.get("position_intent") not in ("buy_to_open", "sell_to_open"):
                 continue
             if (o.get("filled_qty") or 0.0) > 0:
                 continue  # partially filled — a position exists, leave it
