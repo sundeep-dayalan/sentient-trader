@@ -32,6 +32,14 @@ then trades **only** when conviction, risk, and quality gates all clear.
 
 <br/>
 
+> ### 🐞 Featured: [The Bug Log](#-bug-log)
+> **25+ production postmortems, documented in full** — the safety loop that ran 1,050 iterations
+> without acting, the sweep that stripped 66 stop-losses in two minutes, the enum that silently
+> disabled an entire subsystem. Every entry: what broke, what it cost, and the fix.
+> *The postmortems turned out to be more valuable than the features.*
+
+<br/>
+
 <!-- ──────────────────────────────────────────────────────────────────────────
      DEMO CLIP — swap the poster below for a real recording of the dashboard.
        1. Screen-record ~20–40s of the live app: signals streaming in, a card
