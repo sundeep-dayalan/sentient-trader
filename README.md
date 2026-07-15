@@ -1002,6 +1002,22 @@ Sentient Trader is open for contributors who care about transparent AI systems, 
 > A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
 
 <details>
+<summary><b>BUG-2026-07-15-01 — Signal-calibration dashboard reported a phantom −22% edge: raw averages let one penny-stock print dominate an entire conviction bucket</b></summary>
+
+<br/>
+
+**Identified:** 2026-07-15, reviewing the "Signal Calibration" panel. The SELL/<0.50 bucket showed a **−22.15% end-of-day edge** across 254 signals — a number that's physically impossible as an average (stocks don't move −22% in a day *on average*), and which had swung 16 points in a week from ~27 new labels. A month-over-month cohort analysis (median + winsorized mean) confirmed the true edge of that bucket was **≈ +0.7% to +2.5%**; the −22% was an artifact, not signal.
+
+**Impact:** The `signal_calibration` Postgres RPC computed each bucket's edge as a plain `avg(dir * return_eod)` with no outlier control and no price floor. On sub-$5 tickers a single tick is a huge *percentage* move — a $1.68 stock ticking $0.37 is a "+22% return" — so ~70 penny-stock labels dragged a 254-signal mean to −26% while its median sat at +0.9%. The panel is the primary lens for "is the AI's conviction predictive?", so the artifact actively misleads threshold-tuning decisions (it made a marginally-positive short bucket look catastrophically anti-predictive). No trading impact — these signals are sub-threshold and never execute, and the live `feedback_loop` is win-rate based (immune to magnitude outliers), but the *measurement* was wrong.
+
+**Resolution:** Robustify the display aggregate; keep the stored data raw.
+- `supabase/schema.sql` + `supabase/queries/signal_calibration.sql` — every return is **winsorized to ±15%** before averaging (caps the tail, preserves sign so win rates are unchanged) and sub-$3 tickers are excluded (microstructure noise, not signal; permissive on NULL price since winsorization backstops it). Same single-arg signature and JSON shape — a drop-in `CREATE OR REPLACE`. Validated against a month of production labels: the −26.6% raw mean, the +15%-winsorized mean (+2.5%), and the price-filtered median (+0.9%) all converge on "small but positive".
+- The `signal_outcomes` table still stores **raw** returns — only the read-time aggregate is robustified, so no information is lost and the fix is reversible.
+- **Lesson:** never report a bare mean over ratio-of-price data with a mixed-price universe; winsorize or use the median, and put a price floor on percentage-return comparisons.
+
+</details>
+
+<details>
 <summary><b>BUG-2026-07-14-02 — Trailing stops moved via cancel-then-place: the first real trailing sweep stripped 66 positions of their stop legs in two minutes</b></summary>
 
 <br/>

@@ -288,18 +288,33 @@ LANGUAGE sql
 STABLE
 SET search_path = sentient_trader, public
 AS $$
+  -- Robust calibration (see README Bug Log: BUG-2026-07-15-01). Raw averages
+  -- were dominated by penny-stock outliers: a $1.68 stock ticking $0.37 is a
+  -- +22% "return", and ~70 such labels dragged the SELL/<0.50 bucket to a
+  -- phantom -26% mean while its median was +0.9%. Two defenses:
+  --   1. WINSORIZE every return to +/- 0.15 before averaging, so a single
+  --      tail print can't dominate a bucket. Sign is preserved, so win rates
+  --      are unaffected; only magnitude is capped.
+  --   2. PRICE FLOOR: exclude sub-$3 tickers whose percentage moves are
+  --      microstructure noise, not signal (permissive on NULL price —
+  --      winsorization is the backstop there).
+  -- The signal_outcomes table still stores the RAW returns; only this display
+  -- aggregate is robustified.
   WITH labeled AS (
     SELECT
       coalesce(t.pm_recommendation, t.trade_action)               AS action,
       coalesce(t.calibrated_confidence, t.confidence_score)::float8 AS conviction,
       CASE WHEN coalesce(t.pm_recommendation, t.trade_action) = 'SELL'
            THEN -1 ELSE 1 END                                      AS dir,
-      o.return_15m, o.return_1h, o.return_eod
+      greatest(-0.15, least(0.15, o.return_15m))                   AS return_15m,
+      greatest(-0.15, least(0.15, o.return_1h))                    AS return_1h,
+      greatest(-0.15, least(0.15, o.return_eod))                   AS return_eod
     FROM signal_outcomes o
     JOIN trades t ON t.id = o.trade_id
     WHERE o.label_status IN ('LABELED', 'PARTIAL')
       AND coalesce(t.pm_recommendation, t.trade_action) IN ('BUY', 'SELL')
       AND o.return_eod IS NOT NULL
+      AND (o.signal_price IS NULL OR o.signal_price >= 3)
   ),
   bucketed AS (
     SELECT
