@@ -624,3 +624,45 @@ def test_reconciliation_reanchors_stop_from_rejection_price(monkeypatch):
     assert trader.attempts[1] == round(328.28 * 0.97, 2)  # anchored to LIVE price
     assert pm._current_stop_prices["WST"] == trader.attempts[1]
     pm._clear_tracking()
+
+
+# ── BUG-2026-07-15-02: monitor must see `held` bracket stop legs ──────────────
+
+
+def test_get_open_orders_includes_held_and_excludes_terminal():
+    from test_order_execution_fixes import _make_trader
+
+    captured = {}
+
+    class _AllStatusClient:
+        def get(self, path, data=None):
+            captured["status"] = data.get("status")
+            return [
+                # bracket take-profit — visible
+                {"id": "tp", "symbol": "EAT", "type": "limit", "side": "sell",
+                 "position_intent": "sell_to_close", "status": "new",
+                 "qty": "1", "filled_qty": "0", "created_at": None, "legs": None},
+                # bracket stop-loss — HELD (the leg status=open used to drop)
+                {"id": "sl", "symbol": "EAT", "type": "stop", "side": "sell",
+                 "position_intent": "sell_to_close", "status": "held",
+                 "stop_price": "179.96", "qty": "1", "filled_qty": "0",
+                 "created_at": None, "legs": None},
+                # terminal — must be excluded
+                {"id": "old", "symbol": "EAT", "type": "limit", "side": "buy",
+                 "position_intent": "buy_to_open", "status": "filled",
+                 "qty": "1", "filled_qty": "1", "created_at": None, "legs": None},
+                {"id": "gone", "symbol": "EAT", "type": "stop", "side": "sell",
+                 "position_intent": "sell_to_close", "status": "canceled",
+                 "qty": "1", "filled_qty": "0", "created_at": None, "legs": None},
+            ]
+
+    trader = _make_trader(_AllStatusClient())
+    orders = trader.get_open_orders("EAT")
+
+    assert captured["status"] == "all"            # not "open" (drops held)
+    ids = {o["id"] for o in orders}
+    assert ids == {"tp", "sl"}                    # held kept, terminal dropped
+    # And the reconciliation's stop-finder now sees the held bracket stop:
+    from position_monitor import _find_existing_stop_order
+    found = _find_existing_stop_order(orders, "EAT", "sell")
+    assert found is not None and found["id"] == "sl"

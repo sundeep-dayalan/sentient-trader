@@ -831,27 +831,47 @@ class AlpacaTrader:
             log.warning("Could not fetch Alpaca position for %s: %s", ticker, exc)
             return flat
 
-    def get_open_orders(self, ticker: Optional[str] = None) -> list[dict]:
-        """Return open orders, optionally filtered by ticker symbol.
+    # Non-terminal order statuses — everything that still holds shares or could
+    # still fill. Critically includes ``held``: a bracket's stop-loss leg sits
+    # in ``held`` while its take-profit sibling is ``new``, and Alpaca's
+    # ``status=open`` filter EXCLUDES ``held`` — so querying ``open`` makes every
+    # bracket-native stop invisible, causing false "POSITION HAS NO STOP" alarms
+    # and silently breaking trailing-stop ratcheting on bracket positions
+    # (README Bug Log: BUG-2026-07-15-02).
+    _ACTIVE_ORDER_STATUSES = {
+        "new", "accepted", "pending_new", "accepted_for_bidding",
+        "partially_filled", "held", "pending_replace", "pending_cancel",
+    }
 
-        Fetched via RAW REST rather than the SDK's typed models, for three
-        production reasons (README Bug Log: BUG-2026-07-14-01):
+    def get_open_orders(self, ticker: Optional[str] = None) -> list[dict]:
+        """Return all *working* orders (incl. held bracket legs), opt. by ticker.
+
+        Fetched via RAW REST rather than the SDK's typed models, for reasons
+        accumulated across production incidents:
           1. alpaca-py 0.26's Order model predates ``position_intent`` and
              silently drops it — which turned the intent-filtered reaper and
-             the zombie gauge into no-ops (every order looked intent-less).
+             the zombie gauge into no-ops (BUG-2026-07-14-01).
           2. The endpoint's default ``limit`` is 50; with ~100 working orders
              the OLDEST half — exactly where zombies live — was invisible.
           3. Raw JSON carries plain lowercase tokens, immune to the enum-prefix
              normalization bugs that have bitten the SDK path repeatedly.
+          4. We query ``status=all`` and filter to non-terminal statuses
+             client-side, because ``status=open`` drops ``held`` bracket stop
+             legs (BUG-2026-07-15-02). Working orders are always recent, so the
+             500-row window reliably contains them.
         """
         if self._dry_run:
             return []
         try:
-            params: dict[str, Any] = {"status": "open", "limit": 500,
+            params: dict[str, Any] = {"status": "all", "limit": 500,
                                       "nested": "false"}
             if ticker:
                 params["symbols"] = ticker
             raw = self._client.get("/orders", data=params) or []
+            raw = [
+                o for o in raw
+                if _normalize_status(o.get("status")) in self._ACTIVE_ORDER_STATUSES
+            ]
             return [
                 {
                     "id": str(o.get("id") or ""),

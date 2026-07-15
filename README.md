@@ -1002,6 +1002,28 @@ Sentient Trader is open for contributors who care about transparent AI systems, 
 > A running record of bugs found in production, their impact, and how they were resolved — kept for future reference. Newest first. Collapsed by default.
 
 <details>
+<summary><b>BUG-2026-07-15-02 — Position monitor was blind to every bracket stop-loss: Alpaca's <code>status=open</code> filter drops the <code>held</code> status that bracket stop legs live in</b></summary>
+
+<br/>
+
+**Identified:** 2026-07-15, during a routine "how's it performing" check. `get_open_orders` showed all 5 fresh positions holding a take-profit leg and **no stop-loss** — the exact BUG-2026-07-14-02 signature. But a `nested=true` audit revealed the stops *did* exist: `sell stop @ 179.96, status "held"`, live and protective. The positions were never naked. The monitor just couldn't see the stops.
+
+**Impact:** `get_open_orders` queried `status=open`. Alpaca's `open` filter **excludes the `held` status**, and a bracket's stop-loss leg sits in `held` while its take-profit sibling is `new`. So every bracket-native stop was invisible to the monitor. Verified live: `status=open` returned 4 take-profit legs and 0 stops, while `status=all` showed 4 `stop/held` legs actively guarding the positions. Three consequences, all noise/degradation rather than risk (the money was protected the whole time):
+1. A false `POSITION HAS NO STOP` CRITICAL every sweep for every bracket position — log noise that would *mask* a genuinely naked position.
+2. **Trailing stops silently never functioned on bracket positions** — `_find_existing_stop_order` couldn't see the held stop to ratchet it, so winners' stops never tightened (the whole point of trailing).
+3. Reconciliation wasted a placement attempt every sweep (rejected — shares held).
+   Notably the Prometheus `positions_without_stop` gauge was **not** fooled — it keys on `qty_available`, not order visibility — which is why no false Telegram alerts fired; only the logs and the trailing logic were affected.
+
+**Resolution:** `get_open_orders` now queries `status=all` and filters client-side to non-terminal statuses (`new, accepted, pending_new, accepted_for_bidding, partially_filled, held, pending_replace, pending_cancel`) — `held` included. Working orders are always recent, so the 500-row window reliably contains them.
+- `backend/agent/trader.py` — `_ACTIVE_ORDER_STATUSES` set + `status=all` query with client-side filter.
+- Live-verified: the fix surfaces the 4 previously-invisible `stop/held` legs; only the halted BLD short and the genuine TSLA orphan remain (correctly) stop-less.
+- `backend/agent/test_risk_hardening.py` — held legs are returned, terminal orders excluded, and the stop-finder locates the held bracket stop.
+
+**Lesson (3rd time this class appears — see BUG-2026-06-10-01, -07-14-01):** never trust a broker/SDK default filter to mean what you assume. `open` did not mean "all working orders". Query broadly, filter explicitly on statuses you've enumerated.
+
+</details>
+
+<details>
 <summary><b>BUG-2026-07-15-01 — Signal-calibration dashboard reported a phantom −22% edge: raw averages let one penny-stock print dominate an entire conviction bucket</b></summary>
 
 <br/>
