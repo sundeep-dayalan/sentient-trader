@@ -2,28 +2,33 @@
 -- signal_calibration(min_signals int) — robust calibration RPC
 -- =============================================================================
 -- Powers the dashboard "Signal Calibration" panel. Winsorizes returns to
--- +/- 15% and excludes sub-$3 tickers so penny-stock microstructure noise
+-- +/- 15% and excludes tickers under 3.00 so penny-stock microstructure noise
 -- can't produce phantom bucket means (README Bug Log: BUG-2026-07-15-01).
 -- Drop-in: same single-arg signature, same JSON output shape.
--- Apply with:  psql "$DATABASE_URL" -f supabase/queries/signal_calibration.sql
+--
+-- Editor-safe: uses a named $fn$ dollar-quote tag and no literal $ in comments
+-- (the Supabase SQL editor's parser mis-reads bare $$ + $-signs as delimiters).
+--
+-- PROD uses schema sentient_trader. For DEV, change the search_path line to
+--   SET search_path = sentient_trader_dev, public
+-- Apply:  paste into the Supabase SQL editor and Run, or
+--         psql "$DATABASE_URL" -f supabase/queries/signal_calibration.sql
+-- =============================================================================
 CREATE OR REPLACE FUNCTION signal_calibration(min_signals int DEFAULT 1)
 RETURNS jsonb
 LANGUAGE sql
 STABLE
 SET search_path = sentient_trader, public
-AS $$
-  -- Robust calibration (see README Bug Log: BUG-2026-07-15-01). Raw averages
-  -- were dominated by penny-stock outliers: a $1.68 stock ticking $0.37 is a
-  -- +22% "return", and ~70 such labels dragged the SELL/<0.50 bucket to a
-  -- phantom -26% mean while its median was +0.9%. Two defenses:
-  --   1. WINSORIZE every return to +/- 0.15 before averaging, so a single
-  --      tail print can't dominate a bucket. Sign is preserved, so win rates
-  --      are unaffected; only magnitude is capped.
-  --   2. PRICE FLOOR: exclude sub-$3 tickers whose percentage moves are
-  --      microstructure noise, not signal (permissive on NULL price —
-  --      winsorization is the backstop there).
-  -- The signal_outcomes table still stores the RAW returns; only this display
-  -- aggregate is robustified.
+AS $fn$
+  -- Robust calibration (README Bug Log: BUG-2026-07-15-01). Raw averages were
+  -- dominated by penny-stock outliers: a 1.68 USD stock ticking 0.37 is a +22%
+  -- "return", and ~70 such labels dragged the SELL/<0.50 bucket to a phantom
+  -- -26% mean while its median was +0.9%. Two defenses:
+  --   1. WINSORIZE every return to +/- 0.15 before averaging (caps the tail,
+  --      preserves sign so win rates are unchanged).
+  --   2. PRICE FLOOR: exclude tickers under 3.00 (microstructure noise;
+  --      permissive on NULL price, winsorization is the backstop).
+  -- signal_outcomes still stores RAW returns; only this display aggregate is robust.
   WITH labeled AS (
     SELECT
       coalesce(t.pm_recommendation, t.trade_action)               AS action,
@@ -78,4 +83,17 @@ AS $$
   SELECT jsonb_build_object(
     'labeledSignals', (SELECT count(*) FROM bucketed),
     'buckets', coalesce(
-
+      (SELECT jsonb_agg(to_jsonb(per_bucket) ORDER BY action,
+         CASE bucket
+           WHEN '0.90+' THEN 1
+           WHEN '0.80-0.90' THEN 2
+           WHEN '0.70-0.80' THEN 3
+           WHEN '0.50-0.70' THEN 4
+           WHEN '<0.50' THEN 5
+         END)
+       FROM per_bucket), '[]'::jsonb),
+    'overall', coalesce(
+      (SELECT jsonb_agg(to_jsonb(per_action) ORDER BY action)
+       FROM per_action), '[]'::jsonb)
+  );
+$fn$;
