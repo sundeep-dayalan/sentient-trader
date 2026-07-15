@@ -6,15 +6,20 @@
 -- can't produce phantom bucket means (README Bug Log: BUG-2026-07-15-01).
 -- Drop-in: same single-arg signature, same JSON output shape.
 --
--- Editor-safe: uses a named $fn$ dollar-quote tag and no literal $ in comments
--- (the Supabase SQL editor's parser mis-reads bare $$ + $-signs as delimiters).
+-- IMPORTANT: the CREATE is schema-qualified (sentient_trader.signal_calibration)
+-- so the Supabase SQL editor replaces the function PostgREST actually calls,
+-- not a stray copy in its default `public` schema. The leading DROP removes any
+-- such stray copy from an earlier unqualified run. Uses a named $fn$ tag and no
+-- literal $ in comments (the editor mis-reads bare $$ + $-signs).
 --
--- PROD uses schema sentient_trader. For DEV, change the search_path line to
---   SET search_path = sentient_trader_dev, public
--- Apply:  paste into the Supabase SQL editor and Run, or
---         psql "$DATABASE_URL" -f supabase/queries/signal_calibration.sql
+-- For DEV, change BOTH the CREATE target and the search_path to
+--   sentient_trader_dev.
+-- Apply: paste into the Supabase SQL editor and Run.
 -- =============================================================================
-CREATE OR REPLACE FUNCTION signal_calibration(min_signals int DEFAULT 1)
+
+DROP FUNCTION IF EXISTS public.signal_calibration(int);
+
+CREATE OR REPLACE FUNCTION sentient_trader.signal_calibration(min_signals int DEFAULT 1)
 RETURNS jsonb
 LANGUAGE sql
 STABLE
