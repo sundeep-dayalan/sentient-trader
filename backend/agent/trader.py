@@ -197,18 +197,30 @@ class AlpacaTrader:
     _cache_lock = threading.Lock()
     _clock_cache: tuple[float, Optional[dict]] = (0.0, None)
     _risk_context_cache: tuple[float, Optional[dict]] = (0.0, None)
+    _replay = False
 
     def __init__(self) -> None:
-        self._dry_run = os.environ.get("MOCK_ALPACA", "false").lower() == "true"
+        # REPLAY_MODE implies the existing MOCK_ALPACA dry run so a replay
+        # signal can never reach the order path, and additionally skips client
+        # construction entirely: replay is the no-key demo, so it must not read
+        # an Alpaca credential at all. MOCK_ALPACA on its own is unchanged. It
+        # still opens a read-only paper client for account/position context and
+        # only mocks order submission.
+        self._replay = bool(config.REPLAY_MODE)
+        self._dry_run = (
+            os.environ.get("MOCK_ALPACA", "false").lower() == "true" or self._replay
+        )
         if TradingClient is None:
             raise RuntimeError(
                 "alpaca-py is not installed. Install backend/agent requirements before running the agent."
             )
-        self._client = harden_alpaca_client(TradingClient(
-            api_key=os.environ["ALPACA_API_KEY"],
-            secret_key=os.environ["ALPACA_SECRET_KEY"],
-            paper=True,  # Hardcoded — this service must never touch live funds
-        ))
+        self._client = None
+        if not self._replay:
+            self._client = harden_alpaca_client(TradingClient(
+                api_key=os.environ["ALPACA_API_KEY"],
+                secret_key=os.environ["ALPACA_SECRET_KEY"],
+                paper=True,  # Hardcoded — this service must never touch live funds
+            ))
         # Lazy data client for last-mile bracket-price sanity checks.
         self._data_client = None
         # Small TTL caches for risk plumbing. Guarded by a lock because the
@@ -216,7 +228,11 @@ class AlpacaTrader:
         self._cache_lock = threading.Lock()
         self._clock_cache: tuple[float, Optional[dict]] = (0.0, None)
         self._risk_context_cache: tuple[float, Optional[dict]] = (0.0, None)
-        if self._dry_run:
+        if self._replay:
+            log.info(
+                "Alpaca trader initialized in REPLAY mode (no broker client, no credentials read)"
+            )
+        elif self._dry_run:
             log.info("Alpaca trader initialized in MOCK mode (Dry run)")
         else:
             log.info("Alpaca trader initialized (paper trading mode)")

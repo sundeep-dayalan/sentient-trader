@@ -22,6 +22,16 @@ log = logging.getLogger("agent.config")
 
 # ── Infrastructure — deployment-level, not stored in Supabase ────────────────
 
+# Deterministic no-key replay for local demos and CI. Off by default; when it
+# is off every code path below behaves exactly as it did before this flag
+# existed. When it is on the agent takes canned news, market context, and (only
+# if the configured provider has no API key) canned committee output from
+# backend/agent/replay.py, constructs no Alpaca client, and starts no
+# broker-facing background loop. It changes no live-order behavior: a replay
+# signal is simulated, so the existing risk-gate block is what stops it.
+# Documented in docs/LOCAL_DEMO.md.
+REPLAY_MODE = os.environ.get("REPLAY_MODE", "false").strip().lower() == "true"
+
 # Used only when Groq's /models discovery is unavailable. Normal operation is
 # auto-ranked from the live endpoint. Groq Always Free intentionally does not
 # allow operator-selected model IDs; the router uses whichever free active model

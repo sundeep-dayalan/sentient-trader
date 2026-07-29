@@ -48,6 +48,7 @@ llm.py — this file is provider-agnostic.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import logging
 import os
@@ -70,9 +71,15 @@ from decision_rules import (
     quality_prompt_block,
     threshold_gate_decision,
 )
-from llm import ModelRouter, create_llm_client, sanitize_llm_error
+from llm import (
+    DETERMINISTIC_REPLAY_PROVIDER_NAME,
+    ModelRouter,
+    create_llm_client,
+    sanitize_llm_error,
+)
 from llm_budget import LLMBudget
 from logger import SupabaseLogger
+from replay import UNKNOWN_REPLAY_CONTEXT, fixture_for_news
 from schemas import (
     LLMOperationTrace,
     NewsMessage,
@@ -503,15 +510,21 @@ def _make_fetch_context_node(trader: AlpacaTrader):
     Fails gracefully — if Alpaca is unreachable or the ticker is non-standard
     (common in simulate mode), market_context is None and each persona prompt
     falls back to "live price unavailable".
+
+    In REPLAY_MODE no market-data client is constructed and no trader method is
+    called: the context comes from backend/agent/replay.py so the demo needs no
+    Alpaca credential and produces the same numbers on every run.
     """
-    try:
-        data_client = harden_alpaca_client(StockHistoricalDataClient(
-            api_key=os.environ["ALPACA_API_KEY"],
-            secret_key=os.environ["ALPACA_SECRET_KEY"],
-        ))
-    except Exception as exc:
-        log.warning("Alpaca data client init failed: %s", exc)
-        data_client = None
+    data_client = None
+    if not config.REPLAY_MODE:
+        try:
+            data_client = harden_alpaca_client(StockHistoricalDataClient(
+                api_key=os.environ["ALPACA_API_KEY"],
+                secret_key=os.environ["ALPACA_SECRET_KEY"],
+            ))
+        except Exception as exc:
+            log.warning("Alpaca data client init failed: %s", exc)
+            data_client = None
 
     def fetch_context(state: AgentState) -> dict:
         news = state["news"]
@@ -522,6 +535,31 @@ def _make_fetch_context_node(trader: AlpacaTrader):
             article_quality.to_dict(),
             label="Article quality",
         )
+
+        if config.REPLAY_MODE:
+            fixture = fixture_for_news(news)
+            if fixture is None:
+                log.info(
+                    "Replay context [%s]: headline is not a fixture; using the "
+                    "no-price replay context",
+                    news.ticker,
+                )
+                return {
+                    "market_context": copy.deepcopy(UNKNOWN_REPLAY_CONTEXT),
+                    "article_quality": article_quality.to_dict(),
+                    "all_positions": [],
+                }
+            log.info(
+                "Replay context [%s]: fixture %s at $%.2f",
+                news.ticker,
+                fixture.case,
+                fixture.market_context["price"],
+            )
+            return {
+                "market_context": fixture.context(),
+                "article_quality": article_quality.to_dict(),
+                "all_positions": fixture.positions(),
+            }
 
         account_context = trader.get_account_context()
         position_context = trader.get_position_context(news.ticker)
@@ -1667,14 +1705,19 @@ def _make_confirm_signal_node():
     trade, degrade to current behavior, logged). CONFIRM_REQUIRE_DATA flips this
     to strict (block when the tape can't be verified).
     """
-    try:
-        _conf_data_client = harden_alpaca_client(StockHistoricalDataClient(
-            api_key=os.environ["ALPACA_API_KEY"],
-            secret_key=os.environ["ALPACA_SECRET_KEY"],
-        ))
-    except Exception as exc:
-        log.warning("Confirmation data client init failed: %s", exc)
-        _conf_data_client = None
+    # REPLAY_MODE builds no Alpaca client and reads no Alpaca credential. This
+    # node is unreachable for a simulated signal anyway; the guard is what makes
+    # "replay constructs no broker client" checkable rather than incidental.
+    _conf_data_client = None
+    if not config.REPLAY_MODE:
+        try:
+            _conf_data_client = harden_alpaca_client(StockHistoricalDataClient(
+                api_key=os.environ["ALPACA_API_KEY"],
+                secret_key=os.environ["ALPACA_SECRET_KEY"],
+            ))
+        except Exception as exc:
+            log.warning("Confirmation data client init failed: %s", exc)
+            _conf_data_client = None
 
     def _fetch_minute_bars(ticker: str, start: datetime):
         from alpaca.data.requests import StockBarsRequest
@@ -1795,14 +1838,20 @@ def _make_confirm_signal_node():
 
 
 def _make_execute_trade_node(trader: AlpacaTrader, cache: HeadlineCache):
-    """Build a data-client once for the price-move gate re-check."""
-    try:
-        _exec_data_client = harden_alpaca_client(StockHistoricalDataClient(
-            api_key=os.environ["ALPACA_API_KEY"],
-            secret_key=os.environ["ALPACA_SECRET_KEY"],
-        ))
-    except Exception:
-        _exec_data_client = None
+    """Build a data-client once for the price-move gate re-check.
+
+    None in REPLAY_MODE: replay constructs no Alpaca client and reads no Alpaca
+    credential. Order behavior itself is untouched.
+    """
+    _exec_data_client = None
+    if not config.REPLAY_MODE:
+        try:
+            _exec_data_client = harden_alpaca_client(StockHistoricalDataClient(
+                api_key=os.environ["ALPACA_API_KEY"],
+                secret_key=os.environ["ALPACA_SECRET_KEY"],
+            ))
+        except Exception:
+            _exec_data_client = None
 
     def _refetch_live_price(ticker: str) -> Optional[float]:
         """Get the latest trade price for a ticker right before order submission."""
@@ -2368,8 +2417,14 @@ def build_agent_graph(
     # don't open a second one. Disabled unless LLM_DAILY_CALL_BUDGET > 0.
     budget = LLMBudget(redis_client=cache.redis_client)
     llm_client = create_llm_client()
-    # Attach the budget so the router charges one unit per real LLM call.
-    llm_client.budget = budget
+    # Attach the budget so the router charges one unit per real LLM call. The
+    # deterministic replay provider makes no provider call, so charging it would
+    # let a local demo exhaust the daily cap and push later signals into the
+    # pre-screen-only HOLD path for no reason.
+    if llm_client.provider.name != DETERMINISTIC_REPLAY_PROVIDER_NAME:
+        llm_client.budget = budget
+    else:
+        log.info("Replay committee active; the daily LLM-call budget is not charged")
     router = ModelRouter()
 
     graph = StateGraph(AgentState)

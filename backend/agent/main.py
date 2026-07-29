@@ -66,6 +66,33 @@ config.reload_from_supabase()
 log = logging.getLogger("agent.main")
 
 
+def start_side_loops(trader: AlpacaTrader) -> Any:
+    """Start the singleton side-loops, or none of them in REPLAY_MODE.
+
+    Both loops hold Redis leader locks so running more than one agent replica
+    never double-manages stops or double-runs the labeler. Both also sit
+    outside the replay graph and can reach broker-facing paths, so REPLAY_MODE
+    leaves them stopped instead of relying on the dry-run flag alone.
+
+    Returns the scheduler when one was started, otherwise None.
+    """
+    if config.REPLAY_MODE:
+        log.info("REPLAY_MODE: outcome labeler and position monitor are not started")
+        return None
+
+    lock_redis = create_redis_client()
+    scheduler = start_outcome_labeler_scheduler(
+        run_tracker=default_scheduler_run_tracker(),
+        lock=RedisLeaderLock(lock_redis, "outcome-labeler"),
+    )
+    start_position_monitor(
+        trader,
+        lock=RedisLeaderLock(lock_redis, "position-monitor"),
+        health_redis=lock_redis,
+    )
+    return scheduler
+
+
 def main() -> None:
     log.info("Sentient Trader agent service starting...")
 
@@ -77,18 +104,7 @@ def main() -> None:
     # Compile the LangGraph state machine once — reused for every message
     graph = build_agent_graph(cache=cache, trader=trader, db=db)
 
-    # Singleton side-loops hold Redis leader locks so running more than one
-    # agent replica never double-manages stops or double-runs the labeler.
-    lock_redis = create_redis_client()
-    scheduler = start_outcome_labeler_scheduler(
-        run_tracker=default_scheduler_run_tracker(),
-        lock=RedisLeaderLock(lock_redis, "outcome-labeler"),
-    )
-    start_position_monitor(
-        trader,
-        lock=RedisLeaderLock(lock_redis, "position-monitor"),
-        health_redis=lock_redis,
-    )
+    scheduler = start_side_loops(trader)
 
     def process_news(news: NewsMessage) -> None:
         """Run one news article through the full agent graph."""
