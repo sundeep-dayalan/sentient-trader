@@ -42,6 +42,7 @@ from schemas import NewsMessage
 # cannot be confused with a real article and a real article cannot be confused
 # with a fixture.
 REPLAY_SOURCE_PREFIX = "sentient-replay/"
+REPLAY_IDENTITY_FIELD = "_sentient_replay_fixture"
 
 # Committee stages a fixture answers for. ``momentum`` and ``value`` share the
 # PersonaAnalysis schema, so they are told apart by the code-owned prompt
@@ -432,6 +433,8 @@ UNKNOWN_REPLAY_CONTEXT: dict[str, Any] = {
 
 def fixture_for_news(news: NewsMessage) -> Optional[ReplayFixture]:
     """Return the fixture this stream message came from, or None."""
+    if news.is_simulated is not True or news.article_url is not None:
+        return None
     source = (news.source or "").strip()
     if not source.startswith(REPLAY_SOURCE_PREFIX):
         return None
@@ -442,19 +445,18 @@ def fixture_for_news(news: NewsMessage) -> Optional[ReplayFixture]:
             fixture.source == source
             and fixture.headline == headline
             and fixture.ticker == ticker
+            and fixture.article_id == (news.article_id or "").strip()
+            and fixture.summary == (news.summary or "").strip()
         ):
             return fixture
     return None
 
 
-def fixture_for_prompt(prompt: str) -> Optional[ReplayFixture]:
-    """Return the fixture whose exact headline line appears in ``prompt``."""
-    if REPLAY_SOURCE_PREFIX not in prompt:
+def fixture_for_case(case: Any) -> Optional[ReplayFixture]:
+    """Resolve a code-owned replay identity, never user-controlled prompt text."""
+    if not isinstance(case, str):
         return None
-    for fixture in REPLAY_FIXTURES:
-        if fixture.prompt_marker in prompt:
-            return fixture
-    return None
+    return next((fixture for fixture in REPLAY_FIXTURES if fixture.case == case), None)
 
 
 def resolve_stage(response_model: type, prompt: str) -> str:

@@ -74,12 +74,13 @@ from decision_rules import (
 from llm import (
     DETERMINISTIC_REPLAY_PROVIDER_NAME,
     ModelRouter,
+    active_provider,
     create_llm_client,
     sanitize_llm_error,
 )
 from llm_budget import LLMBudget
 from logger import SupabaseLogger
-from replay import UNKNOWN_REPLAY_CONTEXT, fixture_for_news
+from replay import REPLAY_IDENTITY_FIELD, UNKNOWN_REPLAY_CONTEXT, fixture_for_news
 from schemas import (
     LLMOperationTrace,
     NewsMessage,
@@ -448,6 +449,18 @@ def _llm_input_snapshot(
     }
 
 
+def _llm_messages(system_prompt: str, prompt: str, state: AgentState) -> list[dict]:
+    """Build provider messages with replay identity carried outside prompt text."""
+    user_message: dict[str, Any] = {"role": "user", "content": prompt}
+    replay_case = (state.get("market_context") or {}).get(REPLAY_IDENTITY_FIELD)
+    if replay_case is not None:
+        user_message[REPLAY_IDENTITY_FIELD] = replay_case
+    return [
+        {"role": "system", "content": system_prompt},
+        user_message,
+    ]
+
+
 def _llm_operation_trace(
     *,
     step: str,
@@ -556,7 +569,10 @@ def _make_fetch_context_node(trader: AlpacaTrader):
                 fixture.market_context["price"],
             )
             return {
-                "market_context": fixture.context(),
+                "market_context": {
+                    **fixture.context(),
+                    REPLAY_IDENTITY_FIELD: fixture.case,
+                },
                 "article_quality": article_quality.to_dict(),
                 "all_positions": fixture.positions(),
             }
@@ -769,7 +785,10 @@ def _make_budget_hold(news: Any, quality: dict, consume: dict) -> dict:
     return {"analysis": analysis, "article_quality": quality}
 
 
-def _make_pre_screen_node(budget: "LLMBudget | None" = None):
+def _make_pre_screen_node(
+    budget: "LLMBudget | None" = None,
+    llm_client: Any = None,
+):
     """
     Deterministically hold low-quality articles before spending LLM quota.
 
@@ -793,7 +812,12 @@ def _make_pre_screen_node(budget: "LLMBudget | None" = None):
             # budget is actually spent later, one unit per real LLM call (see
             # ModelRouter.call), so a failed or retried debate never leaves a
             # phantom charge behind. If the cap is already hit, HOLD deterministically.
-            if budget is not None:
+            provider_is_deterministic = (
+                llm_client is not None
+                and active_provider(llm_client).name
+                == DETERMINISTIC_REPLAY_PROVIDER_NAME
+            )
+            if budget is not None and not provider_is_deterministic:
                 consume = budget.check()
                 if not consume.get("allowed", True):
                     return _make_budget_hold(news, quality, consume)
@@ -902,15 +926,11 @@ def _make_momentum_analyst_node(router: ModelRouter, client: Any):
             f"{quality_prompt_block(state.get('article_quality'))}\n\n"
             f"Analyze this headline's impact on {news.ticker} from your momentum trading perspective."
         )
-        messages = [
-            {
-                "role": "system",
-                "content": guarded_system_prompt(
-                    config.MOMENTUM_SYSTEM_PROMPT, "momentum"
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ]
+        messages = _llm_messages(
+            guarded_system_prompt(config.MOMENTUM_SYSTEM_PROMPT, "momentum"),
+            prompt,
+            state,
+        )
         input_payload = _llm_input_snapshot(
             news,
             state.get("market_context"),
@@ -999,13 +1019,11 @@ def _make_value_analyst_node(router: ModelRouter, client: Any):
             f"As the Value Investor, respond to this headline and to the Momentum Trader's assessment. "
             f"Do the fundamentals confirm or contradict their directional call?"
         )
-        messages = [
-            {
-                "role": "system",
-                "content": guarded_system_prompt(config.VALUE_SYSTEM_PROMPT, "value"),
-            },
-            {"role": "user", "content": prompt},
-        ]
+        messages = _llm_messages(
+            guarded_system_prompt(config.VALUE_SYSTEM_PROMPT, "value"),
+            prompt,
+            state,
+        )
         input_payload = _llm_input_snapshot(
             news,
             state.get("market_context"),
@@ -1092,13 +1110,11 @@ def _make_risk_analyst_node(router: ModelRouter, client: Any):
             f"If risk is generic rather than article-specific, set risk_level LOW or MEDIUM and leave "
             f"disqualifying_conditions empty."
         )
-        messages = [
-            {
-                "role": "system",
-                "content": guarded_system_prompt(config.RISK_SYSTEM_PROMPT, "risk"),
-            },
-            {"role": "user", "content": prompt},
-        ]
+        messages = _llm_messages(
+            guarded_system_prompt(config.RISK_SYSTEM_PROMPT, "risk"),
+            prompt,
+            state,
+        )
         input_payload = _llm_input_snapshot(
             news,
             state.get("market_context"),
@@ -1281,15 +1297,11 @@ def _make_synthesizer_node(router: ModelRouter, client: Any):
                 f"Acknowledge the key tension if the committee was split or risk-capped. "
                 f"Recommend BUY/SELL only for concrete, source-backed catalysts; otherwise HOLD."
             )
-        messages = [
-            {
-                "role": "system",
-                "content": guarded_system_prompt(
-                    config.SYNTHESIS_SYSTEM_PROMPT, "synthesis"
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ]
+        messages = _llm_messages(
+            guarded_system_prompt(config.SYNTHESIS_SYSTEM_PROMPT, "synthesis"),
+            prompt,
+            state,
+        )
         input_payload = _llm_input_snapshot(
             news,
             state.get("market_context"),
@@ -2421,17 +2433,14 @@ def build_agent_graph(
     # deterministic replay provider makes no provider call, so charging it would
     # let a local demo exhaust the daily cap and push later signals into the
     # pre-screen-only HOLD path for no reason.
-    if llm_client.provider.name != DETERMINISTIC_REPLAY_PROVIDER_NAME:
-        llm_client.budget = budget
-    else:
-        log.info("Replay committee active; the daily LLM-call budget is not charged")
+    llm_client.budget = budget
     router = ModelRouter()
 
     graph = StateGraph(AgentState)
 
     graph.add_node("check_cache", _make_check_cache_node(cache))
     graph.add_node("fetch_context", _make_fetch_context_node(trader))
-    graph.add_node("pre_screen", _make_pre_screen_node(budget))
+    graph.add_node("pre_screen", _make_pre_screen_node(budget, llm_client))
     graph.add_node("momentum_analyst", _make_momentum_analyst_node(router, llm_client))
     graph.add_node("value_analyst", _make_value_analyst_node(router, llm_client))
     graph.add_node("risk_analyst", _make_risk_analyst_node(router, llm_client))

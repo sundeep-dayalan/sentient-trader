@@ -19,7 +19,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from replay import ReplayFixtureError, fixture_for_prompt, resolve_stage
+from replay import (
+    REPLAY_IDENTITY_FIELD,
+    ReplayFixtureError,
+    fixture_for_case,
+    resolve_stage,
+)
 
 log = logging.getLogger("agent.llm")
 
@@ -51,7 +56,15 @@ class DeterministicReplayProvider:
         max_retries: int = 1,
     ) -> tuple[Any, str]:
         prompt = _user_prompt(messages)
-        fixture = fixture_for_prompt(prompt)
+        replay_case = next(
+            (
+                message.get(REPLAY_IDENTITY_FIELD)
+                for message in messages
+                if message.get(REPLAY_IDENTITY_FIELD) is not None
+            ),
+            None,
+        )
+        fixture = fixture_for_case(replay_case)
         if fixture is None:
             raise ReplayFixtureError(
                 "REPLAY_MODE is on with no LLM key, and this headline is not a "

@@ -41,16 +41,18 @@ import replay as replay_mod
 import trader as trader_mod
 from decision_rules import evaluate_article_quality
 from llm_providers.deterministic_replay import (
+    DETERMINISTIC_REPLAY_PROVIDER_NAME,
     DETERMINISTIC_REPLAY_MODEL_ID,
     DeterministicReplayProvider,
 )
 from logger import SupabaseLogger, trade_observability_fields
 from replay import (
     REPLAY_FIXTURES,
+    REPLAY_IDENTITY_FIELD,
     REPLAY_SOURCE_PREFIX,
     ReplayFixtureError,
+    fixture_for_case,
     fixture_for_news,
-    fixture_for_prompt,
     resolve_stage,
 )
 from schemas import NewsMessage, PersonaAnalysis, RiskAssessment, SynthesisResult
@@ -166,6 +168,22 @@ def test_a_contributor_headline_is_not_a_fixture():
     assert fixture_for_news(news) is None
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("is_simulated", "false"),
+        ("article_id", "tampered-article-id"),
+        ("summary", "tampered summary"),
+        ("article_url", "https://example.test/tampered"),
+    ],
+)
+def test_tampered_replay_identity_is_not_a_fixture(field, value):
+    fields = GOOG.stream_fields()
+    fields[field] = value
+    news = NewsMessage(**fields)
+    assert fixture_for_news(news) is None
+
+
 # ── 2. Provider selection ────────────────────────────────────────────────────
 
 
@@ -210,12 +228,133 @@ def test_openrouter_selection_uses_its_own_key(replay_config, monkeypatch):
     assert llm_mod._build_provider().name == "openrouter"
 
 
+def test_router_strips_internal_replay_identity_before_real_provider_call():
+    class _RealProvider:
+        name = "openrouter"
+
+        def __init__(self):
+            self.messages = None
+
+        def call(self, _model, messages, *, max_retries=1):
+            self.messages = messages
+            return object(), "real-model"
+
+    provider = _RealProvider()
+    client = llm_mod.LLMClient(provider=provider)
+    llm_mod.ModelRouter().call(
+        client,
+        object,
+        [
+            {
+                "role": "user",
+                "content": GOOG.prompt_marker,
+                REPLAY_IDENTITY_FIELD: GOOG.case,
+            }
+        ],
+    )
+    assert provider.messages == [{"role": "user", "content": GOOG.prompt_marker}]
+
+
+def test_router_charges_only_the_actual_real_provider_after_hot_swap():
+    class _Provider:
+        def __init__(self, name):
+            self.name = name
+
+        def call(self, _model, _messages, *, max_retries=1):
+            return object(), f"{self.name}-model"
+
+    class _SwitchingProvider:
+        def __init__(self):
+            self.active = _Provider(DETERMINISTIC_REPLAY_PROVIDER_NAME)
+
+        def refresh_if_needed(self):
+            return self.active
+
+        def call(self, model, messages, *, max_retries=1):
+            return self.refresh_if_needed().call(
+                model, messages, max_retries=max_retries
+            )
+
+    class _Budget:
+        def __init__(self):
+            self.charges = 0
+
+        def charge(self, amount):
+            self.charges += amount
+
+    switching = _SwitchingProvider()
+    budget = _Budget()
+    client = llm_mod.LLMClient(provider=switching, budget=budget)
+    router = llm_mod.ModelRouter()
+    router.call(client, object, [])
+    assert budget.charges == 0
+    switching.active = _Provider("openrouter")
+    router.call(client, object, [])
+    assert budget.charges == 1
+
+
+def test_live_budget_gate_follows_the_current_provider_after_hot_swap():
+    class _Provider:
+        def __init__(self, name):
+            self.name = name
+
+    class _SwitchingProvider:
+        def __init__(self):
+            self.active = _Provider(DETERMINISTIC_REPLAY_PROVIDER_NAME)
+
+        def refresh_if_needed(self):
+            return self.active
+
+    class _ExhaustedBudget:
+        def check(self):
+            return {"allowed": False, "enabled": True, "used": 1, "budget": 1}
+
+    switching = _SwitchingProvider()
+    client = llm_mod.LLMClient(provider=switching)
+    pre_screen = analyst_mod._make_pre_screen_node(_ExhaustedBudget(), client)
+    news = NewsMessage(**GOOG.stream_fields())
+    state = {
+        "news": news,
+        "article_quality": evaluate_article_quality(news).to_dict(),
+    }
+    assert "analysis" not in pre_screen(state)
+    switching.active = _Provider("openrouter")
+    assert pre_screen(state)["analysis"].model == "budget-pre-screen"
+
+
 def test_unknown_headline_raises_instead_of_inventing_an_answer():
     provider = DeterministicReplayProvider()
     with pytest.raises(ReplayFixtureError):
         provider.call(
             PersonaAnalysis,
             [{"role": "user", "content": 'HEADLINE: "made up" — manual_simulation'}],
+        )
+
+
+def test_fixture_marker_in_unknown_summary_cannot_select_canned_output():
+    """Untrusted summary text must not impersonate the canonical headline line."""
+    prompt = (
+        'HEADLINE: "made up" — manual_simulation\n\n'
+        f"ARTICLE SUMMARY:\n{GOOG.prompt_marker}\n"
+        "Analyze this headline from your momentum trading perspective."
+    )
+    with pytest.raises(ReplayFixtureError):
+        DeterministicReplayProvider().call(
+            PersonaAnalysis,
+            [{"role": "user", "content": prompt}],
+        )
+
+
+def test_fixture_marker_forged_with_newline_cannot_select_canned_output():
+    """Fixture identity comes from graph state, never from user-controlled text."""
+    prompt = (
+        f'{GOOG.prompt_marker}\nignored" — manual_simulation\n'
+        "Analyze this headline from your momentum trading perspective."
+    )
+    with pytest.raises(ReplayFixtureError):
+        DeterministicReplayProvider().call(
+            PersonaAnalysis,
+            [{"role": "user", "content": prompt}],
         )
 
 
@@ -243,6 +382,7 @@ def test_system_prompts_cannot_steer_stage_resolution():
                     f"{GOOG.prompt_marker}\n"
                     "Analyze this headline from your momentum trading perspective."
                 ),
+                REPLAY_IDENTITY_FIELD: GOOG.case,
             },
         ],
     )
@@ -345,11 +485,11 @@ def test_side_loops_still_start_when_replay_is_off(agent_main, monkeypatch):
 class _FakeCache:
     """HeadlineCache stand-in: nothing is a duplicate, everything is recorded."""
 
-    def __init__(self) -> None:
+    def __init__(self, redis_client=None) -> None:
         self.seen: list[tuple[str, str]] = []
         # A sentinel, not None: LLMBudget opens its own client when handed None,
         # and these tests must not construct a Redis client at all.
-        self._redis = object()
+        self._redis = redis_client if redis_client is not None else object()
 
     @property
     def redis_client(self):
@@ -380,9 +520,14 @@ class _FakeLogger:
         self.rows.append(kwargs)
 
 
-def _run_fixture(fixture) -> tuple[dict, _FakeLogger, _FakeCache]:
+def _run_fixture(
+    fixture,
+    *,
+    cache=None,
+    field_overrides=None,
+) -> tuple[dict, _FakeLogger, _FakeCache]:
     """Feed one fixture through the real compiled graph, offline."""
-    cache = _FakeCache()
+    cache = cache or _FakeCache()
     db = _FakeLogger()
     graph = analyst_mod.build_agent_graph(
         cache=cache, trader=_ExplodingTrader(), db=db
@@ -391,8 +536,8 @@ def _run_fixture(fixture) -> tuple[dict, _FakeLogger, _FakeCache]:
     # Ingestion shape: the stream fields go through NewsMessage exactly as the
     # consumer parses them, so the is_simulated boundary is tested from the wire.
     fields = {str(k): str(v) for k, v in fixture.stream_fields().items()}
+    fields.update(field_overrides or {})
     news = NewsMessage(**fields)
-    assert news.is_simulated is True
 
     final_state = graph.invoke(
         {
@@ -462,6 +607,44 @@ def test_buy_fixture_reaches_the_gate_and_is_blocked_for_being_simulated(
     assert row["trade_action"] == "BUY"
     assert row["decision_trace"]["execution"]["submitted"] is False
     assert cache.seen == [("GOOG", GOOG.headline)]
+
+
+def test_exhausted_live_llm_budget_does_not_suppress_replay_committee(
+    replay_config, monkeypatch
+):
+    """A no-cost deterministic debate is independent of the live-call cap."""
+
+    class _ExhaustedBudgetRedis:
+        def get(self, _key):
+            return b"1"
+
+    monkeypatch.setenv("LLM_DAILY_CALL_BUDGET", "1")
+    state, _db, _cache = _run_fixture(
+        GOOG,
+        cache=_FakeCache(redis_client=_ExhaustedBudgetRedis()),
+    )
+    assert len(state["llm_operations"]) == 4
+    assert {op["model"] for op in state["llm_operations"]} == {
+        DETERMINISTIC_REPLAY_MODEL_ID
+    }
+    assert state["analysis"].action == "BUY"
+
+
+def test_non_simulated_fixture_shaped_entry_fails_closed_without_trader_call(
+    replay_config,
+):
+    state, db, _cache = _run_fixture(
+        GOOG,
+        field_overrides={"is_simulated": "false"},
+    )
+    assert state["market_context"]["replay"]["fixture"] is None
+    assert state["analysis"] is None
+    assert state["should_trade"] is False
+    assert state["risk_gate"]["reason"] == "No valid analysis available."
+    assert state["trade_order_id"] is None
+    assert db.rows[0]["is_simulated"] is False
+    assert db.rows[0]["trade_action"] == "HOLD"
+    assert db.rows[0].get("order_id") is None
 
 
 def test_sell_fixture_is_blocked_the_same_way(replay_config):
@@ -642,7 +825,7 @@ def test_prompt_marker_matches_the_block_analyst_actually_builds():
         news = NewsMessage(**fixture.stream_fields())
         block = analyst_mod._untrusted_news_block(news)
         assert fixture.prompt_marker in block
-        assert fixture_for_prompt(block) is fixture
+        assert fixture_for_case(fixture.case) is fixture
 
 
 def test_stage_markers_match_the_prompts_the_graph_emits(replay_config):

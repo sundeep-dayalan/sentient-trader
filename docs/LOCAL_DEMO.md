@@ -39,8 +39,10 @@ not bypass the normal agent pipeline.
 
 `REPLAY_MODE=true` runs the whole agent graph on three committed fixtures with
 no Alpaca account, no market-data account, and no LLM provider key. Every run
-produces the same debate, the same gate numbers, and the same trace, so it also
-works as a demo you can screenshot and as a smoke path in CI.
+uses the same fixture, model output, and market context. Under unchanged
+Supabase configuration and history, it produces the same decision and gate
+numbers, so it also works as a demo you can screenshot and as a smoke path in
+CI. Runtime timestamps and cache state are intentionally not deterministic.
 
 ### What it still needs
 
@@ -122,9 +124,10 @@ the Signal Injector protects it.
 - Headlines are deduplicated for two hours. Re-seeding inside that window is
   skipped as a duplicate, which is correct behavior, not a replay bug. Wait it
   out or use a fresh Redis for a repeat demo.
-- Determinism covers the canned model and market inputs. Values read from
-  Supabase at runtime (thresholds, enabled features) and historical feedback
-  data still shape the gate, so changing `agent_config` changes the result.
+- Determinism covers the canned model and market inputs. Runtime timestamps and
+  cache state vary. Values read from Supabase at runtime (thresholds, enabled
+  features) and historical feedback data still shape the gate, so changing
+  `agent_config` or the relevant history can change the result.
 - A headline that is not a fixture gets no canned answer. Under replay with no
   key the committee fails closed and the signal is recorded as a HOLD. Set a
   provider key to analyze your own headlines.

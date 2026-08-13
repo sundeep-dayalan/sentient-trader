@@ -36,6 +36,7 @@ from llm_providers.deterministic_replay import (
 )
 from llm_providers.groq_always_free import GroqAlwaysFreeProvider
 from llm_providers.openrouter import OpenRouterProvider
+from replay import REPLAY_IDENTITY_FIELD
 
 log = logging.getLogger("agent.llm")
 
@@ -165,6 +166,12 @@ def create_llm_client() -> LLMClient:
     return LLMClient(provider=provider)
 
 
+def active_provider(client: LLMClient) -> Provider:
+    """Return the provider that will serve the next call, applying hot reload."""
+    refresh = getattr(client.provider, "refresh_if_needed", None)
+    return refresh() if callable(refresh) else client.provider
+
+
 class ModelRouter:
     """
     Facade kept for compatibility with the LangGraph node code.
@@ -186,16 +193,27 @@ class ModelRouter:
             raise TypeError(
                 "ModelRouter.call expected an LLMClient from create_llm_client()"
             )
-        result = client.provider.call(
+        provider = active_provider(client)
+        provider_messages = messages
+        if provider.name != DETERMINISTIC_REPLAY_PROVIDER_NAME:
+            provider_messages = [
+                {
+                    key: value
+                    for key, value in message.items()
+                    if key != REPLAY_IDENTITY_FIELD
+                }
+                for message in messages
+            ]
+        result = provider.call(
             response_model,
-            messages,
+            provider_messages,
             max_retries=max_retries,
         )
         # Charge the daily budget one unit per *real* successful call. A raised
         # call never reaches here, so failed/retried attempts cost nothing — the
         # counter tracks work actually done, not up-front reservations.
         budget = getattr(client, "budget", None)
-        if budget is not None:
+        if budget is not None and provider.name != DETERMINISTIC_REPLAY_PROVIDER_NAME:
             try:
                 budget.charge(1)
             except Exception:  # never let accounting break a live debate
@@ -211,6 +229,7 @@ __all__ = [
     "ModelRouter",
     "OpenRouterProvider",
     "ReloadableLLMProvider",
+    "active_provider",
     "_quota_reset_seconds",
     "_retry_after_seconds",
     "create_llm_client",
