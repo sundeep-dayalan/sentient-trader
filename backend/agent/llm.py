@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from typing import Any
 
@@ -29,14 +30,45 @@ from llm_providers.base import (
     parse_llm_provider_config,
     sanitize_llm_error,
 )
+from llm_providers.deterministic_replay import (
+    DETERMINISTIC_REPLAY_PROVIDER_NAME,
+    DeterministicReplayProvider,
+)
 from llm_providers.groq_always_free import GroqAlwaysFreeProvider
 from llm_providers.openrouter import OpenRouterProvider
+from replay import REPLAY_IDENTITY_FIELD
 
 log = logging.getLogger("agent.llm")
+
+# The API key each provider type reads, with the exact .env.example placeholder
+# for it. Only a blank value or that exact placeholder counts as "no key": a
+# malformed, expired, or revoked real key keeps the real provider path so an
+# authentication failure surfaces as itself instead of silently downgrading a
+# demo to canned output.
+_PROVIDER_KEY_ENV: dict[str, tuple[str, str]] = {
+    "groq-always-free": ("GROQ_API_KEY", "your_groq_api_key_here"),
+    "openrouter": ("OPENROUTER_API_KEY", "your_openrouter_api_key_here"),
+}
+
+
+def selected_provider_key_present(provider_type: str) -> bool:
+    """True when the configured provider has a usable API key in the environment."""
+    env_name, placeholder = _PROVIDER_KEY_ENV.get(provider_type, ("", ""))
+    if not env_name:
+        return True
+    value = os.environ.get(env_name, "").strip()
+    return bool(value) and value != placeholder
 
 
 def _build_provider() -> Provider:
     provider_config = parse_llm_provider_config(config.LLM_PROVIDER_CONFIG)
+    if config.REPLAY_MODE and not selected_provider_key_present(provider_config.type):
+        log.info(
+            "ModelRouter: REPLAY_MODE is on and %s has no API key; the committee "
+            "will return canned replay output",
+            provider_config.type,
+        )
+        return DeterministicReplayProvider()
     if provider_config.type == "openrouter":
         return OpenRouterProvider(provider_config)
     return GroqAlwaysFreeProvider(provider_config)
@@ -134,6 +166,12 @@ def create_llm_client() -> LLMClient:
     return LLMClient(provider=provider)
 
 
+def active_provider(client: LLMClient) -> Provider:
+    """Return the provider that will serve the next call, applying hot reload."""
+    refresh = getattr(client.provider, "refresh_if_needed", None)
+    return refresh() if callable(refresh) else client.provider
+
+
 class ModelRouter:
     """
     Facade kept for compatibility with the LangGraph node code.
@@ -155,16 +193,27 @@ class ModelRouter:
             raise TypeError(
                 "ModelRouter.call expected an LLMClient from create_llm_client()"
             )
-        result = client.provider.call(
+        provider = active_provider(client)
+        provider_messages = messages
+        if provider.name != DETERMINISTIC_REPLAY_PROVIDER_NAME:
+            provider_messages = [
+                {
+                    key: value
+                    for key, value in message.items()
+                    if key != REPLAY_IDENTITY_FIELD
+                }
+                for message in messages
+            ]
+        result = provider.call(
             response_model,
-            messages,
+            provider_messages,
             max_retries=max_retries,
         )
         # Charge the daily budget one unit per *real* successful call. A raised
         # call never reaches here, so failed/retried attempts cost nothing — the
         # counter tracks work actually done, not up-front reservations.
         budget = getattr(client, "budget", None)
-        if budget is not None:
+        if budget is not None and provider.name != DETERMINISTIC_REPLAY_PROVIDER_NAME:
             try:
                 budget.charge(1)
             except Exception:  # never let accounting break a live debate
@@ -173,15 +222,19 @@ class ModelRouter:
 
 
 __all__ = [
+    "DETERMINISTIC_REPLAY_PROVIDER_NAME",
+    "DeterministicReplayProvider",
     "GroqAlwaysFreeProvider",
     "LLMClient",
     "ModelRouter",
     "OpenRouterProvider",
     "ReloadableLLMProvider",
+    "active_provider",
     "_quota_reset_seconds",
     "_retry_after_seconds",
     "create_llm_client",
     "normalize_llm_provider_config",
     "parse_llm_provider_config",
     "sanitize_llm_error",
+    "selected_provider_key_present",
 ]
